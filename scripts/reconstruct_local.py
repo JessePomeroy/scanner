@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline  # noqa: E402
 from app.openmvs_runner import run_openmvs_pipeline  # noqa: E402
+from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_validator import find_scan_root, validate_scan_package  # noqa: E402
 from app.storage import safe_extract_zip  # noqa: E402
 
@@ -45,6 +46,8 @@ def main() -> None:
         scan_root = find_scan_root(work_dir)
         report = validate_scan_package(scan_root)
         print(f"Validated {report.image_count} images and {report.frame_count} frames.")
+        report_path = write_scan_report(scan_root, report)
+        print(f"Scan report: {report_path}")
 
         if args.run_colmap:
             output = run_colmap_pipeline(
@@ -56,10 +59,14 @@ def main() -> None:
                 print(f"COLMAP fused point cloud: {output}")
             else:
                 print(f"COLMAP sparse point cloud: {output}")
+            report_path = write_scan_report(scan_root, report)
+            print(f"Updated scan report: {report_path}")
 
         if args.run_openmvs:
             textured = run_openmvs_pipeline(scan_root)
             print(f"OpenMVS textured mesh: {textured}")
+            report_path = write_scan_report(scan_root, report)
+            print(f"Updated scan report: {report_path}")
 
         if args.work_dir is None:
             print("No --work-dir was provided; extracted files were temporary.")

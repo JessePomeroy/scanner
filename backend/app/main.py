@@ -15,6 +15,7 @@ from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.jobs import JobStore
 from app.openmvs_runner import run_openmvs_pipeline
+from app.report_writer import write_scan_report
 from app.scan_validator import (
     ScanValidationError,
     find_scan_root,
@@ -75,8 +76,13 @@ async def upload_scan(
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         report = validate_scan_package(scan_root)
+        write_scan_report(scan_root, report)
         completed_dir = move_to_completed(scan_id, processing_dir)
-        outputs = {"package_dir": str(completed_dir)}
+        completed_scan_root = find_scan_root(completed_dir)
+        outputs = {
+            "package_dir": str(completed_dir),
+            "scan_report": str(completed_scan_root / "metadata" / "scan_report.json"),
+        }
 
         return jobs.update(
             scan_id,
@@ -122,21 +128,28 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         report = validate_scan_package(scan_root)
+        report_path = write_scan_report(scan_root, report)
 
         colmap_output = run_colmap_pipeline(
             scan_root,
             ColmapConfig(use_gpu=False),
             include_dense=run_dense,
         )
-        outputs = {"colmap_output": str(colmap_output)}
+        outputs = {
+            "colmap_output": str(colmap_output),
+            "scan_report": str(report_path),
+        }
 
         if run_openmvs:
             textured_mesh = run_openmvs_pipeline(scan_root)
             outputs["textured_mesh"] = str(textured_mesh)
 
         export_blender_formats(scan_root)
+        report_path = write_scan_report(scan_root, report)
         completed_dir = move_to_completed(scan_id, processing_dir)
+        completed_scan_root = find_scan_root(completed_dir)
         outputs["package_dir"] = str(completed_dir)
+        outputs["scan_report"] = str(completed_scan_root / "metadata" / "scan_report.json")
 
         jobs.update(
             scan_id,

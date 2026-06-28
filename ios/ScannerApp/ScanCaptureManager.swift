@@ -19,7 +19,11 @@ enum ScanCaptureState: Equatable {
 final class ScanCaptureManager: NSObject, ObservableObject {
     @Published private(set) var state: ScanCaptureState = .idle
     @Published private(set) var acceptedFrameCount = 0
+    @Published private(set) var rejectedFrameCount = 0
+    @Published private(set) var lastBlurScore: Float?
+    @Published private(set) var lastMovementSpeed: Float?
     @Published private(set) var statusMessage = "Ready"
+    @Published private(set) var guidanceMessage = "Choose a mode"
     @Published private(set) var lastZipURL: URL?
     @Published var scanMode: ScanMode = .scene {
         didSet {
@@ -43,6 +47,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var frameCounter = 0
     private var isScanning = false
     private var objectCenterWorld: SIMD3<Float>?
+    private var qualityStats = CaptureQualityStats()
+    private var scanStartedAt: Date?
+    private var lastRejectedStatusTimestamp: TimeInterval = 0
+
+    private let minimumSharpnessScore: Float = 0.18
+    private let fastMovementWarningMetersPerSecond: Float = 0.45
 
     var arSession: ARSession {
         arTrackingManager.session
@@ -72,15 +82,23 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             currentScanId = scanId
             currentScanDirectory = scanDirectory
             objectCenterWorld = nil
+            qualityStats = CaptureQualityStats()
+            scanStartedAt = Date()
+            lastRejectedStatusTimestamp = 0
             isScanning = true
         }
 
         updatePublishedState(
             state: .scanning,
             statusMessage: scanMode == .object ? "Tap subject" : "Scanning",
+            guidanceMessage: scanMode == .object ? "Tap the subject, then move around it slowly" : "Move slowly and cover the scene from several angles",
             acceptedFrameCount: 0,
+            rejectedFrameCount: 0,
+            lastBlurScore: nil,
+            lastMovementSpeed: nil,
             objectCenterIsSet: false,
-            clearZipURL: true
+            clearZipURL: true,
+            clearQualityMetrics: true
         )
 
         do {
@@ -112,11 +130,20 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 createdAt: ISO8601DateFormatter().string(from: Date()),
                 device: UIDevice.current.model,
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
+                buildVersion: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0",
                 scanMode: scanMode.rawValue,
                 usesLidar: ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth),
                 usesARKitMesh: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
                 imageCount: capturedFrames.count,
                 depthFrameCount: 0,
+                rejectedFrameCount: qualityStats.rejectedTotal,
+                rejectedTrackingCount: qualityStats.rejectedTracking,
+                rejectedBlurCount: qualityStats.rejectedBlur,
+                rejectedMotionCount: qualityStats.rejectedMotion,
+                averageBlurScore: qualityStats.averageBlurScore,
+                minimumBlurScore: qualityStats.minimumBlurScore,
+                maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
+                captureDurationSeconds: scanStartedAt.map { Date().timeIntervalSince($0) },
                 objectCenterWorld: objectCenterWorld?.array,
                 objectRadiusMeters: scanMode == .object ? objectRadiusPreset.rawValue : nil,
                 notes: scanMode == .object
@@ -132,6 +159,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         updatePublishedState(
             state: .completed(zipURL),
             statusMessage: "Exported \(zipURL.lastPathComponent)",
+            guidanceMessage: exportSummary(frameCount: capturedFrames.count, stats: qualityStats),
             lastZipURL: zipURL
         )
 
@@ -153,17 +181,30 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
         updatePublishedState(
             statusMessage: "Subject set",
+            guidanceMessage: "Circle the subject and keep it filling most of the frame",
             objectCenterIsSet: true
         )
     }
 
     private func considerFrameForCapture(_ frame: ARFrame) {
         guard isScanning,
-              frameSelector.shouldKeepFrame(frame),
               let currentScanDirectory else {
             return
         }
 
+        let decision = frameSelector.decision(for: frame)
+        guard decision.accepted else {
+            recordRejectedFrame(reason: decision.reason, frame: frame, decision: decision)
+            return
+        }
+
+        let blurScore = imageWriter.estimateSharpnessScore(from: frame.capturedImage)
+        guard blurScore >= minimumSharpnessScore else {
+            recordRejectedFrame(reason: .blurry, frame: frame, decision: decision, blurScore: blurScore)
+            return
+        }
+
+        frameSelector.recordAcceptedFrame(frame)
         frameCounter += 1
         let imagePath = "images/frame_\(String(format: "%06d", frameCounter)).jpg"
         let imageURL = currentScanDirectory.appendingPathComponent(imagePath)
@@ -195,25 +236,63 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                     savedImage.height
                 ],
                 trackingState: frame.camera.trackingState.description,
-                blurScore: 1.0,
+                blurScore: blurScore,
                 exposureDuration: nil,
                 iso: nil,
                 whiteBalanceLocked: false,
-                focusLocked: false
+                focusLocked: false,
+                movementDeltaMeters: decision.translationMeters,
+                rotationDeltaDegrees: decision.rotationDegrees,
+                secondsSincePreviousFrame: decision.secondsSincePreviousFrame,
+                movementSpeedMetersPerSecond: decision.movementSpeedMetersPerSecond
             )
         )
 
+        qualityStats.recordAccepted(blurScore: blurScore, movementSpeed: decision.movementSpeedMetersPerSecond)
         let count = capturedFrames.count
-        updatePublishedState(statusMessage: "Accepted \(count) frames", acceptedFrameCount: count)
+        updatePublishedState(
+            statusMessage: "Accepted \(count) frames",
+            guidanceMessage: guidance(for: decision, blurScore: blurScore),
+            acceptedFrameCount: count,
+            lastBlurScore: blurScore,
+            lastMovementSpeed: decision.movementSpeedMetersPerSecond
+        )
+    }
+
+    private func recordRejectedFrame(
+        reason: FrameRejectionReason,
+        frame: ARFrame,
+        decision: FrameSelectionDecision,
+        blurScore: Float? = nil
+    ) {
+        qualityStats.recordRejected(reason: reason)
+
+        guard frame.timestamp - lastRejectedStatusTimestamp > 0.75 else {
+            return
+        }
+
+        lastRejectedStatusTimestamp = frame.timestamp
+        updatePublishedState(
+            statusMessage: rejectionStatus(reason: reason),
+            guidanceMessage: rejectionGuidance(reason: reason),
+            rejectedFrameCount: qualityStats.rejectedTotal,
+            lastBlurScore: blurScore,
+            lastMovementSpeed: decision.movementSpeedMetersPerSecond
+        )
     }
 
     private func updatePublishedState(
         state: ScanCaptureState? = nil,
         statusMessage: String? = nil,
+        guidanceMessage: String? = nil,
         acceptedFrameCount: Int? = nil,
+        rejectedFrameCount: Int? = nil,
+        lastBlurScore: Float? = nil,
+        lastMovementSpeed: Float? = nil,
         objectCenterIsSet: Bool? = nil,
         lastZipURL: URL? = nil,
-        clearZipURL: Bool = false
+        clearZipURL: Bool = false,
+        clearQualityMetrics: Bool = false
     ) {
         DispatchQueue.main.async {
             if let state {
@@ -222,8 +301,24 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             if let statusMessage {
                 self.statusMessage = statusMessage
             }
+            if let guidanceMessage {
+                self.guidanceMessage = guidanceMessage
+            }
             if let acceptedFrameCount {
                 self.acceptedFrameCount = acceptedFrameCount
+            }
+            if let rejectedFrameCount {
+                self.rejectedFrameCount = rejectedFrameCount
+            }
+            if clearQualityMetrics {
+                self.lastBlurScore = nil
+                self.lastMovementSpeed = nil
+            }
+            if let lastBlurScore {
+                self.lastBlurScore = lastBlurScore
+            }
+            if let lastMovementSpeed {
+                self.lastMovementSpeed = lastMovementSpeed
             }
             if let objectCenterIsSet {
                 self.objectCenterIsSet = objectCenterIsSet
@@ -243,6 +338,60 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         return "scan_\(formatter.string(from: Date()))"
     }
+
+    private func guidance(for decision: FrameSelectionDecision, blurScore: Float) -> String {
+        if scanMode == .object && !objectCenterIsSet {
+            return "Tap the subject so the object radius can be saved"
+        }
+
+        if let speed = decision.movementSpeedMetersPerSecond,
+           speed > fastMovementWarningMetersPerSecond {
+            return "Move slower for sharper overlap"
+        }
+
+        if blurScore < minimumSharpnessScore + 0.12 {
+            return "Hold steadier; sharp frames reconstruct better"
+        }
+
+        if scanMode == .object {
+            return "Keep circling and vary your height"
+        }
+
+        return "Capture overlapping angles, not just straight-on passes"
+    }
+
+    private func rejectionStatus(reason: FrameRejectionReason) -> String {
+        switch reason {
+        case .tracking:
+            return "Tracking limited"
+        case .tooSoon, .insufficientMotion:
+            return "Looking for new angle"
+        case .blurry:
+            return "Frame too blurry"
+        case .firstFrame, .usefulMotion:
+            return "Frame skipped"
+        }
+    }
+
+    private func rejectionGuidance(reason: FrameRejectionReason) -> String {
+        switch reason {
+        case .tracking:
+            return "Aim at textured surfaces until tracking recovers"
+        case .tooSoon:
+            return "Keep moving slowly; overlap is good"
+        case .insufficientMotion:
+            return scanMode == .object ? "Move around the subject" : "Shift position or angle for more coverage"
+        case .blurry:
+            return "Slow down and avoid fast pans"
+        case .firstFrame, .usefulMotion:
+            return "Continue scanning"
+        }
+    }
+
+    private func exportSummary(frameCount: Int, stats: CaptureQualityStats) -> String {
+        let blur = stats.averageBlurScore.map { String(format: "%.2f", $0) } ?? "n/a"
+        return "Frames \(frameCount), rejected \(stats.rejectedTotal), avg blur \(blur)"
+    }
 }
 
 extension ScanCaptureManager: ARSessionDelegate {
@@ -253,6 +402,47 @@ extension ScanCaptureManager: ARSessionDelegate {
     func session(_ session: ARSession, didFailWithError error: Error) {
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
         isScanning = false
+    }
+}
+
+private struct CaptureQualityStats {
+    private(set) var rejectedTotal = 0
+    private(set) var rejectedTracking = 0
+    private(set) var rejectedBlur = 0
+    private(set) var rejectedMotion = 0
+    private(set) var acceptedBlurScores: [Float] = []
+    private(set) var maximumMovementSpeed: Float?
+
+    var averageBlurScore: Float? {
+        guard !acceptedBlurScores.isEmpty else { return nil }
+        return acceptedBlurScores.reduce(0, +) / Float(acceptedBlurScores.count)
+    }
+
+    var minimumBlurScore: Float? {
+        acceptedBlurScores.min()
+    }
+
+    mutating func recordAccepted(blurScore: Float, movementSpeed: Float?) {
+        acceptedBlurScores.append(blurScore)
+
+        if let movementSpeed {
+            maximumMovementSpeed = max(maximumMovementSpeed ?? movementSpeed, movementSpeed)
+        }
+    }
+
+    mutating func recordRejected(reason: FrameRejectionReason) {
+        rejectedTotal += 1
+
+        switch reason {
+        case .tracking:
+            rejectedTracking += 1
+        case .blurry:
+            rejectedBlur += 1
+        case .tooSoon, .insufficientMotion:
+            rejectedMotion += 1
+        case .firstFrame, .usefulMotion:
+            break
+        }
     }
 }
 

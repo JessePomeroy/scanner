@@ -16,6 +16,7 @@ python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scanner-test --run
 
 This produces `sparse/sparse_points.ply`. The Homebrew COLMAP build on macOS is
 useful for sparse smoke tests, but not for dense CUDA reconstruction.
+The script also writes `metadata/scan_report.json` with capture-quality warnings.
 
 ## Windows GPU Workflow
 
@@ -70,6 +71,7 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
 To manually crop a point cloud in COLMAP/OpenMVS coordinates:
 
 ```bash
+python3 scripts/plan_object_crop.py scan.zip
 python3 scripts/crop_point_cloud.py input.ply cropped.ply --center 0 0 0 --radius 2.0
 ```
 

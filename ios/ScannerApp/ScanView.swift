@@ -36,26 +36,64 @@ struct ScanView: View {
     }
 
     private var statusBar: some View {
-        HStack(spacing: 12) {
-            Label("\(scanManager.acceptedFrameCount)", systemImage: "photo.stack")
-                .font(.headline.monospacedDigit())
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Label("\(scanManager.acceptedFrameCount)", systemImage: "photo.stack")
+                    .font(.headline.monospacedDigit())
 
-            if scanManager.scanMode == .object {
-                Image(systemName: scanManager.objectCenterIsSet ? "scope" : "scope")
-                    .foregroundStyle(scanManager.objectCenterIsSet ? .green : .secondary)
+                Label("\(scanManager.rejectedFrameCount)", systemImage: "xmark.circle")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                if scanManager.scanMode == .object {
+                    Image(systemName: "scope")
+                        .foregroundStyle(scanManager.objectCenterIsSet ? .green : .secondary)
+                }
+
+                Text(scanManager.statusMessage)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Spacer(minLength: 0)
             }
 
-            Text(scanManager.statusMessage)
-                .font(.subheadline)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+            HStack(spacing: 12) {
+                metricLabel(
+                    title: "Blur",
+                    value: scanManager.lastBlurScore.map { String(format: "%.2f", $0) } ?? "--",
+                    systemImage: "camera.metering.center.weighted"
+                )
 
-            Spacer(minLength: 0)
+                metricLabel(
+                    title: "Speed",
+                    value: scanManager.lastMovementSpeed.map { String(format: "%.2fm/s", $0) } ?? "--",
+                    systemImage: "speedometer"
+                )
+
+                Text(scanManager.guidanceMessage)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func metricLabel(title: String, value: String, systemImage: String) -> some View {
+        Label {
+            Text("\(title) \(value)")
+        } icon: {
+            Image(systemName: systemImage)
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
     }
 
     private var modeControls: some View {

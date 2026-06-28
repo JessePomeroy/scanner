@@ -49,6 +49,10 @@ struct CapturedFrameMetadata: Codable, Equatable {
     let iso: Float?
     let whiteBalanceLocked: Bool
     let focusLocked: Bool
+    let movementDeltaMeters: Float?
+    let rotationDeltaDegrees: Float?
+    let secondsSincePreviousFrame: Double?
+    let movementSpeedMetersPerSecond: Float?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -64,6 +68,10 @@ struct CapturedFrameMetadata: Codable, Equatable {
         case iso
         case whiteBalanceLocked = "white_balance_locked"
         case focusLocked = "focus_locked"
+        case movementDeltaMeters = "movement_delta_meters"
+        case rotationDeltaDegrees = "rotation_delta_degrees"
+        case secondsSincePreviousFrame = "seconds_since_previous_frame"
+        case movementSpeedMetersPerSecond = "movement_speed_meters_per_second"
     }
 }
 
@@ -72,11 +80,20 @@ struct ScanSessionMetadata: Codable, Equatable {
     let createdAt: String
     let device: String
     let appVersion: String
+    let buildVersion: String
     let scanMode: String
     let usesLidar: Bool
     let usesARKitMesh: Bool
     let imageCount: Int
     let depthFrameCount: Int
+    let rejectedFrameCount: Int
+    let rejectedTrackingCount: Int
+    let rejectedBlurCount: Int
+    let rejectedMotionCount: Int
+    let averageBlurScore: Float?
+    let minimumBlurScore: Float?
+    let maximumMovementSpeedMetersPerSecond: Float?
+    let captureDurationSeconds: Double?
     let objectCenterWorld: [Float]?
     let objectRadiusMeters: Float?
     let notes: String?
@@ -86,11 +103,20 @@ struct ScanSessionMetadata: Codable, Equatable {
         case createdAt = "created_at"
         case device
         case appVersion = "app_version"
+        case buildVersion = "build_version"
         case scanMode = "scan_mode"
         case usesLidar = "uses_lidar"
         case usesARKitMesh = "uses_arkit_mesh"
         case imageCount = "image_count"
         case depthFrameCount = "depth_frame_count"
+        case rejectedFrameCount = "rejected_frame_count"
+        case rejectedTrackingCount = "rejected_tracking_count"
+        case rejectedBlurCount = "rejected_blur_count"
+        case rejectedMotionCount = "rejected_motion_count"
+        case averageBlurScore = "average_blur_score"
+        case minimumBlurScore = "minimum_blur_score"
+        case maximumMovementSpeedMetersPerSecond = "maximum_movement_speed_meters_per_second"
+        case captureDurationSeconds = "capture_duration_seconds"
         case objectCenterWorld = "object_center_world"
         case objectRadiusMeters = "object_radius_meters"
         case notes

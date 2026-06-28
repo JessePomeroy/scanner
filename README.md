@@ -30,10 +30,11 @@ open ios/ScannerApp.xcodeproj
 ```
 
 The current capture path writes accepted `ARFrame.capturedImage` frames to JPEG
-files and records matching AR camera metadata. This is enough to produce real
-scan zip packages for backend validation. True high-resolution still capture via
-`AVCapturePhotoOutput` is the next refinement after the package format is proven
-on a physical iPhone.
+files and records matching AR camera metadata. It now records blur scores,
+motion deltas, movement speed, rejected-frame counts, and an export summary in
+`metadata/session.json`. True high-resolution still capture via
+`AVCapturePhotoOutput` remains a later refinement after the package format is
+proven on a physical iPhone.
 
 The app requires a physical ARKit-capable device for scanning. The simulator
 build is useful for compile checks, but world tracking is unavailable there.
@@ -91,12 +92,23 @@ Validate and optionally run reconstruction:
 python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap
 ```
 
+Validation writes `metadata/scan_report.json` with capture-quality diagnostics.
+After COLMAP/OpenMVS stages run, the same report is refreshed with any sparse or
+dense output counts that can be detected.
+
 On macOS/Homebrew, COLMAP can run sparse reconstruction without CUDA. Dense
 stereo may require a CUDA-capable build and GPU. Use `--dense` only when that
 toolchain is available:
 
 ```bash
 python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap --dense
+```
+
+For object scans, inspect the crop metadata and get the manual crop command:
+
+```bash
+python3 scripts/plan_object_crop.py scan.zip
+python3 scripts/crop_point_cloud.py input.ply object_cropped.ply --center X Y Z --radius 1.5
 ```
 
 ## Tests

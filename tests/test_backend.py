@@ -16,6 +16,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
 
@@ -106,6 +107,43 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(report.object_center_world, [1.0, 2.0, 3.0])
         self.assertEqual(report.object_radius_meters, 1.5)
 
+    def test_write_scan_report_summarizes_capture_quality(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            report = validate_scan_package(scan_dir)
+
+            report_path = write_scan_report(scan_dir, report)
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["capture"]["image_count"], 1)
+        self.assertEqual(payload["capture"]["blur"]["mean"], 0.42)
+        self.assertEqual(payload["capture"]["movement_delta_meters"]["max"], 0.12)
+        self.assertIn("low_frame_count", payload["warnings"])
+
+    def test_write_scan_report_marks_object_crop_alignment_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "metadata" / "session.json").write_text(
+                json.dumps(
+                    {
+                        "scan_id": "scan_test",
+                        "scan_mode": "object_scan",
+                        "object_center_world": [1.0, 2.0, 3.0],
+                        "object_radius_meters": 1.5,
+                    }
+                )
+            )
+            report = validate_scan_package(scan_dir)
+
+            report_path = write_scan_report(scan_dir, report)
+            payload = json.loads(report_path.read_text())
+
+        self.assertTrue(payload["object_scan"]["ready_for_manual_radius_crop"])
+        self.assertEqual(
+            payload["object_scan"]["automatic_crop_status"],
+            "needs_arkit_to_colmap_alignment",
+        )
+
     def _write_scan(self, root: Path) -> Path:
         scan_dir = root / "scan_test"
         images = scan_dir / "images"
@@ -121,6 +159,12 @@ class BackendTests(unittest.TestCase):
                         "id": 1,
                         "image": "images/frame_000001.jpg",
                         "timestamp": 0.0,
+                        "tracking_state": "normal",
+                        "blur_score": 0.42,
+                        "movement_delta_meters": 0.12,
+                        "rotation_delta_degrees": 8.0,
+                        "movement_speed_meters_per_second": 0.25,
+                        "resolution": [1920, 1080],
                     }
                 ]
             )

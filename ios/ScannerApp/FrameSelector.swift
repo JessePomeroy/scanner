@@ -15,19 +15,34 @@ struct FrameSelector {
     private var lastAcceptedTimestamp: TimeInterval?
 
     mutating func shouldKeepFrame(_ frame: ARFrame) -> Bool {
+        let decision = decision(for: frame)
+        if decision.accepted {
+            recordAcceptedFrame(frame)
+        }
+        return decision.accepted
+    }
+
+    func decision(for frame: ARFrame) -> FrameSelectionDecision {
         guard frame.camera.trackingState.isNormal else {
-            return false
+            return FrameSelectionDecision(
+                accepted: false,
+                reason: .tracking,
+                translationMeters: nil,
+                rotationDegrees: nil,
+                secondsSincePreviousFrame: nil,
+                movementSpeedMetersPerSecond: nil
+            )
         }
 
         guard let lastAcceptedTransform else {
-            self.lastAcceptedTransform = frame.camera.transform
-            lastAcceptedTimestamp = frame.timestamp
-            return true
-        }
-
-        if let lastAcceptedTimestamp,
-           frame.timestamp - lastAcceptedTimestamp < minimumTimeInterval {
-            return false
+            return FrameSelectionDecision(
+                accepted: true,
+                reason: .firstFrame,
+                translationMeters: nil,
+                rotationDegrees: nil,
+                secondsSincePreviousFrame: nil,
+                movementSpeedMetersPerSecond: nil
+            )
         }
 
         let currentPosition = frame.camera.transform.translation
@@ -39,14 +54,49 @@ struct FrameSelector {
             to: frame.camera.transform
         )
 
-        guard distanceMoved >= minimumTranslationMeters ||
-              rotationChanged >= minimumRotationDegrees else {
-            return false
+        let secondsSincePreviousFrame = lastAcceptedTimestamp.map { frame.timestamp - $0 }
+        let movementSpeed = secondsSincePreviousFrame.flatMap { seconds -> Float? in
+            guard seconds > 0 else { return nil }
+            return distanceMoved / Float(seconds)
         }
 
+        if let lastAcceptedTimestamp,
+           frame.timestamp - lastAcceptedTimestamp < minimumTimeInterval {
+            return FrameSelectionDecision(
+                accepted: false,
+                reason: .tooSoon,
+                translationMeters: distanceMoved,
+                rotationDegrees: rotationChanged,
+                secondsSincePreviousFrame: secondsSincePreviousFrame,
+                movementSpeedMetersPerSecond: movementSpeed
+            )
+        }
+
+        guard distanceMoved >= minimumTranslationMeters ||
+              rotationChanged >= minimumRotationDegrees else {
+            return FrameSelectionDecision(
+                accepted: false,
+                reason: .insufficientMotion,
+                translationMeters: distanceMoved,
+                rotationDegrees: rotationChanged,
+                secondsSincePreviousFrame: secondsSincePreviousFrame,
+                movementSpeedMetersPerSecond: movementSpeed
+            )
+        }
+
+        return FrameSelectionDecision(
+            accepted: true,
+            reason: .usefulMotion,
+            translationMeters: distanceMoved,
+            rotationDegrees: rotationChanged,
+            secondsSincePreviousFrame: secondsSincePreviousFrame,
+            movementSpeedMetersPerSecond: movementSpeed
+        )
+    }
+
+    mutating func recordAcceptedFrame(_ frame: ARFrame) {
         self.lastAcceptedTransform = frame.camera.transform
         lastAcceptedTimestamp = frame.timestamp
-        return true
     }
 
     mutating func reset() {
@@ -61,6 +111,24 @@ struct FrameSelector {
         let radians = 2 * acos(min(1, abs(delta.real)))
         return radians * 180 / .pi
     }
+}
+
+struct FrameSelectionDecision: Equatable {
+    let accepted: Bool
+    let reason: FrameRejectionReason
+    let translationMeters: Float?
+    let rotationDegrees: Float?
+    let secondsSincePreviousFrame: TimeInterval?
+    let movementSpeedMetersPerSecond: Float?
+}
+
+enum FrameRejectionReason: String, Equatable {
+    case firstFrame
+    case usefulMotion
+    case tracking
+    case tooSoon
+    case insufficientMotion
+    case blurry
 }
 
 private extension ARCamera.TrackingState {

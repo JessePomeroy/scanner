@@ -21,6 +21,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_sparse_commands,
 )
 from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands  # noqa: E402
+from app.report_writer import object_scan_summary, write_scan_report  # noqa: E402
 from app.scan_validator import find_scan_root, validate_scan_package  # noqa: E402
 from app.storage import safe_extract_zip  # noqa: E402
 
@@ -52,8 +53,8 @@ def main() -> None:
     prepare_source(args.scan, source_dir)
 
     scan_root = find_scan_root(source_dir)
-    report = validate_scan_package(scan_root)
-    scan_id = report.scan_id if report and report.scan_id else initial_scan_id
+    validation_report = validate_scan_package(scan_root)
+    scan_id = validation_report.scan_id if validation_report and validation_report.scan_id else initial_scan_id
     if scan_id != initial_scan_id:
         final_run_dir = (args.output_root / scan_id).resolve()
         if final_run_dir != run_dir:
@@ -65,6 +66,7 @@ def main() -> None:
             source_dir = run_dir / "source"
             logs_dir = run_dir / "logs"
             scan_root = find_scan_root(source_dir)
+            validation_report = validate_scan_package(scan_root)
 
     colmap_config = ColmapConfig(
         matcher=args.matcher,
@@ -84,9 +86,16 @@ def main() -> None:
     command_log = logs_dir / "commands.log"
     outputs = expected_outputs(scan_root, include_dense=not args.skip_dense, include_openmvs=not args.skip_openmvs)
 
+    package_report_path = write_scan_report(scan_root, validation_report)
+
     for command in commands:
         run_command(command, command_log=command_log, dry_run=args.dry_run)
 
+    if not args.dry_run:
+        package_report_path = write_scan_report(scan_root, validation_report)
+
+    package_report = json.loads(package_report_path.read_text())
+    object_summary = object_scan_summary(validation_report)
     reconstruction_report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "scan_id": scan_id,
@@ -94,7 +103,10 @@ def main() -> None:
         "run_dir": str(run_dir),
         "scan_root": str(scan_root),
         "dry_run": args.dry_run,
-        "validation": validation_summary(report),
+        "validation": validation_summary(validation_report),
+        "scan_report": str(package_report_path),
+        "object_scan": object_summary,
+        "warnings": package_report.get("warnings", []),
         "commands": commands,
         "outputs": {key: str(path) for key, path in outputs.items()},
         "notes": [
