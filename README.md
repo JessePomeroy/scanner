@@ -62,6 +62,15 @@ Run reconstruction mode when COLMAP is installed:
 curl -F "file=@scan.zip" "http://localhost:8000/scans?run_reconstruction=true"
 ```
 
+For the Windows/WSL2 GPU workstation path:
+
+```bash
+scripts/wsl/setup_gpu_reconstruction.sh
+python3 scripts/wsl/check_reconstruction_env.py --strict
+python3 scripts/reconstruct_gpu.py scan.zip --output-root /mnt/c/Users/YOU/ScannerOutputs --dry-run
+python3 scripts/reconstruct_gpu.py scan.zip --output-root /mnt/c/Users/YOU/ScannerOutputs
+```
+
 Check job status:
 
 ```bash
