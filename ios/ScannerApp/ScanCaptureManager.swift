@@ -140,8 +140,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         let imagePath = "images/frame_\(String(format: "%06d", frameCounter)).jpg"
         let imageURL = currentScanDirectory.appendingPathComponent(imagePath)
 
+        let savedImage: SavedFrameImage
         do {
-            try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
+            savedImage = try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
         } catch {
             updatePublishedState(
                 state: .failed("Image write failed"),
@@ -158,10 +159,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 depthPath: nil,
                 timestamp: frame.timestamp,
                 cameraTransform: frame.camera.transform.rows,
-                intrinsics: frame.camera.intrinsics.rows,
+                intrinsics: frame.camera.intrinsics.rotatedRight(
+                    sourceHeight: Float(frame.camera.imageResolution.height)
+                ).rows,
                 resolution: [
-                    Int(frame.camera.imageResolution.width),
-                    Int(frame.camera.imageResolution.height)
+                    savedImage.width,
+                    savedImage.height
                 ],
                 trackingState: frame.camera.trackingState.description,
                 blurScore: 1.0,
@@ -254,5 +257,18 @@ private extension simd_float3x3 {
             [columns.0.y, columns.1.y, columns.2.y],
             [columns.0.z, columns.1.z, columns.2.z]
         ]
+    }
+
+    func rotatedRight(sourceHeight: Float) -> simd_float3x3 {
+        let fx = columns.0.x
+        let fy = columns.1.y
+        let cx = columns.2.x
+        let cy = columns.2.y
+
+        return simd_float3x3(
+            SIMD3<Float>(fy, 0, 0),
+            SIMD3<Float>(0, fx, 0),
+            SIMD3<Float>(sourceHeight - cy, cx, 1)
+        )
     }
 }
