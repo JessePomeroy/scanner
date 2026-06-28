@@ -1,6 +1,17 @@
 import ARKit
 import Foundation
 
+enum ARTrackingManagerError: LocalizedError {
+    case worldTrackingUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .worldTrackingUnavailable:
+            return "AR world tracking is not available on this device."
+        }
+    }
+}
+
 /// Owns ARKit session configuration and live tracking state.
 ///
 /// This file will start ARWorldTrackingConfiguration, enable optional LiDAR scene
@@ -16,7 +27,16 @@ final class ARTrackingManager {
         self.session = session
     }
 
-    func startTracking(resetSession: Bool = true) {
+    func setDelegate(_ delegate: ARSessionDelegate?, queue: DispatchQueue?) {
+        session.delegate = delegate
+        session.delegateQueue = queue
+    }
+
+    func startTracking(resetSession: Bool = true) throws {
+        guard ARWorldTrackingConfiguration.isSupported else {
+            throw ARTrackingManagerError.worldTrackingUnavailable
+        }
+
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
 

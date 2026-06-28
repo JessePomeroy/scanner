@@ -12,10 +12,28 @@ The first working target is:
 ## Layout
 
 - `ios/ScannerApp`: Swift/SwiftUI capture app source.
+- `ios/ScannerApp.xcodeproj`: Xcode project for building the iOS app.
 - `backend/app`: FastAPI backend, scan validation, job status, and command runners.
 - `scripts`: Local inspection and reconstruction experiments.
 - `docs`: Architecture and capture notes.
 - `tests`: Backend unit tests.
+
+## iOS App
+
+Open the app in Xcode:
+
+```bash
+open ios/ScannerApp.xcodeproj
+```
+
+The current capture path writes accepted `ARFrame.capturedImage` frames to JPEG
+files and records matching AR camera metadata. This is enough to produce real
+scan zip packages for backend validation. True high-resolution still capture via
+`AVCapturePhotoOutput` is the next refinement after the package format is proven
+on a physical iPhone.
+
+The app requires a physical ARKit-capable device for scanning. The simulator
+build is useful for compile checks, but world tracking is unavailable there.
 
 ## Backend
 

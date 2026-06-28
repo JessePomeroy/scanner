@@ -1,80 +1,155 @@
 import ARKit
 import AVFoundation
+import Combine
 import Foundation
+import UIKit
+
+enum ScanCaptureState: Equatable {
+    case idle
+    case scanning
+    case exporting
+    case completed(URL)
+    case failed(String)
+}
 
 /// Coordinates a scan session from start to finish.
 ///
 /// This type will eventually connect AR tracking, high-resolution camera capture,
 /// metadata recording, and scan package export.
-final class ScanCaptureManager {
+final class ScanCaptureManager: NSObject, ObservableObject {
+    @Published private(set) var state: ScanCaptureState = .idle
+    @Published private(set) var acceptedFrameCount = 0
+    @Published private(set) var statusMessage = "Ready"
+    @Published private(set) var lastZipURL: URL?
+
     private let arTrackingManager: ARTrackingManager
     private let cameraCaptureManager: CameraCaptureManager
     private let packageWriter: ScanPackageWriter
+    private let imageWriter: ARFrameImageWriter
+    private let captureQueue = DispatchQueue(label: "ScannerApp.ScanCaptureManager.capture")
 
     private var frameSelector = FrameSelector()
     private var capturedFrames: [CapturedFrameMetadata] = []
     private var currentScanDirectory: URL?
     private var currentScanId: String?
     private var frameCounter = 0
+    private var isScanning = false
+
+    var arSession: ARSession {
+        arTrackingManager.session
+    }
 
     init(
         arTrackingManager: ARTrackingManager = ARTrackingManager(),
         cameraCaptureManager: CameraCaptureManager = CameraCaptureManager(),
-        packageWriter: ScanPackageWriter = ScanPackageWriter()
+        packageWriter: ScanPackageWriter = ScanPackageWriter(),
+        imageWriter: ARFrameImageWriter = ARFrameImageWriter()
     ) {
         self.arTrackingManager = arTrackingManager
         self.cameraCaptureManager = cameraCaptureManager
         self.packageWriter = packageWriter
+        self.imageWriter = imageWriter
+        super.init()
+        self.arTrackingManager.setDelegate(self, queue: captureQueue)
     }
 
     func startScan(scanId: String = ScanCaptureManager.makeScanId()) throws {
-        capturedFrames.removeAll()
-        frameSelector.reset()
-        frameCounter = 0
-        currentScanId = scanId
-        currentScanDirectory = try packageWriter.createNewScanFolder(scanId: scanId)
+        let scanDirectory = try packageWriter.createNewScanFolder(scanId: scanId)
 
-        arTrackingManager.startTracking()
-        try cameraCaptureManager.prepareCamera()
-        cameraCaptureManager.startRunning()
+        captureQueue.sync {
+            capturedFrames.removeAll()
+            frameSelector.reset()
+            frameCounter = 0
+            currentScanId = scanId
+            currentScanDirectory = scanDirectory
+            isScanning = true
+        }
+
+        updatePublishedState(
+            state: .scanning,
+            statusMessage: "Scanning",
+            acceptedFrameCount: 0,
+            clearZipURL: true
+        )
+
+        do {
+            try arTrackingManager.startTracking()
+        } catch {
+            captureQueue.sync {
+                isScanning = false
+            }
+            updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
+            throw error
+        }
     }
 
     @discardableResult
     func stopScan() throws -> URL {
-        guard let currentScanDirectory,
-              let currentScanId else {
-            throw ScanPackageWriterError.invalidScanId
+        updatePublishedState(state: .exporting, statusMessage: "Exporting")
+        arTrackingManager.stopTracking()
+
+        let zipURL: URL = try captureQueue.sync {
+            isScanning = false
+
+            guard let currentScanDirectory,
+                  let currentScanId else {
+                throw ScanPackageWriterError.invalidScanId
+            }
+
+            let session = ScanSessionMetadata(
+                scanId: currentScanId,
+                createdAt: ISO8601DateFormatter().string(from: Date()),
+                device: UIDevice.current.model,
+                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
+                scanMode: "environment_photogrammetry",
+                usesLidar: ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth),
+                usesARKitMesh: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
+                imageCount: capturedFrames.count,
+                depthFrameCount: 0,
+                notes: "ARFrame image capture package."
+            )
+
+            try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
+            try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
+            return try packageWriter.zipScanFolder(at: currentScanDirectory)
         }
 
-        arTrackingManager.stopTracking()
-        cameraCaptureManager.stopRunning()
-
-        let session = ScanSessionMetadata(
-            scanId: currentScanId,
-            createdAt: ISO8601DateFormatter().string(from: Date()),
-            device: "iPhone",
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
-            scanMode: "environment_photogrammetry",
-            usesLidar: ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth),
-            usesARKitMesh: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
-            imageCount: capturedFrames.count,
-            depthFrameCount: 0,
-            notes: "Initial capture package."
+        updatePublishedState(
+            state: .completed(zipURL),
+            statusMessage: "Exported \(zipURL.lastPathComponent)",
+            lastZipURL: zipURL
         )
 
-        try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
-        try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
-        return try packageWriter.zipScanFolder(at: currentScanDirectory)
+        return zipURL
     }
 
-    func considerCurrentFrameForCapture() {
-        guard let frame = arTrackingManager.currentFrame,
-              frameSelector.shouldKeepFrame(frame) else {
+    func fail(_ error: Error) {
+        isScanning = false
+        arTrackingManager.stopTracking()
+        updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
+    }
+
+    private func considerFrameForCapture(_ frame: ARFrame) {
+        guard isScanning,
+              frameSelector.shouldKeepFrame(frame),
+              let currentScanDirectory else {
             return
         }
 
         frameCounter += 1
         let imagePath = "images/frame_\(String(format: "%06d", frameCounter)).jpg"
+        let imageURL = currentScanDirectory.appendingPathComponent(imagePath)
+
+        do {
+            try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
+        } catch {
+            updatePublishedState(
+                state: .failed("Image write failed"),
+                statusMessage: "Image write failed: \(error.localizedDescription)"
+            )
+            isScanning = false
+            return
+        }
 
         capturedFrames.append(
             CapturedFrameMetadata(
@@ -97,8 +172,34 @@ final class ScanCaptureManager {
             )
         )
 
-        // High-resolution still capture will be triggered here and written to imagePath.
-        // The photo delegate must preserve this frame id so metadata and image stay paired.
+        let count = capturedFrames.count
+        updatePublishedState(statusMessage: "Accepted \(count) frames", acceptedFrameCount: count)
+    }
+
+    private func updatePublishedState(
+        state: ScanCaptureState? = nil,
+        statusMessage: String? = nil,
+        acceptedFrameCount: Int? = nil,
+        lastZipURL: URL? = nil,
+        clearZipURL: Bool = false
+    ) {
+        DispatchQueue.main.async {
+            if let state {
+                self.state = state
+            }
+            if let statusMessage {
+                self.statusMessage = statusMessage
+            }
+            if let acceptedFrameCount {
+                self.acceptedFrameCount = acceptedFrameCount
+            }
+            if clearZipURL {
+                self.lastZipURL = nil
+            }
+            if let lastZipURL {
+                self.lastZipURL = lastZipURL
+            }
+        }
     }
 
     private static func makeScanId() -> String {
@@ -106,6 +207,17 @@ final class ScanCaptureManager {
         formatter.dateFormat = "yyyy_MM_dd_HH_mm_ss"
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         return "scan_\(formatter.string(from: Date()))"
+    }
+}
+
+extension ScanCaptureManager: ARSessionDelegate {
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        considerFrameForCapture(frame)
+    }
+
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
+        isScanning = false
     }
 }
 
