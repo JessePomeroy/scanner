@@ -12,7 +12,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 
 from app.blender_exporter import export_blender_formats
-from app.colmap_runner import run_colmap_pipeline
+from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.jobs import JobStore
 from app.openmvs_runner import run_openmvs_pipeline
 from app.scan_validator import (
@@ -50,6 +50,7 @@ async def upload_scan(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     run_reconstruction: bool = Query(False),
+    run_dense: bool = Query(False),
     run_openmvs: bool = Query(False),
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
@@ -64,6 +65,7 @@ async def upload_scan(
             process_scan,
             scan_id,
             incoming_zip,
+            run_dense,
             run_openmvs,
         )
         return jobs.update(scan_id, status="processing", message="Scan queued for processing.")
@@ -114,15 +116,19 @@ def download_scan_file(scan_id: str, relative_path: str) -> FileResponse:
     return FileResponse(target)
 
 
-def process_scan(scan_id: str, incoming_zip: Path, run_openmvs: bool) -> None:
+def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs: bool) -> None:
     processing_dir: Path | None = None
     try:
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         report = validate_scan_package(scan_root)
 
-        fused_point_cloud = run_colmap_pipeline(scan_root)
-        outputs = {"fused_point_cloud": str(fused_point_cloud)}
+        colmap_output = run_colmap_pipeline(
+            scan_root,
+            ColmapConfig(use_gpu=False),
+            include_dense=run_dense,
+        )
+        outputs = {"colmap_output": str(colmap_output)}
 
         if run_openmvs:
             textured_mesh = run_openmvs_pipeline(scan_root)

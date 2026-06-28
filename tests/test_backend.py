@@ -11,7 +11,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.colmap_runner import build_colmap_commands  # noqa: E402
+from app.colmap_runner import (  # noqa: E402
+    build_colmap_commands,
+    build_colmap_dense_commands,
+    build_colmap_sparse_commands,
+)
 from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
 
@@ -49,6 +53,27 @@ class BackendTests(unittest.TestCase):
                 "stereo_fusion",
             ],
         )
+
+    def test_colmap_gpu_flags_match_colmap_4_option_names(self) -> None:
+        commands = build_colmap_commands(Path("/tmp/scan"))
+
+        self.assertIn("--FeatureExtraction.use_gpu", commands[0])
+        self.assertIn("--FeatureMatching.use_gpu", commands[1])
+
+    def test_colmap_commands_can_be_split_by_sparse_and_dense_stages(self) -> None:
+        sparse_commands = build_colmap_sparse_commands(Path("/tmp/scan"))
+        dense_commands = build_colmap_dense_commands(Path("/tmp/scan"))
+
+        self.assertEqual([command[1] for command in sparse_commands], [
+            "feature_extractor",
+            "exhaustive_matcher",
+            "mapper",
+        ])
+        self.assertEqual([command[1] for command in dense_commands], [
+            "image_undistorter",
+            "patch_match_stereo",
+            "stereo_fusion",
+        ])
 
     def test_safe_extract_zip_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -79,6 +79,14 @@ Validate and optionally run reconstruction:
 python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap
 ```
 
+On macOS/Homebrew, COLMAP can run sparse reconstruction without CUDA. Dense
+stereo may require a CUDA-capable build and GPU. Use `--dense` only when that
+toolchain is available:
+
+```bash
+python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap --dense
+```
+
 ## Tests
 
 ```bash

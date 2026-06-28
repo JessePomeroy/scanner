@@ -12,7 +12,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.colmap_runner import run_colmap_pipeline  # noqa: E402
+from app.colmap_runner import ColmapConfig, run_colmap_pipeline  # noqa: E402
 from app.openmvs_runner import run_openmvs_pipeline  # noqa: E402
 from app.scan_validator import find_scan_root, validate_scan_package  # noqa: E402
 from app.storage import safe_extract_zip  # noqa: E402
@@ -23,6 +23,8 @@ def main() -> None:
     parser.add_argument("scan", type=Path, help="Scan zip or extracted scan directory.")
     parser.add_argument("--work-dir", type=Path, default=None)
     parser.add_argument("--run-colmap", action="store_true")
+    parser.add_argument("--dense", action="store_true", help="Run COLMAP dense stereo after sparse mapping.")
+    parser.add_argument("--use-gpu", action="store_true", help="Enable COLMAP GPU feature extraction/matching.")
     parser.add_argument("--run-openmvs", action="store_true")
     args = parser.parse_args()
 
@@ -45,8 +47,15 @@ def main() -> None:
         print(f"Validated {report.image_count} images and {report.frame_count} frames.")
 
         if args.run_colmap:
-            fused = run_colmap_pipeline(scan_root)
-            print(f"COLMAP fused point cloud: {fused}")
+            output = run_colmap_pipeline(
+                scan_root,
+                ColmapConfig(use_gpu=args.use_gpu),
+                include_dense=args.dense,
+            )
+            if args.dense:
+                print(f"COLMAP fused point cloud: {output}")
+            else:
+                print(f"COLMAP sparse point cloud: {output}")
 
         if args.run_openmvs:
             textured = run_openmvs_pipeline(scan_root)

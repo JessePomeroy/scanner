@@ -13,3 +13,8 @@ reconstruction:
 
 Install COLMAP/OpenMVS locally before using reconstruction mode. Validation mode
 does not require those native tools.
+
+The Homebrew COLMAP build on macOS can run sparse reconstruction, but dense
+stereo currently requires CUDA. For local Mac testing, run sparse reconstruction
+first and export `sparse/sparse_points.ply`. Dense reconstruction should run on a
+CUDA-capable Linux workstation or cloud worker.

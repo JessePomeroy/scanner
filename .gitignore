@@ -11,4 +11,6 @@ sample_scans/
 # Xcode/local build outputs.
 DerivedData/
 *.xcuserdata/
+xcuserdata/
+*.xcuserstate
 build/
