@@ -29,6 +29,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(report.image_count, 1)
         self.assertEqual(report.frame_count, 1)
         self.assertEqual(report.scan_id, "scan_test")
+        self.assertEqual(report.scan_mode, "scene_scan")
 
     def test_validate_scan_package_rejects_missing_image_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,6 +86,26 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(UnsafeArchiveError):
                 safe_extract_zip(archive, tmp_path / "out")
 
+    def test_validate_scan_package_accepts_object_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "metadata" / "session.json").write_text(
+                json.dumps(
+                    {
+                        "scan_id": "scan_test",
+                        "scan_mode": "object_scan",
+                        "object_center_world": [1.0, 2.0, 3.0],
+                        "object_radius_meters": 1.5,
+                    }
+                )
+            )
+
+            report = validate_scan_package(scan_dir)
+
+        self.assertEqual(report.scan_mode, "object_scan")
+        self.assertEqual(report.object_center_world, [1.0, 2.0, 3.0])
+        self.assertEqual(report.object_radius_meters, 1.5)
+
     def _write_scan(self, root: Path) -> Path:
         scan_dir = root / "scan_test"
         images = scan_dir / "images"
@@ -104,7 +125,9 @@ class BackendTests(unittest.TestCase):
                 ]
             )
         )
-        (metadata / "session.json").write_text(json.dumps({"scan_id": "scan_test"}))
+        (metadata / "session.json").write_text(
+            json.dumps({"scan_id": "scan_test", "scan_mode": "scene_scan"})
+        )
         return scan_dir
 
 

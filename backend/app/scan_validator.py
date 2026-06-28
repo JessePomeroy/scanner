@@ -18,6 +18,9 @@ class ScanValidationReport:
     image_count: int
     frame_count: int
     scan_id: str | None
+    scan_mode: str | None
+    object_center_world: list[float] | None
+    object_radius_meters: float | None
 
 
 def find_scan_root(extracted_dir: Path) -> Path:
@@ -76,12 +79,20 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         )
 
     _validate_frame_image_references(scan_dir, frames)
+    object_center_world = _optional_float_list(session, "object_center_world", expected_length=3)
+    object_radius_meters = _optional_float(session, "object_radius_meters")
+
+    if object_radius_meters is not None and object_radius_meters <= 0:
+        raise ScanValidationError("object_radius_meters must be positive when present")
 
     return ScanValidationReport(
         scan_dir=scan_dir,
         image_count=len(images),
         frame_count=len(frames),
         scan_id=session.get("scan_id"),
+        scan_mode=session.get("scan_mode"),
+        object_center_world=object_center_world,
+        object_radius_meters=object_radius_meters,
     )
 
 
@@ -128,3 +139,33 @@ def _validate_frame_image_references(scan_dir: Path, frames: list[dict[str, Any]
 
         if not image_path.is_file():
             raise ScanValidationError(f"Referenced image is not a file: {image}")
+
+
+def _optional_float(value: dict[str, Any], key: str) -> float | None:
+    raw = value.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, (int, float)):
+        raise ScanValidationError(f"{key} must be a number when present")
+    return float(raw)
+
+
+def _optional_float_list(
+    value: dict[str, Any],
+    key: str,
+    *,
+    expected_length: int,
+) -> list[float] | None:
+    raw = value.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) != expected_length:
+        raise ScanValidationError(f"{key} must be an array of {expected_length} numbers")
+
+    result: list[float] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, (int, float)):
+            raise ScanValidationError(f"{key}[{index}] must be a number")
+        result.append(float(item))
+
+    return result

@@ -21,6 +21,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     @Published private(set) var acceptedFrameCount = 0
     @Published private(set) var statusMessage = "Ready"
     @Published private(set) var lastZipURL: URL?
+    @Published var scanMode: ScanMode = .scene {
+        didSet {
+            objectCenterWorld = nil
+            statusMessage = scanMode == .object ? "Tap subject while scanning" : "Ready"
+        }
+    }
+    @Published var objectRadiusPreset: ObjectRadiusPreset = .medium
+    @Published private(set) var objectCenterIsSet = false
 
     private let arTrackingManager: ARTrackingManager
     private let cameraCaptureManager: CameraCaptureManager
@@ -34,6 +42,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var currentScanId: String?
     private var frameCounter = 0
     private var isScanning = false
+    private var objectCenterWorld: SIMD3<Float>?
 
     var arSession: ARSession {
         arTrackingManager.session
@@ -62,13 +71,15 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             frameCounter = 0
             currentScanId = scanId
             currentScanDirectory = scanDirectory
+            objectCenterWorld = nil
             isScanning = true
         }
 
         updatePublishedState(
             state: .scanning,
-            statusMessage: "Scanning",
+            statusMessage: scanMode == .object ? "Tap subject" : "Scanning",
             acceptedFrameCount: 0,
+            objectCenterIsSet: false,
             clearZipURL: true
         )
 
@@ -101,12 +112,16 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 createdAt: ISO8601DateFormatter().string(from: Date()),
                 device: UIDevice.current.model,
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
-                scanMode: "environment_photogrammetry",
+                scanMode: scanMode.rawValue,
                 usesLidar: ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth),
                 usesARKitMesh: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
                 imageCount: capturedFrames.count,
                 depthFrameCount: 0,
-                notes: "ARFrame image capture package."
+                objectCenterWorld: objectCenterWorld?.array,
+                objectRadiusMeters: scanMode == .object ? objectRadiusPreset.rawValue : nil,
+                notes: scanMode == .object
+                    ? "Object scan package with ARKit subject center metadata."
+                    : "Scene scan package."
             )
 
             try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
@@ -127,6 +142,19 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         isScanning = false
         arTrackingManager.stopTracking()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
+    }
+
+    func setObjectCenter(_ worldPosition: SIMD3<Float>) {
+        guard scanMode == .object else { return }
+
+        captureQueue.sync {
+            objectCenterWorld = worldPosition
+        }
+
+        updatePublishedState(
+            statusMessage: "Subject set",
+            objectCenterIsSet: true
+        )
     }
 
     private func considerFrameForCapture(_ frame: ARFrame) {
@@ -183,6 +211,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         state: ScanCaptureState? = nil,
         statusMessage: String? = nil,
         acceptedFrameCount: Int? = nil,
+        objectCenterIsSet: Bool? = nil,
         lastZipURL: URL? = nil,
         clearZipURL: Bool = false
     ) {
@@ -195,6 +224,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             }
             if let acceptedFrameCount {
                 self.acceptedFrameCount = acceptedFrameCount
+            }
+            if let objectCenterIsSet {
+                self.objectCenterIsSet = objectCenterIsSet
             }
             if clearZipURL {
                 self.lastZipURL = nil
@@ -247,6 +279,12 @@ private extension simd_float4x4 {
             [columns.0.z, columns.1.z, columns.2.z, columns.3.z],
             [columns.0.w, columns.1.w, columns.2.w, columns.3.w]
         ]
+    }
+}
+
+private extension SIMD3<Float> {
+    var array: [Float] {
+        [x, y, z]
     }
 }
 

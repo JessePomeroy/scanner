@@ -18,6 +18,9 @@ The first working target is:
 - `docs`: Architecture and capture notes.
 - `tests`: Backend unit tests.
 
+See [docs/workflows.md](docs/workflows.md) for the current Mac capture workflow
+and the planned Windows GPU reconstruction workflow.
+
 ## iOS App
 
 Open the app in Xcode:

@@ -23,8 +23,11 @@ def main() -> None:
 
     print(f"scan_dir={report.scan_dir}")
     print(f"scan_id={report.scan_id}")
+    print(f"scan_mode={report.scan_mode}")
     print(f"images={report.image_count}")
     print(f"frames={report.frame_count}")
+    print(f"object_center_world={report.object_center_world}")
+    print(f"object_radius_meters={report.object_radius_meters}")
 
 
 if __name__ == "__main__":

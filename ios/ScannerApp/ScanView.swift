@@ -6,10 +6,13 @@ struct ScanView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ARSessionView(session: scanManager.arSession)
+            ARSessionView(session: scanManager.arSession) { worldPosition in
+                scanManager.setObjectCenter(worldPosition)
+            }
                 .ignoresSafeArea()
 
             VStack(spacing: 12) {
+                modeControls
                 statusBar
                 controls
             }
@@ -37,6 +40,11 @@ struct ScanView: View {
             Label("\(scanManager.acceptedFrameCount)", systemImage: "photo.stack")
                 .font(.headline.monospacedDigit())
 
+            if scanManager.scanMode == .object {
+                Image(systemName: scanManager.objectCenterIsSet ? "scope" : "scope")
+                    .foregroundStyle(scanManager.objectCenterIsSet ? .green : .secondary)
+            }
+
             Text(scanManager.statusMessage)
                 .font(.subheadline)
                 .lineLimit(1)
@@ -46,6 +54,31 @@ struct ScanView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var modeControls: some View {
+        VStack(spacing: 8) {
+            Picker("Mode", selection: $scanManager.scanMode) {
+                ForEach(ScanMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
+
+            if scanManager.scanMode == .object {
+                Picker("Radius", selection: $scanManager.objectRadiusPreset) {
+                    ForEach(ObjectRadiusPreset.allCases) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
+            }
+        }
+        .padding(10)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

@@ -1,5 +1,40 @@
 import Foundation
 
+enum ScanMode: String, CaseIterable, Codable, Identifiable {
+    case object = "object_scan"
+    case scene = "scene_scan"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .object:
+            return "Object"
+        case .scene:
+            return "Scene"
+        }
+    }
+}
+
+enum ObjectRadiusPreset: Float, CaseIterable, Codable, Identifiable {
+    case small = 0.75
+    case medium = 1.5
+    case large = 3.0
+
+    var id: Float { rawValue }
+
+    var title: String {
+        switch self {
+        case .small:
+            return "0.75m"
+        case .medium:
+            return "1.5m"
+        case .large:
+            return "3m"
+        }
+    }
+}
+
 struct CapturedFrameMetadata: Codable, Equatable {
     let id: Int
     let imagePath: String
@@ -42,6 +77,8 @@ struct ScanSessionMetadata: Codable, Equatable {
     let usesARKitMesh: Bool
     let imageCount: Int
     let depthFrameCount: Int
+    let objectCenterWorld: [Float]?
+    let objectRadiusMeters: Float?
     let notes: String?
 
     enum CodingKeys: String, CodingKey {
@@ -54,6 +91,8 @@ struct ScanSessionMetadata: Codable, Equatable {
         case usesARKitMesh = "uses_arkit_mesh"
         case imageCount = "image_count"
         case depthFrameCount = "depth_frame_count"
+        case objectCenterWorld = "object_center_world"
+        case objectRadiusMeters = "object_radius_meters"
         case notes
     }
 }
