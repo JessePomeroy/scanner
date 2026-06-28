@@ -1,0 +1,14 @@
+.DS_Store
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# Local scan data can be large and device-specific.
+backend/scans/
+sample_scans/
+
+# Xcode/local build outputs.
+DerivedData/
+*.xcuserdata/
+build/

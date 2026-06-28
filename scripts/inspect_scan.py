@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Inspect and validate an extracted scan package."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "backend"))
+
+from app.scan_validator import find_scan_root, validate_scan_package  # noqa: E402
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scan_dir", type=Path)
+    args = parser.parse_args()
+
+    scan_root = find_scan_root(args.scan_dir)
+    report = validate_scan_package(scan_root)
+
+    print(f"scan_dir={report.scan_dir}")
+    print(f"scan_id={report.scan_id}")
+    print(f"images={report.image_count}")
+    print(f"frames={report.frame_count}")
+
+
+if __name__ == "__main__":
+    main()
