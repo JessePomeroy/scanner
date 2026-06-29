@@ -15,11 +15,10 @@ from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.jobs import JobStore
 from app.openmvs_runner import run_openmvs_pipeline
-from app.report_writer import write_scan_report
+from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
     ScanValidationError,
     find_scan_root,
-    validate_scan_package,
 )
 from app.schemas import JobRecord
 from app.storage import UnsafeArchiveError, safe_extract_zip
@@ -75,8 +74,8 @@ async def upload_scan(
     try:
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
-        report = validate_scan_package(scan_root)
-        write_scan_report(scan_root, report)
+        package = validate_and_report_scan(scan_root)
+        report = package.validation
         completed_dir = move_to_completed(scan_id, processing_dir)
         completed_scan_root = find_scan_root(completed_dir)
         outputs = {
@@ -127,8 +126,8 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
     try:
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
-        report = validate_scan_package(scan_root)
-        report_path = write_scan_report(scan_root, report)
+        package = validate_and_report_scan(scan_root)
+        report = package.validation
 
         colmap_output = run_colmap_pipeline(
             scan_root,
@@ -137,7 +136,7 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         )
         outputs = {
             "colmap_output": str(colmap_output),
-            "scan_report": str(report_path),
+            "scan_report": str(package.report_path),
         }
 
         if run_openmvs:
@@ -145,7 +144,7 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
             outputs["textured_mesh"] = str(textured_mesh)
 
         export_blender_formats(scan_root)
-        report_path = write_scan_report(scan_root, report)
+        package = validate_and_report_scan(scan_root)
         completed_dir = move_to_completed(scan_id, processing_dir)
         completed_scan_root = find_scan_root(completed_dir)
         outputs["package_dir"] = str(completed_dir)

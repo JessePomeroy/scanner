@@ -22,8 +22,8 @@ from app.colmap_runner import (  # noqa: E402
 )
 from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands  # noqa: E402
 from app.report_writer import object_scan_summary, write_scan_report  # noqa: E402
-from app.scan_validator import find_scan_root, validate_scan_package  # noqa: E402
-from app.storage import safe_extract_zip  # noqa: E402
+from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
+from app.scan_validator import find_scan_root  # noqa: E402
 
 
 def main() -> None:
@@ -50,10 +50,9 @@ def main() -> None:
     source_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    prepare_source(args.scan, source_dir)
-
-    scan_root = find_scan_root(source_dir)
-    validation_report = validate_scan_package(scan_root)
+    scan_root = prepare_scan_source(args.scan, source_dir)
+    package = validate_and_report_scan(scan_root)
+    validation_report = package.validation
     scan_id = validation_report.scan_id if validation_report and validation_report.scan_id else initial_scan_id
     if scan_id != initial_scan_id:
         final_run_dir = (args.output_root / scan_id).resolve()
@@ -66,7 +65,8 @@ def main() -> None:
             source_dir = run_dir / "source"
             logs_dir = run_dir / "logs"
             scan_root = find_scan_root(source_dir)
-            validation_report = validate_scan_package(scan_root)
+            package = validate_and_report_scan(scan_root)
+            validation_report = package.validation
 
     colmap_config = ColmapConfig(
         matcher=args.matcher,
@@ -86,7 +86,7 @@ def main() -> None:
     command_log = logs_dir / "commands.log"
     outputs = expected_outputs(scan_root, include_dense=not args.skip_dense, include_openmvs=not args.skip_openmvs)
 
-    package_report_path = write_scan_report(scan_root, validation_report)
+    package_report_path = package.report_path
 
     for command in commands:
         run_command(command, command_log=command_log, dry_run=args.dry_run)
@@ -121,26 +121,6 @@ def main() -> None:
     print(f"Report: {report_path}")
     for key, path in outputs.items():
         print(f"{key}: {path}")
-
-
-def scan_id_from_path(path: Path) -> str:
-    name = path.name
-    if name.lower().endswith(".zip"):
-        name = name[:-4]
-    return name.replace(" ", "_")
-
-
-def prepare_source(scan: Path, source_dir: Path) -> None:
-    if any(source_dir.iterdir()):
-        shutil.rmtree(source_dir)
-        source_dir.mkdir(parents=True)
-
-    if scan.suffix.lower() == ".zip":
-        safe_extract_zip(scan, source_dir)
-    elif scan.is_dir():
-        shutil.copytree(scan, source_dir / scan.name)
-    else:
-        raise SystemExit(f"Scan path is not a zip or directory: {scan}")
 
 
 def build_model_converter_command(scan_root: Path, config: ColmapConfig) -> list[str]:

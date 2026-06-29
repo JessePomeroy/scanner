@@ -5,15 +5,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import shutil
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.scan_validator import find_scan_root, validate_scan_package  # noqa: E402
-from app.storage import safe_extract_zip  # noqa: E402
+from app.scan_package import prepare_scan_source, validate_and_report_scan  # noqa: E402
 
 
 def main() -> None:
@@ -31,8 +29,8 @@ def main() -> None:
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as temporary:
-        scan_root = prepare_scan(args.scan, Path(temporary))
-        report = validate_scan_package(scan_root)
+        scan_root = prepare_scan_source(args.scan, Path(temporary))
+        report = validate_and_report_scan(scan_root).validation
 
         print(f"scan_id: {report.scan_id or scan_root.name}")
         print(f"scan_mode: {report.scan_mode or 'unknown'}")
@@ -69,20 +67,6 @@ def main() -> None:
                 "python3 scripts/crop_point_cloud.py input.ply object_cropped.ply "
                 f"--center X Y Z --radius {report.object_radius_meters}"
             )
-
-
-def prepare_scan(scan: Path, work_dir: Path) -> Path:
-    if scan.suffix.lower() == ".zip":
-        safe_extract_zip(scan, work_dir)
-    elif scan.is_dir():
-        destination = work_dir / scan.name
-        if destination.exists():
-            shutil.rmtree(destination)
-        shutil.copytree(scan, destination)
-    else:
-        raise SystemExit(f"Scan path is not a zip or directory: {scan}")
-
-    return find_scan_root(work_dir)
 
 
 if __name__ == "__main__":

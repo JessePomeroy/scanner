@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 JobStatus = Literal["received", "processing", "validated", "complete", "failed"]
@@ -16,4 +16,4 @@ class JobRecord(BaseModel):
     message: str | None = None
     image_count: int | None = None
     frame_count: int | None = None
-    outputs: dict[str, str] = {}
+    outputs: dict[str, str] = Field(default_factory=dict)

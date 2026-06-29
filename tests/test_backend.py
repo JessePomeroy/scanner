@@ -17,6 +17,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_sparse_commands,
 )
 from app.report_writer import write_scan_report  # noqa: E402
+from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
 from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
 
@@ -143,6 +144,27 @@ class BackendTests(unittest.TestCase):
             payload["object_scan"]["automatic_crop_status"],
             "needs_arkit_to_colmap_alignment",
         )
+
+    def test_scan_package_interface_prepares_validates_and_reports_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scan_dir = self._write_scan(tmp_path)
+            archive = tmp_path / "scan_test.zip"
+            with zipfile.ZipFile(archive, "w") as zip_file:
+                for path in scan_dir.rglob("*"):
+                    if path.is_file():
+                        zip_file.write(path, path.relative_to(tmp_path))
+
+            scan_root = prepare_scan_source(archive, tmp_path / "prepared")
+            package = validate_and_report_scan(scan_root)
+
+        self.assertEqual(package.scan_id, "scan_test")
+        self.assertEqual(package.validation.image_count, 1)
+        self.assertEqual(package.report_path.name, "scan_report.json")
+
+    def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
+        self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")
+        self.assertEqual(scan_id_from_path(Path("scan_002")), "scan_002")
 
     def _write_scan(self, root: Path) -> Path:
         scan_dir = root / "scan_test"
