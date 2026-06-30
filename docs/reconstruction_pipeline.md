@@ -4,7 +4,7 @@ The backend currently supports the command sequence needed for local
 reconstruction:
 
 1. `colmap feature_extractor`
-2. `colmap exhaustive_matcher`
+2. `colmap exhaustive_matcher` or `colmap sequential_matcher`
 3. `colmap mapper`
 4. `colmap image_undistorter`
 5. `colmap patch_match_stereo`
@@ -18,3 +18,7 @@ The Homebrew COLMAP build on macOS can run sparse reconstruction, but dense
 stereo currently requires CUDA. For local Mac testing, run sparse reconstruction
 first and export `sparse/sparse_points.ply`. Dense reconstruction should run on a
 CUDA-capable Linux workstation or cloud worker.
+
+For phone scans, `sequential_matcher` should become the default local smoke-test
+matcher because frames are captured in temporal order. Keep `exhaustive_matcher`
+available for slower quality checks and difficult scans.

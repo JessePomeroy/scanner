@@ -19,7 +19,8 @@ The first working target is:
 - `tests`: Backend unit tests.
 
 See [docs/workflows.md](docs/workflows.md) for the current Mac capture workflow
-and the planned Windows GPU reconstruction workflow.
+and the planned Windows GPU reconstruction workflow. See
+[docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
 
 ## iOS App
 
