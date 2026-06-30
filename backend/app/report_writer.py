@@ -23,13 +23,17 @@ def write_scan_report(
 
     frames = _read_json(scan_dir / "metadata" / "frames.json", fallback=[])
     session = _read_json(scan_dir / "metadata" / "session.json", fallback={})
+    manifest = _read_json(scan_dir / "metadata" / "manifest.json", fallback={})
+    processing = _read_json(scan_dir / "metadata" / "processing.json", fallback={})
 
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "scan_id": validation.scan_id,
         "scan_dir": str(scan_dir),
+        "manifest": manifest_summary(manifest),
         "capture": capture_summary(frames, session, validation),
         "object_scan": object_scan_summary(validation),
+        "processing": processing_summary(processing),
         "reconstruction": reconstruction_summary(scan_dir),
     }
     report["warnings"] = capture_warnings(report["capture"], report["object_scan"])
@@ -57,6 +61,7 @@ def capture_summary(
         "device": session.get("device"),
         "app_version": session.get("app_version"),
         "build_version": session.get("build_version"),
+        "imu_sample_count": session.get("imu_sample_count"),
         "uses_lidar": session.get("uses_lidar"),
         "uses_arkit_mesh": session.get("uses_arkit_mesh"),
         "capture_duration_seconds": session.get("capture_duration_seconds"),
@@ -90,6 +95,22 @@ def object_scan_summary(validation: ScanValidationReport) -> dict[str, Any]:
     }
 
 
+def manifest_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": manifest.get("schema_version"),
+        "file_counts": manifest.get("file_counts", {}),
+        "sensors": manifest.get("sensors", {}),
+    }
+
+
+def processing_summary(processing: dict[str, Any]) -> dict[str, Any]:
+    steps = processing.get("steps")
+    return {
+        "updated_at": processing.get("updated_at"),
+        "steps": steps if isinstance(steps, dict) else {},
+    }
+
+
 def reconstruction_summary(scan_dir: Path) -> dict[str, Any]:
     sparse_model = scan_dir / "sparse" / "0"
     dense_point_cloud = scan_dir / "dense" / "fused.ply"
@@ -108,14 +129,28 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
     warnings: list[str] = []
     frame_count = capture.get("frame_count") or 0
     rejected_count = capture.get("rejected_frame_count")
+    rejected_tracking_count = capture.get("rejected_tracking_count")
+    rejected_blur_count = capture.get("rejected_blur_count")
     blur_mean = capture.get("blur", {}).get("mean")
     blur_min = capture.get("blur", {}).get("min")
     speed_max = capture.get("movement_speed_meters_per_second", {}).get("max")
 
     if frame_count < 40:
         warnings.append("low_frame_count")
-    if isinstance(rejected_count, int) and frame_count > 0 and rejected_count > frame_count * 2:
-        warnings.append("high_rejected_frame_count")
+    if (
+        isinstance(rejected_count, int)
+        and isinstance(rejected_tracking_count, int)
+        and frame_count > 0
+        and rejected_tracking_count > frame_count
+    ):
+        warnings.append("tracking_loss_during_capture")
+    if (
+        isinstance(rejected_count, int)
+        and isinstance(rejected_blur_count, int)
+        and frame_count > 0
+        and rejected_blur_count > max(10, frame_count // 4)
+    ):
+        warnings.append("many_blurry_rejected_frames")
     if isinstance(blur_mean, (int, float)) and blur_mean < 0.28:
         warnings.append("low_average_blur_score")
     if isinstance(blur_min, (int, float)) and blur_min < 0.18:

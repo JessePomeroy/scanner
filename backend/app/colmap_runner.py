@@ -10,7 +10,7 @@ import subprocess
 @dataclass(frozen=True)
 class ColmapConfig:
     executable: str = "colmap"
-    matcher: str = "exhaustive_matcher"
+    matcher: str = "sequential_matcher"
     single_camera: bool = True
     use_gpu: bool = True
     geometric_consistency: bool = True

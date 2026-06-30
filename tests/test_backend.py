@@ -49,7 +49,7 @@ class BackendTests(unittest.TestCase):
             stages,
             [
                 "feature_extractor",
-                "exhaustive_matcher",
+                "sequential_matcher",
                 "mapper",
                 "image_undistorter",
                 "patch_match_stereo",
@@ -69,7 +69,7 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual([command[1] for command in sparse_commands], [
             "feature_extractor",
-            "exhaustive_matcher",
+            "sequential_matcher",
             "mapper",
         ])
         self.assertEqual([command[1] for command in dense_commands], [
@@ -158,9 +158,52 @@ class BackendTests(unittest.TestCase):
             scan_root = prepare_scan_source(archive, tmp_path / "prepared")
             package = validate_and_report_scan(scan_root)
 
-        self.assertEqual(package.scan_id, "scan_test")
-        self.assertEqual(package.validation.image_count, 1)
-        self.assertEqual(package.report_path.name, "scan_report.json")
+            self.assertEqual(package.scan_id, "scan_test")
+            self.assertEqual(package.validation.image_count, 1)
+            self.assertEqual(package.report_path.name, "scan_report.json")
+            self.assertTrue(package.manifest_path.exists())
+
+    def test_scan_package_records_processing_metadata_in_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            package = validate_and_report_scan(scan_dir)
+            package.record_processing_step(
+                "colmap",
+                {
+                    "matcher": "sequential_matcher",
+                    "elapsed_seconds": 12.5,
+                },
+            )
+            package = validate_and_report_scan(scan_dir)
+            payload = json.loads(package.report_path.read_text())
+
+        self.assertEqual(
+            payload["processing"]["steps"]["colmap"]["matcher"],
+            "sequential_matcher",
+        )
+        self.assertEqual(payload["processing"]["steps"]["colmap"]["elapsed_seconds"], 12.5)
+
+    def test_scan_report_does_not_warn_for_normal_keyframe_throttling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update(
+                {
+                    "rejected_frame_count": 1000,
+                    "rejected_motion_count": 1000,
+                    "rejected_tracking_count": 0,
+                    "rejected_blur_count": 0,
+                }
+            )
+            session_path.write_text(json.dumps(session))
+            report = validate_scan_package(scan_dir)
+            report_path = write_scan_report(scan_dir, report)
+            payload = json.loads(report_path.read_text())
+
+        self.assertNotIn("high_rejected_frame_count", payload["warnings"])
+        self.assertNotIn("tracking_loss_during_capture", payload["warnings"])
+        self.assertNotIn("many_blurry_rejected_frames", payload["warnings"])
 
     def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
         self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")

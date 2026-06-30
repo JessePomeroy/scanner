@@ -96,6 +96,13 @@ python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-co
 Validation writes `metadata/scan_report.json` with capture-quality diagnostics.
 After COLMAP/OpenMVS stages run, the same report is refreshed with any sparse or
 dense output counts that can be detected.
+Local COLMAP smoke tests default to `sequential_matcher`, which is much faster
+for ordered iPhone scans. Use exhaustive matching only when you want a slower
+quality check:
+
+```bash
+python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap --matcher exhaustive_matcher
+```
 
 On macOS/Homebrew, COLMAP can run sparse reconstruction without CUDA. Dense
 stereo may require a CUDA-capable build and GPU. Use `--dense` only when that

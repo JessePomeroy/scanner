@@ -1,6 +1,7 @@
 import ARKit
 import AVFoundation
 import Combine
+import CoreMotion
 import Foundation
 import UIKit
 
@@ -38,6 +39,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private let cameraCaptureManager: CameraCaptureManager
     private let packageWriter: ScanPackageWriter
     private let imageWriter: ARFrameImageWriter
+    private let motionRecorder = MotionCaptureRecorder()
     private let captureQueue = DispatchQueue(label: "ScannerApp.ScanCaptureManager.capture")
 
     private var frameSelector = FrameSelector()
@@ -102,8 +104,10 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         )
 
         do {
+            motionRecorder.start()
             try arTrackingManager.startTracking()
         } catch {
+            _ = motionRecorder.stop()
             captureQueue.sync {
                 isScanning = false
             }
@@ -125,17 +129,24 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 throw ScanPackageWriterError.invalidScanId
             }
 
+            let motionSamples = motionRecorder.stop()
+            let createdAt = ISO8601DateFormatter().string(from: Date())
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+            let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+            let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+            let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
             let session = ScanSessionMetadata(
                 scanId: currentScanId,
-                createdAt: ISO8601DateFormatter().string(from: Date()),
+                createdAt: createdAt,
                 device: UIDevice.current.model,
-                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
-                buildVersion: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0",
+                appVersion: appVersion,
+                buildVersion: buildVersion,
                 scanMode: scanMode.rawValue,
-                usesLidar: ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth),
-                usesARKitMesh: ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
+                usesLidar: usesLidar,
+                usesARKitMesh: usesARKitMesh,
                 imageCount: capturedFrames.count,
                 depthFrameCount: 0,
+                imuSampleCount: motionSamples.count,
                 rejectedFrameCount: qualityStats.rejectedTotal,
                 rejectedTrackingCount: qualityStats.rejectedTracking,
                 rejectedBlurCount: qualityStats.rejectedBlur,
@@ -151,8 +162,29 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                     : "Scene scan package."
             )
 
+            let manifest = ScanPackageManifest(
+                schemaVersion: "0.2.0",
+                scanId: currentScanId,
+                scanMode: scanMode.rawValue,
+                appVersion: appVersion,
+                buildVersion: buildVersion,
+                imageCount: capturedFrames.count,
+                depthFrameCount: 0,
+                imuSampleCount: motionSamples.count,
+                usesLidar: usesLidar,
+                usesARKitMesh: usesARKitMesh,
+                createdAt: createdAt,
+                limitations: [
+                    "depth frames are optional and absent on non-LiDAR devices",
+                    "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
+                    "dense reconstruction requires a CUDA-capable COLMAP build"
+                ]
+            )
+
             try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
             try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
+            try packageWriter.saveMotionMetadata(motionSamples, in: currentScanDirectory)
+            try packageWriter.saveManifest(manifest, in: currentScanDirectory)
             return try packageWriter.zipScanFolder(at: currentScanDirectory)
         }
 
@@ -168,6 +200,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
     func fail(_ error: Error) {
         isScanning = false
+        _ = motionRecorder.stop()
         arTrackingManager.stopTracking()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
     }
@@ -239,6 +272,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 blurScore: blurScore,
                 exposureDuration: nil,
                 iso: nil,
+                exposureTargetOffset: nil,
+                ambientIntensity: frame.lightEstimate.map { Float($0.ambientIntensity) },
+                ambientColorTemperature: frame.lightEstimate.map { Float($0.ambientColorTemperature) },
                 whiteBalanceLocked: false,
                 focusLocked: false,
                 movementDeltaMeters: decision.translationMeters,
@@ -443,6 +479,70 @@ private struct CaptureQualityStats {
         case .firstFrame, .usefulMotion:
             break
         }
+    }
+}
+
+private final class MotionCaptureRecorder {
+    private let manager = CMMotionManager()
+    private let queue = OperationQueue()
+    private let lock = NSLock()
+    private var samples: [MotionSampleMetadata] = []
+
+    func start() {
+        lock.lock()
+        samples.removeAll()
+        lock.unlock()
+
+        guard manager.isDeviceMotionAvailable else { return }
+
+        queue.name = "ScannerApp.MotionCaptureRecorder"
+        manager.deviceMotionUpdateInterval = 1.0 / 30.0
+        manager.startDeviceMotionUpdates(to: queue) { [weak self] motion, _ in
+            guard let self,
+                  let motion else {
+                return
+            }
+
+            let sample = MotionSampleMetadata(
+                timestamp: motion.timestamp,
+                attitudeQuaternion: [
+                    motion.attitude.quaternion.x,
+                    motion.attitude.quaternion.y,
+                    motion.attitude.quaternion.z,
+                    motion.attitude.quaternion.w
+                ],
+                rotationRate: [
+                    motion.rotationRate.x,
+                    motion.rotationRate.y,
+                    motion.rotationRate.z
+                ],
+                gravity: [
+                    motion.gravity.x,
+                    motion.gravity.y,
+                    motion.gravity.z
+                ],
+                userAcceleration: [
+                    motion.userAcceleration.x,
+                    motion.userAcceleration.y,
+                    motion.userAcceleration.z
+                ]
+            )
+
+            self.lock.lock()
+            self.samples.append(sample)
+            self.lock.unlock()
+        }
+    }
+
+    func stop() -> [MotionSampleMetadata] {
+        if manager.isDeviceMotionActive {
+            manager.stopDeviceMotionUpdates()
+        }
+
+        lock.lock()
+        let result = samples
+        lock.unlock()
+        return result
     }
 }
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from time import perf_counter
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,10 +89,25 @@ def main() -> None:
 
     package_report_path = package.report_path
 
+    started_at = perf_counter()
     for command in commands:
         run_command(command, command_log=command_log, dry_run=args.dry_run)
+    elapsed_seconds = perf_counter() - started_at
+    package.record_processing_step(
+        "gpu_reconstruction",
+        {
+            "matcher": args.matcher,
+            "dry_run": args.dry_run,
+            "skip_dense": args.skip_dense,
+            "skip_openmvs": args.skip_openmvs,
+            "elapsed_seconds": elapsed_seconds,
+            "command_count": len(commands),
+        },
+    )
 
     if not args.dry_run:
+        package_report_path = write_scan_report(scan_root, validation_report)
+    else:
         package_report_path = write_scan_report(scan_root, validation_report)
 
     package_report = json.loads(package_report_path.read_text())

@@ -18,26 +18,26 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
 
 ## Immediate Local Improvements
 
-1. Add a fast local COLMAP mode using `sequential_matcher`.
+1. Add a fast local COLMAP mode using `sequential_matcher`. Status: implemented.
    - Keep `exhaustive_matcher` for quality checks.
    - Default Mac smoke tests should use sequential matching because iPhone
      frames are naturally ordered.
    - Report matcher type and runtime in `scan_report.json`.
 
-2. Tune capture warnings in `scan_report.json`.
+2. Tune capture warnings in `scan_report.json`. Status: implemented initial pass.
    - Separate normal skipped live AR frames from real capture problems.
    - Keep warnings for tracking loss, accepted blurry frames, too few accepted
      frames, and excessive camera speed.
    - Rename or soften `high_rejected_frame_count` so successful keyframe
      throttling does not look like a scan failure.
 
-3. Add optional IMU/motion capture.
+3. Add optional IMU/motion capture. Status: implemented initial pass.
    - Write `motion/imu.json` or `metadata/imu.json`.
    - Capture CoreMotion rotation rate, user acceleration, gravity, attitude,
      and timestamps.
    - Use this first for diagnostics; later it can help pose sanity checks.
 
-4. Add richer camera exposure metadata.
+4. Add richer camera exposure metadata. Status: partially implemented.
    - Capture exposure duration, ISO, exposure target/offset when available.
    - Track focus/exposure/white-balance lock state more accurately.
    - Use these fields for texture-quality scoring and report warnings.
@@ -54,7 +54,7 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Standard iPhone scans should continue to work with no depth frames.
    - LiDAR-capable devices can fill `depth/` and confidence maps later.
 
-3. Add package manifest.
+3. Add package manifest. Status: implemented initial pass.
    - Write `metadata/manifest.json` with schema version, app version, capture
      mode, enabled sensors, file counts, and known processing limitations.
 
@@ -80,7 +80,7 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
 
 1. Mac smoke test path.
    - Validate package.
-   - Run sparse COLMAP with sequential matching by default.
+   - Run sparse COLMAP with sequential matching by default. Status: implemented.
    - Export `sparse/sparse_points.ply`.
    - Refresh `scan_report.json`.
 

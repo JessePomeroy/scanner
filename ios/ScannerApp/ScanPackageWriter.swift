@@ -69,6 +69,22 @@ final class ScanPackageWriter {
     }
 
     @discardableResult
+    func saveMotionMetadata(_ samples: [MotionSampleMetadata], in scanDirectory: URL) throws -> URL {
+        try metadataWriter.writeMotionMetadata(
+            samples,
+            to: scanDirectory.appendingPathComponent("metadata", isDirectory: true)
+        )
+    }
+
+    @discardableResult
+    func saveManifest(_ manifest: ScanPackageManifest, in scanDirectory: URL) throws -> URL {
+        try metadataWriter.writeManifest(
+            manifest,
+            to: scanDirectory.appendingPathComponent("metadata", isDirectory: true)
+        )
+    }
+
+    @discardableResult
     func zipScanFolder(at scanDirectory: URL) throws -> URL {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: scanDirectory.path, isDirectory: &isDirectory),

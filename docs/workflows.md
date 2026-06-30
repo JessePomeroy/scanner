@@ -17,6 +17,8 @@ python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scanner-test --run
 This produces `sparse/sparse_points.ply`. The Homebrew COLMAP build on macOS is
 useful for sparse smoke tests, but not for dense CUDA reconstruction.
 The script also writes `metadata/scan_report.json` with capture-quality warnings.
+The default local matcher is `sequential_matcher`; use
+`--matcher exhaustive_matcher` only when you want a slower quality check.
 
 ## Windows GPU Workflow
 

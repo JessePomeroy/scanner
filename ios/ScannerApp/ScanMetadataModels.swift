@@ -47,6 +47,9 @@ struct CapturedFrameMetadata: Codable, Equatable {
     let blurScore: Float
     let exposureDuration: Double?
     let iso: Float?
+    let exposureTargetOffset: Float?
+    let ambientIntensity: Float?
+    let ambientColorTemperature: Float?
     let whiteBalanceLocked: Bool
     let focusLocked: Bool
     let movementDeltaMeters: Float?
@@ -66,12 +69,31 @@ struct CapturedFrameMetadata: Codable, Equatable {
         case blurScore = "blur_score"
         case exposureDuration = "exposure_duration"
         case iso
+        case exposureTargetOffset = "exposure_target_offset"
+        case ambientIntensity = "ambient_intensity"
+        case ambientColorTemperature = "ambient_color_temperature"
         case whiteBalanceLocked = "white_balance_locked"
         case focusLocked = "focus_locked"
         case movementDeltaMeters = "movement_delta_meters"
         case rotationDeltaDegrees = "rotation_delta_degrees"
         case secondsSincePreviousFrame = "seconds_since_previous_frame"
         case movementSpeedMetersPerSecond = "movement_speed_meters_per_second"
+    }
+}
+
+struct MotionSampleMetadata: Codable, Equatable {
+    let timestamp: Double
+    let attitudeQuaternion: [Double]
+    let rotationRate: [Double]
+    let gravity: [Double]
+    let userAcceleration: [Double]
+
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+        case attitudeQuaternion = "attitude_quaternion"
+        case rotationRate = "rotation_rate"
+        case gravity
+        case userAcceleration = "user_acceleration"
     }
 }
 
@@ -86,6 +108,7 @@ struct ScanSessionMetadata: Codable, Equatable {
     let usesARKitMesh: Bool
     let imageCount: Int
     let depthFrameCount: Int
+    let imuSampleCount: Int
     let rejectedFrameCount: Int
     let rejectedTrackingCount: Int
     let rejectedBlurCount: Int
@@ -109,6 +132,7 @@ struct ScanSessionMetadata: Codable, Equatable {
         case usesARKitMesh = "uses_arkit_mesh"
         case imageCount = "image_count"
         case depthFrameCount = "depth_frame_count"
+        case imuSampleCount = "imu_sample_count"
         case rejectedFrameCount = "rejected_frame_count"
         case rejectedTrackingCount = "rejected_tracking_count"
         case rejectedBlurCount = "rejected_blur_count"
@@ -120,5 +144,35 @@ struct ScanSessionMetadata: Codable, Equatable {
         case objectCenterWorld = "object_center_world"
         case objectRadiusMeters = "object_radius_meters"
         case notes
+    }
+}
+
+struct ScanPackageManifest: Codable, Equatable {
+    let schemaVersion: String
+    let scanId: String
+    let scanMode: String
+    let appVersion: String
+    let buildVersion: String
+    let imageCount: Int
+    let depthFrameCount: Int
+    let imuSampleCount: Int
+    let usesLidar: Bool
+    let usesARKitMesh: Bool
+    let createdAt: String
+    let limitations: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case scanId = "scan_id"
+        case scanMode = "scan_mode"
+        case appVersion = "app_version"
+        case buildVersion = "build_version"
+        case imageCount = "image_count"
+        case depthFrameCount = "depth_frame_count"
+        case imuSampleCount = "imu_sample_count"
+        case usesLidar = "uses_lidar"
+        case usesARKitMesh = "uses_arkit_mesh"
+        case createdAt = "created_at"
+        case limitations
     }
 }

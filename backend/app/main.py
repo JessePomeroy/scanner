@@ -7,6 +7,7 @@ import os
 import shutil
 import uuid
 import zipfile
+from time import perf_counter
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -129,10 +130,21 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         package = validate_and_report_scan(scan_root)
         report = package.validation
 
+        started_at = perf_counter()
         colmap_output = run_colmap_pipeline(
             scan_root,
             ColmapConfig(use_gpu=False),
             include_dense=run_dense,
+        )
+        package.record_processing_step(
+            "colmap",
+            {
+                "matcher": ColmapConfig().matcher,
+                "use_gpu": False,
+                "include_dense": run_dense,
+                "elapsed_seconds": perf_counter() - started_at,
+                "output": str(colmap_output),
+            },
         )
         outputs = {
             "colmap_output": str(colmap_output),
@@ -140,7 +152,15 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         }
 
         if run_openmvs:
+            started_at = perf_counter()
             textured_mesh = run_openmvs_pipeline(scan_root)
+            package.record_processing_step(
+                "openmvs",
+                {
+                    "elapsed_seconds": perf_counter() - started_at,
+                    "output": str(textured_mesh),
+                },
+            )
             outputs["textured_mesh"] = str(textured_mesh)
 
         export_blender_formats(scan_root)

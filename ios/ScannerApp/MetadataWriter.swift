@@ -35,6 +35,30 @@ final class MetadataWriter {
         return url
     }
 
+    func writeMotionMetadata(_ samples: [MotionSampleMetadata], to metadataDirectory: URL) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: metadataDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let url = metadataDirectory.appendingPathComponent("imu.json")
+        let data = try encoder.encode(samples)
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+
+    func writeManifest(_ manifest: ScanPackageManifest, to metadataDirectory: URL) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: metadataDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let url = metadataDirectory.appendingPathComponent("manifest.json")
+        let data = try encoder.encode(manifest)
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+
     private static func makeDefaultEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

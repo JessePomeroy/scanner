@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 import sys
 import tempfile
+from time import perf_counter
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
@@ -21,6 +22,12 @@ def main() -> None:
     parser.add_argument("scan", type=Path, help="Scan zip or extracted scan directory.")
     parser.add_argument("--work-dir", type=Path, default=None)
     parser.add_argument("--run-colmap", action="store_true")
+    parser.add_argument(
+        "--matcher",
+        default="sequential_matcher",
+        choices=["sequential_matcher", "exhaustive_matcher"],
+        help="COLMAP matcher. sequential_matcher is the default for ordered phone scans.",
+    )
     parser.add_argument("--dense", action="store_true", help="Run COLMAP dense stereo after sparse mapping.")
     parser.add_argument("--use-gpu", action="store_true", help="Enable COLMAP GPU feature extraction/matching.")
     parser.add_argument("--run-openmvs", action="store_true")
@@ -37,10 +44,22 @@ def main() -> None:
         print(f"Scan report: {package.report_path}")
 
         if args.run_colmap:
+            started_at = perf_counter()
             output = run_colmap_pipeline(
                 scan_root,
-                ColmapConfig(use_gpu=args.use_gpu),
+                ColmapConfig(matcher=args.matcher, use_gpu=args.use_gpu),
                 include_dense=args.dense,
+            )
+            elapsed_seconds = perf_counter() - started_at
+            package.record_processing_step(
+                "colmap",
+                {
+                    "matcher": args.matcher,
+                    "use_gpu": args.use_gpu,
+                    "include_dense": args.dense,
+                    "elapsed_seconds": elapsed_seconds,
+                    "output": str(output),
+                },
             )
             if args.dense:
                 print(f"COLMAP fused point cloud: {output}")
@@ -50,7 +69,16 @@ def main() -> None:
             print(f"Updated scan report: {package.report_path}")
 
         if args.run_openmvs:
+            started_at = perf_counter()
             textured = run_openmvs_pipeline(scan_root)
+            elapsed_seconds = perf_counter() - started_at
+            package.record_processing_step(
+                "openmvs",
+                {
+                    "elapsed_seconds": elapsed_seconds,
+                    "output": str(textured),
+                },
+            )
             print(f"OpenMVS textured mesh: {textured}")
             package = validate_and_report_scan(scan_root)
             print(f"Updated scan report: {package.report_path}")

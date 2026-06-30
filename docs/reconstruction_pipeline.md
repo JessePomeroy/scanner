@@ -19,6 +19,6 @@ stereo currently requires CUDA. For local Mac testing, run sparse reconstruction
 first and export `sparse/sparse_points.ply`. Dense reconstruction should run on a
 CUDA-capable Linux workstation or cloud worker.
 
-For phone scans, `sequential_matcher` should become the default local smoke-test
-matcher because frames are captured in temporal order. Keep `exhaustive_matcher`
+For phone scans, `sequential_matcher` is the default local smoke-test matcher
+because frames are captured in temporal order. Keep `exhaustive_matcher`
 available for slower quality checks and difficult scans.
