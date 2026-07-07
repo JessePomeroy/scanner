@@ -42,7 +42,8 @@ build is useful for compile checks, but world tracking is unavailable there.
 
 Exported ZIP packages appear in the app's `Scans` tab. Use that gallery to
 refresh local exports and reopen the share sheet for an existing package without
-starting a new scan.
+starting a new scan. Delete a gallery item to remove the ZIP and matching
+extracted scan folder from the device.
 
 ## Backend
 
