@@ -40,6 +40,10 @@ proven on a physical iPhone.
 The app requires a physical ARKit-capable device for scanning. The simulator
 build is useful for compile checks, but world tracking is unavailable there.
 
+Exported ZIP packages appear in the app's `Scans` tab. Use that gallery to
+refresh local exports and reopen the share sheet for an existing package without
+starting a new scan.
+
 ## Backend
 
 Create an environment and install dependencies:

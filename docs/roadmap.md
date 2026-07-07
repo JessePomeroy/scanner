@@ -199,7 +199,7 @@ should not block the production COLMAP/OpenMVS path.
 
 ## Later Product Features
 
-- Scan gallery.
+- Scan gallery. Status: implemented initial local ZIP gallery.
 - Job status UI.
 - Upload to local workstation or cloud worker.
 - Result download/share UI.
