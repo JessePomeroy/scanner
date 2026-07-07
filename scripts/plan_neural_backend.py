@@ -37,9 +37,16 @@ def main() -> None:
 
     scan_id = scan_id_from_path(args.scan)
     work_dir = args.work_dir or Path("NeuralPlans") / scan_id / args.backend
+    source_dir = work_dir / "source"
+    if args.scan.is_dir():
+        scan_path = args.scan.resolve()
+        source_path = source_dir.resolve()
+        if source_path == scan_path or scan_path in source_path.parents:
+            parser.error("--work-dir must not be the scan directory or inside the scan directory")
+
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    scan_root = prepare_scan_source(args.scan, work_dir, reset=True)
+    scan_root = prepare_scan_source(args.scan, source_dir, reset=True)
     package = validate_and_report_scan(scan_root)
     plan = build_neural_backend_plan(
         scan_root,

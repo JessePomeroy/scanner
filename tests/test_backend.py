@@ -593,12 +593,35 @@ class BackendTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            report_path = work_dir / "scan_test" / "metadata" / "mast3r_slam_neural_plan.json"
+            report_path = work_dir / "source" / "scan_test" / "metadata" / "mast3r_slam_neural_plan.json"
             payload = json.loads(report_path.read_text())
 
         self.assertIn("Videos: 0", second.stdout)
         self.assertEqual(payload["inputs"]["video_count"], 0)
-        self.assertFalse((work_dir / "scan_test" / "video" / "scan.mp4").exists())
+        self.assertFalse((work_dir / "source" / "scan_test" / "video" / "scan.mp4").exists())
+
+    def test_neural_backend_cli_does_not_delete_extracted_scan_when_work_dir_matches_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(scan_dir),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(scan_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not be the scan directory", result.stderr)
+            self.assertTrue((scan_dir / "images" / "frame_000001.jpg").exists())
+            self.assertTrue((scan_dir / "metadata" / "frames.json").exists())
 
     def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
         self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")
