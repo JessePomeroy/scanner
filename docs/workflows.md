@@ -73,6 +73,16 @@ The video path is optional for COLMAP/OpenMVS, but it will be useful for
 MASt3R-SLAM, Lingbot-style point-cloud workflows, Gaussian splatting, and other
 video-oriented neural reconstruction experiments.
 
+To plan neural backend experiments without installing model dependencies:
+
+```bash
+python3 scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
+python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
+python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
+```
+
+See `docs/neural_backends.md` for backend-specific notes and license cautions.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:

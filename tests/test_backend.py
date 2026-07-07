@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -15,6 +16,11 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
+)
+from app.neural_backend_planner import (  # noqa: E402
+    NeuralBackendConfig,
+    build_neural_backend_plan,
+    write_neural_backend_report,
 )
 from app.open3d_cleanup import cleanup_outputs  # noqa: E402
 from app.point_cloud_processor import (  # noqa: E402
@@ -477,6 +483,199 @@ class BackendTests(unittest.TestCase):
         self.assertNotIn("tracking_loss_during_capture", payload["warnings"])
         self.assertNotIn("many_blurry_rejected_frames", payload["warnings"])
 
+    def test_neural_backend_plan_prefers_video_for_mast3r_slam(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mp4").write_bytes(b"fake mp4")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/scan.mp4"}])
+            )
+
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="mast3r_slam"),
+            )
+
+        self.assertEqual(plan.backend, "mast3r_slam")
+        self.assertEqual(plan.inputs["video_count"], 1)
+        self.assertTrue(any("video/scan.mp4" in part for part in plan.commands[0]))
+
+    def test_neural_backend_plan_uses_images_for_depth_anything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="depth_anything"),
+            )
+
+        self.assertEqual(plan.backend, "depth_anything")
+        self.assertEqual(plan.inputs["image_count"], 1)
+        self.assertIn("--encoder", plan.commands[0])
+        self.assertIn("vits", plan.commands[0])
+
+    def test_neural_backend_report_writes_json_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scan_dir = self._write_scan(tmp_path)
+            report_path = tmp_path / "neural_plan.json"
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="lingbot"),
+            )
+
+            write_neural_backend_report(plan, report_path)
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["backend"], "lingbot")
+        self.assertEqual(payload["inputs"]["video_count"], 0)
+        self.assertEqual(payload["commands"], [])
+
+    def test_neural_backend_cli_resets_stale_zip_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_root = tmp_path / "source"
+            archive = tmp_path / "scan_test.zip"
+            work_dir = tmp_path / "work dir"
+
+            scan_dir = self._write_scan(source_root)
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mp4").write_bytes(b"fake mp4")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/scan.mp4"}])
+            )
+            self._zip_scan(scan_dir, archive, source_root)
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("Videos: 1", first.stdout)
+            self.assertIn("work dir", first.stdout)
+            self.assertIn("'", first.stdout)
+
+            for path in source_root.iterdir():
+                if path.is_dir():
+                    for child in sorted(path.rglob("*"), reverse=True):
+                        if child.is_file():
+                            child.unlink()
+                        elif child.is_dir():
+                            child.rmdir()
+                    path.rmdir()
+
+            scan_dir = self._write_scan(source_root)
+            self._zip_scan(scan_dir, archive, source_root)
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            report_path = work_dir / "source" / "scan_test" / "metadata" / "mast3r_slam_neural_plan.json"
+            payload = json.loads(report_path.read_text())
+
+        self.assertIn("Videos: 0", second.stdout)
+        self.assertEqual(payload["inputs"]["video_count"], 0)
+        self.assertFalse((work_dir / "source" / "scan_test" / "video" / "scan.mp4").exists())
+
+    def test_neural_backend_cli_does_not_delete_extracted_scan_when_work_dir_matches_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(scan_dir),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(scan_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not be the scan directory", result.stderr)
+            self.assertTrue((scan_dir / "images" / "frame_000001.jpg").exists())
+            self.assertTrue((scan_dir / "metadata" / "frames.json").exists())
+
+    def test_neural_backend_cli_rejects_input_inside_reset_source_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            work_dir = tmp_path / "work"
+            source_dir = work_dir / "source"
+            source_root = tmp_path / "source"
+            scan_dir = self._write_scan(source_root)
+            archive = source_dir / "scan_test.zip"
+            source_dir.mkdir(parents=True)
+            self._zip_scan(scan_dir, archive, source_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not contain the input scan", result.stderr)
+            self.assertTrue(archive.exists())
+
+    def test_neural_backend_cli_rejects_extracted_input_inside_reset_source_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            work_dir = tmp_path / "work"
+            scan_dir = self._write_scan(work_dir / "source")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(scan_dir),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not contain the input scan", result.stderr)
+            self.assertTrue((scan_dir / "images" / "frame_000001.jpg").exists())
+
     def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
         self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")
         self.assertEqual(scan_id_from_path(Path("scan_002")), "scan_002")
@@ -510,6 +709,14 @@ class BackendTests(unittest.TestCase):
             json.dumps({"scan_id": "scan_test", "scan_mode": "scene_scan"})
         )
         return scan_dir
+
+    def _zip_scan(self, scan_dir: Path, archive: Path, root: Path) -> None:
+        if archive.exists():
+            archive.unlink()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            for path in scan_dir.rglob("*"):
+                if path.is_file():
+                    zip_file.write(path, path.relative_to(root))
 
 
 if __name__ == "__main__":
