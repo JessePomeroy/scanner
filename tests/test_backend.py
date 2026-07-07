@@ -271,6 +271,7 @@ class BackendTests(unittest.TestCase):
                 sys.modules["threecrate"] = previous
 
         self.assertEqual(result, output_path)
+        self.assertIn(("voxel", 0.05), calls)
         self.assertIn(("outliers", (10, 1.5)), calls)
         self.assertIn(("from_numpy", "normal_positions"), calls)
         self.assertIn(("write", ("plain_from_normals", str(output_path))), calls)

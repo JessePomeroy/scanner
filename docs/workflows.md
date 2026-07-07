@@ -137,6 +137,9 @@ python3 scripts/process_point_cloud.py input.ply output.ply \
 Remove `--dry-run` only after installing the selected processor in the active
 Python environment. ThreeCrate should be compared against Open3D on real scan
 outputs before replacing the default cleanup path.
+ThreeCrate normal estimation is currently used only as a processing step; the
+script converts the result back to a plain point cloud before writing, so
+ThreeCrate output PLY files should not be treated as normal-preserving exports.
 
 ## Object Scan Metadata
 
