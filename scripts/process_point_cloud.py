@@ -37,12 +37,8 @@ def main() -> None:
         processor=args.processor,
         voxel_size=args.voxel_size,
         estimate_normals=not args.no_normals,
-        statistical_outlier_neighbors=None
-        if args.no_outlier_filter or args.processor == "threecrate"
-        else args.outlier_neighbors,
-        statistical_outlier_std_ratio=None
-        if args.no_outlier_filter or args.processor == "threecrate"
-        else args.outlier_std_ratio,
+        statistical_outlier_neighbors=None if args.no_outlier_filter else args.outlier_neighbors,
+        statistical_outlier_std_ratio=None if args.no_outlier_filter else args.outlier_std_ratio,
     )
 
     report_path = args.report or args.output.with_suffix(args.output.suffix + ".processing.json")

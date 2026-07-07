@@ -113,11 +113,20 @@ def _process_with_threecrate(input_path: Path, output_path: Path, config: PointC
             raise RuntimeError("threecrate.voxel_downsample is unavailable in the installed ThreeCrate package.")
         cloud = voxel_downsample(cloud, voxel_size=config.voxel_size)
 
+    if config.statistical_outlier_neighbors is not None and config.statistical_outlier_std_ratio is not None:
+        remove_outliers = getattr(tc, "remove_statistical_outliers", None)
+        if remove_outliers is None:
+            raise RuntimeError(
+                "threecrate.remove_statistical_outliers is unavailable in the installed ThreeCrate package."
+            )
+        cloud = remove_outliers(cloud, config.statistical_outlier_neighbors, config.statistical_outlier_std_ratio)
+
     if config.estimate_normals:
         estimate_normals = getattr(tc, "estimate_normals", None)
         if estimate_normals is None:
             raise RuntimeError("threecrate.estimate_normals is unavailable in the installed ThreeCrate package.")
-        cloud = estimate_normals(cloud)
+        normal_cloud = estimate_normals(cloud)
+        cloud = _threecrate_normals_to_point_cloud(tc, normal_cloud)
 
     write_point_cloud = getattr(tc, "write_point_cloud", None)
     if write_point_cloud is None:
@@ -125,6 +134,20 @@ def _process_with_threecrate(input_path: Path, output_path: Path, config: PointC
 
     write_point_cloud(cloud, str(output_path))
     return output_path
+
+
+def _threecrate_normals_to_point_cloud(tc: Any, normal_cloud: Any) -> Any:
+    """Convert ThreeCrate NormalPointCloud back to writable PointCloud positions."""
+    point_cloud_type = getattr(tc, "PointCloud", None)
+    if point_cloud_type is None:
+        raise RuntimeError("threecrate.PointCloud is unavailable in the installed ThreeCrate package.")
+
+    from_numpy = getattr(point_cloud_type, "from_numpy", None)
+    positions = getattr(normal_cloud, "positions", None)
+    if from_numpy is None or positions is None:
+        raise RuntimeError("ThreeCrate NormalPointCloud positions cannot be converted back to PointCloud.")
+
+    return from_numpy(positions())
 
 
 def _validate_processor(processor: str) -> None:
@@ -135,11 +158,6 @@ def _validate_processor(processor: str) -> None:
 
 def _validate_config(config: PointCloudProcessingConfig) -> None:
     _validate_processor(config.processor)
-    if (
-        config.processor == "threecrate"
-        and (config.statistical_outlier_neighbors is not None or config.statistical_outlier_std_ratio is not None)
-    ):
-        raise ValueError("ThreeCrate processing does not support the Open3D statistical outlier filter yet.")
 
 
 def _processor_notes(processor: str) -> list[str]:
