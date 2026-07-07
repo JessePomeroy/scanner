@@ -98,7 +98,6 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
     video_metadata = _read_json_array(metadata_dir / "video.json")
     image_files = sorted((scan_root / "images").glob("*"))
     depth_files = sorted((scan_root / "depth").glob("*")) if (scan_root / "depth").is_dir() else []
-    video_files = sorted((scan_root / "video").glob("*")) if (scan_root / "video").is_dir() else []
     motion_path = metadata_dir / "imu.json"
 
     manifest = {
@@ -112,7 +111,7 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
         "file_counts": {
             "images": len([path for path in image_files if path.is_file()]),
             "depth": len([path for path in depth_files if path.is_file()]),
-            "videos": len([path for path in video_files if path.is_file()]),
+            "videos": validation.video_count,
             "frames": len(frames),
             "imu_samples": len(_read_json_array(motion_path)) if motion_path.exists() else 0,
             "video_metadata_entries": len(video_metadata),

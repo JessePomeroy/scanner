@@ -87,6 +87,19 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
 
+    def test_validate_scan_package_rejects_non_video_metadata_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "notes.txt").write_text("not a video")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/notes.txt"}])
+            )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
     def test_colmap_command_sequence_contains_expected_stages(self) -> None:
         commands = build_colmap_commands(Path("/tmp/scan"))
         stages = [command[1] for command in commands]

@@ -12,6 +12,9 @@ class ScanValidationError(ValueError):
     """Raised when a scan package is incomplete or malformed."""
 
 
+SUPPORTED_VIDEO_SUFFIXES = {".mov", ".mp4", ".m4v"}
+
+
 @dataclass(frozen=True)
 class ScanValidationReport:
     scan_dir: Path
@@ -163,6 +166,9 @@ def _validate_video_references(scan_dir: Path, videos: list[dict[str, Any]]) -> 
         if not video_path.is_file():
             raise ScanValidationError(f"Referenced video is not a file: {path}")
 
+        if video_path.suffix.lower() not in SUPPORTED_VIDEO_SUFFIXES:
+            raise ScanValidationError(f"Referenced video has unsupported file type: {path}")
+
 
 def _video_file_count(scan_dir: Path) -> int:
     video_dir = scan_dir / "video"
@@ -173,7 +179,7 @@ def _video_file_count(scan_dir: Path) -> int:
         [
             path
             for path in video_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in {".mov", ".mp4", ".m4v"}
+            if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_SUFFIXES
         ]
     )
 
