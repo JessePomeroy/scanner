@@ -761,6 +761,39 @@ class BackendTests(unittest.TestCase):
         self.assertIn("--encoder", plan.commands[0])
         self.assertIn("vits", plan.commands[0])
 
+    def test_neural_backend_plan_uses_images_for_gaussian_splatting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="gaussian_splatting"),
+            )
+
+        self.assertEqual(plan.backend, "gaussian_splatting")
+        self.assertEqual(plan.inputs["preferred_source_type"], "images")
+        self.assertEqual(plan.commands[0][0:2], ["ns-process-data", "images"])
+        self.assertIn("--matching-method", plan.commands[0])
+        self.assertEqual(plan.commands[1][0:2], ["ns-train", "splatfacto"])
+        self.assertEqual(plan.commands[2][0:2], ["ns-export", "gaussian-splat"])
+
+    def test_neural_backend_plan_prefers_video_for_gaussian_splatting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mov").write_bytes(b"fake mov")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/scan.mov"}])
+            )
+
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="gaussian_splatting"),
+            )
+
+        self.assertEqual(plan.inputs["preferred_source_type"], "video")
+        self.assertTrue(any("video/scan.mov" in part for part in plan.commands[0]))
+
     def test_neural_backend_report_writes_json_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

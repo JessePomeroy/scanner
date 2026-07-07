@@ -79,6 +79,7 @@ To plan neural backend experiments without installing model dependencies:
 python3 scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
 python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
 python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
+python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
 ```
 
 See `docs/neural_backends.md` for backend-specific notes and license cautions.

@@ -11,6 +11,7 @@ large model dependencies:
 python3 scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
 python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
 python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
+python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
 ```
 
 By default, reports and extracted scan files are written to
@@ -59,10 +60,37 @@ python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
 If the scan has no video, the planner will still report available images but
 the notes will indicate that video capture is needed.
 
+## Gaussian Splatting / Nerfstudio
+
+Use this as the first viewer-focused Gaussian splatting experiment once the
+Windows RTX workstation is available. The planner targets Nerfstudio
+Splatfacto:
+
+```bash
+python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
+```
+
+The generated command plan:
+
+1. Converts image or video input into a Nerfstudio dataset with
+   `ns-process-data`.
+2. Trains a splat with `ns-train splatfacto`.
+3. Exports a viewer-ready splat with `ns-export gaussian-splat`.
+
+The planner prefers video input when `metadata/video.json` or `video/` files
+exist, then falls back to the image keyframes already exported by the iPhone
+app. The export command contains a placeholder `config.yml` path because
+Nerfstudio creates the final training output folder at runtime.
+
+Treat this as a separate visual-art/viewer output. It is not a replacement for
+the editable OBJ/GLB mesh path used by Blender.
+
 ## License Notes
 
 - MASt3R/DUSt3R-family projects may carry non-commercial research licenses.
 - Depth Anything V2 Small is Apache-2.0; Base/Large/Giant checkpoints are
   non-commercial.
 - Lingbot wrapper code and model weights can have different terms; check both.
+- Nerfstudio and gsplat are Apache-2.0, but verify licenses for any extra
+  plugins, datasets, viewers, or model checkpoints added later.
 - Keep neural tools optional and isolated in their own environments.
