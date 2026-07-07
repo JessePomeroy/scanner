@@ -40,6 +40,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private let cameraCaptureManager: CameraCaptureManager
     private let packageWriter: ScanPackageWriter
     private let imageWriter: ARFrameImageWriter
+    private let videoRecorder = ARFrameVideoRecorder()
     private let motionRecorder = MotionCaptureRecorder()
     private let captureQueue = DispatchQueue(label: "ScannerApp.ScanCaptureManager.capture")
 
@@ -53,6 +54,10 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var qualityStats = CaptureQualityStats()
     private var scanStartedAt: Date?
     private var lastRejectedStatusTimestamp: TimeInterval = 0
+    private var videoOutputURL: URL?
+    private var videoRelativePath: String?
+    private var videoCapturedAt: String?
+    private var videoRecordingFailed = false
 
     private let minimumSharpnessScore: Float = 0.18
     private let fastMovementWarningMetersPerSecond: Float = 0.45
@@ -88,6 +93,10 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             qualityStats = CaptureQualityStats()
             scanStartedAt = Date()
             lastRejectedStatusTimestamp = 0
+            videoRelativePath = "video/scan.mov"
+            videoOutputURL = scanDirectory.appendingPathComponent("video/scan.mov")
+            videoCapturedAt = ISO8601DateFormatter().string(from: Date())
+            videoRecordingFailed = false
             isScanning = true
         }
 
@@ -132,12 +141,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             }
 
             let motionSamples = motionRecorder.stop()
+            let videoMetadata = videoRecorder.finish().map { [$0] } ?? []
             let createdAt = ISO8601DateFormatter().string(from: Date())
             let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
             let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
             let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
             let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
-            let videoMetadata: [VideoCaptureMetadata] = []
             let session = ScanSessionMetadata(
                 scanId: currentScanId,
                 createdAt: createdAt,
@@ -182,7 +191,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 createdAt: createdAt,
                 limitations: [
                     "depth frames are optional and absent on non-LiDAR devices",
-                    "video capture metadata is scaffolded but recording is not implemented yet",
+                    "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
                     "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
                     "dense reconstruction requires a CUDA-capable COLMAP build"
                 ]
@@ -200,6 +209,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 scanModeTitle: scanMode.title,
                 acceptedFrameCount: capturedFrames.count,
                 rejectedFrameCount: qualityStats.rejectedTotal,
+                videoCount: videoMetadata.count,
                 averageBlurScore: qualityStats.averageBlurScore,
                 minimumBlurScore: qualityStats.minimumBlurScore,
                 maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
@@ -225,6 +235,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     func fail(_ error: Error) {
         isScanning = false
         _ = motionRecorder.stop()
+        videoRecorder.cancel()
         arTrackingManager.stopTracking()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
     }
@@ -317,6 +328,36 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             lastBlurScore: blurScore,
             lastMovementSpeed: decision.movementSpeedMetersPerSecond
         )
+    }
+
+    private func recordVideoFrame(_ frame: ARFrame) {
+        guard isScanning,
+              !videoRecordingFailed,
+              let videoOutputURL,
+              let videoRelativePath,
+              let videoCapturedAt else {
+            return
+        }
+
+        do {
+            if !videoRecorder.isRecording {
+                try videoRecorder.start(
+                    outputURL: videoOutputURL,
+                    relativePath: videoRelativePath,
+                    capturedAt: videoCapturedAt,
+                    firstFrame: frame
+                )
+            }
+
+            videoRecorder.append(frame)
+        } catch {
+            videoRecordingFailed = true
+            videoRecorder.cancel()
+            updatePublishedState(
+                statusMessage: "Video unavailable",
+                guidanceMessage: "Continuing with keyframe image capture"
+            )
+        }
     }
 
     private func recordRejectedFrame(
@@ -464,6 +505,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
 extension ScanCaptureManager: ARSessionDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        recordVideoFrame(frame)
         considerFrameForCapture(frame)
     }
 
