@@ -156,6 +156,9 @@ def _validate_video_references(scan_dir: Path, videos: list[dict[str, Any]]) -> 
         if not isinstance(path, str) or not path:
             raise ScanValidationError(f"video.json[{index}].path must be a non-empty string")
 
+        if not path.startswith("video/"):
+            raise ScanValidationError(f"video.json[{index}].path must be inside the video directory")
+
         video_path = (scan_dir / path).resolve()
         if scan_dir not in video_path.parents:
             raise ScanValidationError(f"video.json[{index}].path escapes the scan directory")

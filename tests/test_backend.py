@@ -100,6 +100,19 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
 
+    def test_validate_scan_package_rejects_video_reference_outside_video_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            preview_dir = scan_dir / "preview"
+            preview_dir.mkdir()
+            (preview_dir / "scan.mp4").write_bytes(b"fake mp4")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "preview/scan.mp4"}])
+            )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
     def test_colmap_command_sequence_contains_expected_stages(self) -> None:
         commands = build_colmap_commands(Path("/tmp/scan"))
         stages = [command[1] for command in commands]
