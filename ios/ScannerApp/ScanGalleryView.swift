@@ -175,11 +175,13 @@ final class ScanGalleryStore: ObservableObject {
             scans.indices.contains(index) ? scans[index] : nil
         }
 
+        defer {
+            refresh()
+        }
+
         for scan in selectedScans {
             try delete(scan)
         }
-
-        refresh()
     }
 
     private func loadScans() -> [ScanGalleryItem] {
