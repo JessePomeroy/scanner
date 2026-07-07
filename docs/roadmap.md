@@ -58,8 +58,11 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Write `metadata/manifest.json` with schema version, app version, capture
      mode, enabled sensors, file counts, and known processing limitations.
 
-4. Add a video capture export mode.
-   - Record an optional `.mov` alongside high-quality keyframes.
+4. Add a video capture export mode. Status: implemented initial pass.
+   - Record `video/scan.mov` from the live ARFrame camera stream alongside
+     keyframes.
+   - Cap initial video capture at 30 seconds until ZIP export streams large
+     files instead of building the archive in memory.
    - Keep the video mode secondary to high-resolution stills for textured mesh
      quality.
    - Use video exports for neural reconstruction experiments such as

@@ -46,14 +46,16 @@ entry point until the exact Windows/WSL2 install is verified. The direct
 AliceVision planner is experimental and may need command option tuning for the
 installed AliceVision release.
 
-## Video Package Scaffold
+## Video Package Export
 
-Scan packages now reserve a `video/` folder and optional
-`metadata/video.json` file. Current iPhone exports write an empty
-`metadata/video.json` and set video counts to zero; actual `.mov` recording is
-planned as a later capture feature.
+Scan packages include a `video/` folder and optional `metadata/video.json`
+file. The iPhone app records `video/scan.mov` from the live ARFrame camera
+stream while a scan is active, then writes one metadata entry when the recording
+finishes successfully. The initial recorder caps video at 30 seconds to keep
+on-device ZIP export memory use manageable; keyframe image capture continues
+after the video cap is reached.
 
-Future video metadata entries should look like:
+Video metadata entries look like:
 
 ```json
 [
@@ -71,7 +73,9 @@ Future video metadata entries should look like:
 
 The video path is optional for COLMAP/OpenMVS, but it will be useful for
 MASt3R-SLAM, Lingbot-style point-cloud workflows, Gaussian splatting, and other
-video-oriented neural reconstruction experiments.
+video-oriented neural reconstruction experiments. Treat this video as a
+neural/viewer support artifact. The photogrammetry mesh path should still prefer
+high-quality keyframe images and, later, high-resolution still capture.
 
 To plan neural backend experiments without installing model dependencies:
 

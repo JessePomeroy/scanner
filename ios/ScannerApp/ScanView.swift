@@ -144,6 +144,11 @@ struct ScanView: View {
                         systemImage: "xmark.circle"
                     )
                     summaryMetric(
+                        title: "Video",
+                        value: "\(summary.videoCount)",
+                        systemImage: "video"
+                    )
+                    summaryMetric(
                         title: "Blur",
                         value: summary.averageBlurScore.map { String(format: "%.2f", $0) } ?? "--",
                         systemImage: "camera.metering.center.weighted"

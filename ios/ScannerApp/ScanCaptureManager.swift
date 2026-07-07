@@ -40,6 +40,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private let cameraCaptureManager: CameraCaptureManager
     private let packageWriter: ScanPackageWriter
     private let imageWriter: ARFrameImageWriter
+    private let videoRecorder = ARFrameVideoRecorder()
     private let motionRecorder = MotionCaptureRecorder()
     private let captureQueue = DispatchQueue(label: "ScannerApp.ScanCaptureManager.capture")
 
@@ -53,9 +54,15 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var qualityStats = CaptureQualityStats()
     private var scanStartedAt: Date?
     private var lastRejectedStatusTimestamp: TimeInterval = 0
+    private var videoOutputURL: URL?
+    private var videoRelativePath: String?
+    private var videoCapturedAt: String?
+    private var videoRecordingFailed = false
+    private var videoDurationLimitMessageShown = false
 
     private let minimumSharpnessScore: Float = 0.18
     private let fastMovementWarningMetersPerSecond: Float = 0.45
+    private let maximumVideoDurationSeconds: Double = 30
 
     var arSession: ARSession {
         arTrackingManager.session
@@ -88,6 +95,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             qualityStats = CaptureQualityStats()
             scanStartedAt = Date()
             lastRejectedStatusTimestamp = 0
+            videoRelativePath = "video/scan.mov"
+            videoOutputURL = scanDirectory.appendingPathComponent("video/scan.mov")
+            videoCapturedAt = ISO8601DateFormatter().string(from: Date())
+            videoRecordingFailed = false
+            videoDurationLimitMessageShown = false
             isScanning = true
         }
 
@@ -112,6 +124,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             _ = motionRecorder.stop()
             captureQueue.sync {
                 isScanning = false
+                videoRecorder.cancel()
             }
             updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
             throw error
@@ -132,12 +145,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             }
 
             let motionSamples = motionRecorder.stop()
+            let videoMetadata = videoRecorder.finish().map { [$0] } ?? []
             let createdAt = ISO8601DateFormatter().string(from: Date())
             let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
             let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
             let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
             let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
-            let videoMetadata: [VideoCaptureMetadata] = []
             let session = ScanSessionMetadata(
                 scanId: currentScanId,
                 createdAt: createdAt,
@@ -182,7 +195,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 createdAt: createdAt,
                 limitations: [
                     "depth frames are optional and absent on non-LiDAR devices",
-                    "video capture metadata is scaffolded but recording is not implemented yet",
+                    "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
+                    "video capture is capped at 30 seconds to keep scan exports manageable",
                     "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
                     "dense reconstruction requires a CUDA-capable COLMAP build"
                 ]
@@ -200,6 +214,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 scanModeTitle: scanMode.title,
                 acceptedFrameCount: capturedFrames.count,
                 rejectedFrameCount: qualityStats.rejectedTotal,
+                videoCount: videoMetadata.count,
                 averageBlurScore: qualityStats.averageBlurScore,
                 minimumBlurScore: qualityStats.minimumBlurScore,
                 maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
@@ -223,8 +238,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     }
 
     func fail(_ error: Error) {
-        isScanning = false
-        _ = motionRecorder.stop()
+        captureQueue.sync {
+            cleanupCaptureAfterFailure()
+        }
         arTrackingManager.stopTracking()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
     }
@@ -270,11 +286,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         do {
             savedImage = try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
         } catch {
+            cleanupCaptureAfterFailure()
             updatePublishedState(
                 state: .failed("Image write failed"),
                 statusMessage: "Image write failed: \(error.localizedDescription)"
             )
-            isScanning = false
             return
         }
 
@@ -317,6 +333,51 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             lastBlurScore: blurScore,
             lastMovementSpeed: decision.movementSpeedMetersPerSecond
         )
+    }
+
+    private func recordVideoFrame(_ frame: ARFrame) {
+        guard isScanning,
+              !videoRecordingFailed,
+              let videoOutputURL,
+              let videoRelativePath,
+              let videoCapturedAt else {
+            return
+        }
+
+        do {
+            if !videoRecorder.isRecording {
+                try videoRecorder.start(
+                    outputURL: videoOutputURL,
+                    relativePath: videoRelativePath,
+                    capturedAt: videoCapturedAt,
+                    firstFrame: frame
+                )
+            }
+
+            videoRecorder.append(frame, maximumDurationSeconds: maximumVideoDurationSeconds)
+
+            if videoRecorder.reachedDurationLimit,
+               !videoDurationLimitMessageShown {
+                videoDurationLimitMessageShown = true
+                updatePublishedState(
+                    statusMessage: "Video capped",
+                    guidanceMessage: "Continuing keyframe capture; video is capped for export size"
+                )
+            }
+        } catch {
+            videoRecordingFailed = true
+            videoRecorder.cancel()
+            updatePublishedState(
+                statusMessage: "Video unavailable",
+                guidanceMessage: "Continuing with keyframe image capture"
+            )
+        }
+    }
+
+    private func cleanupCaptureAfterFailure() {
+        isScanning = false
+        _ = motionRecorder.stop()
+        videoRecorder.cancel()
     }
 
     private func recordRejectedFrame(
@@ -464,12 +525,13 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
 extension ScanCaptureManager: ARSessionDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        recordVideoFrame(frame)
         considerFrameForCapture(frame)
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
+        cleanupCaptureAfterFailure()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
-        isScanning = false
     }
 }
 

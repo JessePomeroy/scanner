@@ -33,9 +33,10 @@ open ios/ScannerApp.xcodeproj
 The current capture path writes accepted `ARFrame.capturedImage` frames to JPEG
 files and records matching AR camera metadata. It now records blur scores,
 motion deltas, movement speed, rejected-frame counts, and an export summary in
-`metadata/session.json`. True high-resolution still capture via
-`AVCapturePhotoOutput` remains a later refinement after the package format is
-proven on a physical iPhone.
+`metadata/session.json`. Scans also include an ARFrame-derived `video/scan.mov`
+and `metadata/video.json` when the device can encode the live camera stream.
+True high-resolution still capture via `AVCapturePhotoOutput` remains a later
+refinement after the package format is proven on a physical iPhone.
 
 The app requires a physical ARKit-capable device for scanning. The simulator
 build is useful for compile checks, but world tracking is unavailable there.

@@ -12,6 +12,7 @@
 		649F798CB362496BBAD84628 /* CameraCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85807AC3B97142D3A6F139C0 /* CameraCaptureManager.swift */; };
 		73917A366014483DA0D903BE /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDD18124A7BC45C9B9869EAA /* ShareSheet.swift */; };
 		78F8813B510D4356BC1CC900 /* ARFrameImageWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FD6A72028F84033843455DC /* ARFrameImageWriter.swift */; };
+		7B77A4D612F14244A7BA1B1F /* ARFrameVideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33254ED3A37484084E4E48E /* ARFrameVideoRecorder.swift */; };
 		82363B21E8F14443A7069C5C /* ScanGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1741AE6950DA4309BB7732D3 /* ScanGalleryView.swift */; };
 		8FC8547323AA42859CA9B9E5 /* ScanCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A171A1C63A4CE6A6E6E3A5 /* ScanCaptureManager.swift */; };
 		A39E474C689D44CA9B3F5F30 /* ScannerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 477B351D2CCF4B949B618E3C /* ScannerApp.swift */; };
@@ -39,6 +40,7 @@
 		85807AC3B97142D3A6F139C0 /* CameraCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureManager.swift; sourceTree = "<group>"; };
 		9E9E00CDB1AD45C0ADF14734 /* ARSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARSessionView.swift; sourceTree = "<group>"; };
 		C26CDDFEA3AA4A03BC3D2BF5 /* ScanMetadataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanMetadataModels.swift; sourceTree = "<group>"; };
+		C33254ED3A37484084E4E48E /* ARFrameVideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARFrameVideoRecorder.swift; sourceTree = "<group>"; };
 		FDD18124A7BC45C9B9869EAA /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -80,6 +82,7 @@
 				47A171A1C63A4CE6A6E6E3A5 /* ScanCaptureManager.swift */,
 				44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */,
 				7FD6A72028F84033843455DC /* ARFrameImageWriter.swift */,
+				C33254ED3A37484084E4E48E /* ARFrameVideoRecorder.swift */,
 				85807AC3B97142D3A6F139C0 /* CameraCaptureManager.swift */,
 				37FD6D212AB244C3A5C26293 /* FrameSelector.swift */,
 				5BAF8370E65D45D09B42868D /* MetadataWriter.swift */,
@@ -156,6 +159,7 @@
 				8FC8547323AA42859CA9B9E5 /* ScanCaptureManager.swift in Sources */,
 				F08270898A2D43E8AD613035 /* ARTrackingManager.swift in Sources */,
 				78F8813B510D4356BC1CC900 /* ARFrameImageWriter.swift in Sources */,
+				7B77A4D612F14244A7BA1B1F /* ARFrameVideoRecorder.swift in Sources */,
 				649F798CB362496BBAD84628 /* CameraCaptureManager.swift in Sources */,
 				077FBE33408F4E2A89634FCB /* FrameSelector.swift in Sources */,
 				C1B8AD3EBD2942D3A2B33CE9 /* MetadataWriter.swift in Sources */,

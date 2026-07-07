@@ -209,6 +209,7 @@ struct ScanExportSummary: Equatable {
     let scanModeTitle: String
     let acceptedFrameCount: Int
     let rejectedFrameCount: Int
+    let videoCount: Int
     let averageBlurScore: Float?
     let minimumBlurScore: Float?
     let maximumMovementSpeedMetersPerSecond: Float?
