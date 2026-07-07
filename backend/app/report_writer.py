@@ -25,13 +25,14 @@ def write_scan_report(
     session = _read_json(scan_dir / "metadata" / "session.json", fallback={})
     manifest = _read_json(scan_dir / "metadata" / "manifest.json", fallback={})
     processing = _read_json(scan_dir / "metadata" / "processing.json", fallback={})
+    video_metadata = _read_json(scan_dir / "metadata" / "video.json", fallback=[])
 
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "scan_id": validation.scan_id,
         "scan_dir": str(scan_dir),
         "manifest": manifest_summary(manifest),
-        "capture": capture_summary(frames, session, validation),
+        "capture": capture_summary(frames, session, validation, video_metadata),
         "object_scan": object_scan_summary(validation),
         "processing": processing_summary(processing),
         "reconstruction": reconstruction_summary(scan_dir),
@@ -46,6 +47,7 @@ def capture_summary(
     frames: list[dict[str, Any]],
     session: dict[str, Any],
     validation: ScanValidationReport,
+    video_metadata: list[dict[str, Any]],
 ) -> dict[str, Any]:
     blur_scores = _number_values(frame.get("blur_score") for frame in frames)
     movement_speeds = _number_values(frame.get("movement_speed_meters_per_second") for frame in frames)
@@ -58,10 +60,13 @@ def capture_summary(
         "scan_mode": validation.scan_mode,
         "image_count": validation.image_count,
         "frame_count": validation.frame_count,
+        "video_count": validation.video_count,
+        "video_metadata_count": len(video_metadata),
         "device": session.get("device"),
         "app_version": session.get("app_version"),
         "build_version": session.get("build_version"),
         "imu_sample_count": session.get("imu_sample_count"),
+        "session_video_count": session.get("video_count"),
         "uses_lidar": session.get("uses_lidar"),
         "uses_arkit_mesh": session.get("uses_arkit_mesh"),
         "capture_duration_seconds": session.get("capture_duration_seconds"),

@@ -35,7 +35,7 @@ final class ScanPackageWriter {
         }
 
         let scanDirectory = rootDirectory.appendingPathComponent(scanId, isDirectory: true)
-        let subdirectories = ["images", "depth", "arkit", "metadata", "preview"]
+        let subdirectories = ["images", "depth", "arkit", "metadata", "preview", "video"]
 
         try fileManager.createDirectory(
             at: scanDirectory,
@@ -72,6 +72,14 @@ final class ScanPackageWriter {
     func saveMotionMetadata(_ samples: [MotionSampleMetadata], in scanDirectory: URL) throws -> URL {
         try metadataWriter.writeMotionMetadata(
             samples,
+            to: scanDirectory.appendingPathComponent("metadata", isDirectory: true)
+        )
+    }
+
+    @discardableResult
+    func saveVideoMetadata(_ videos: [VideoCaptureMetadata], in scanDirectory: URL) throws -> URL {
+        try metadataWriter.writeVideoMetadata(
+            videos,
             to: scanDirectory.appendingPathComponent("metadata", isDirectory: true)
         )
     }

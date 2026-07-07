@@ -12,11 +12,15 @@ class ScanValidationError(ValueError):
     """Raised when a scan package is incomplete or malformed."""
 
 
+SUPPORTED_VIDEO_SUFFIXES = {".mov", ".mp4", ".m4v"}
+
+
 @dataclass(frozen=True)
 class ScanValidationReport:
     scan_dir: Path
     image_count: int
     frame_count: int
+    video_count: int
     scan_id: str | None
     scan_mode: str | None
     object_center_world: list[float] | None
@@ -64,11 +68,14 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
 
     frames = _read_json_array(frames_path)
     session = _read_json_object(session_path)
+    video_metadata_path = metadata_dir / "video.json"
+    video_metadata = _read_json_array(video_metadata_path) if video_metadata_path.exists() else []
     images = sorted(
         path
         for path in images_dir.iterdir()
         if path.suffix.lower() in {".jpg", ".jpeg", ".heic", ".png"}
     )
+    video_count = _video_file_count(scan_dir)
 
     if not images:
         raise ScanValidationError("images directory does not contain supported image files")
@@ -79,6 +86,7 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         )
 
     _validate_frame_image_references(scan_dir, frames)
+    _validate_video_references(scan_dir, video_metadata)
     object_center_world = _optional_float_list(session, "object_center_world", expected_length=3)
     object_radius_meters = _optional_float(session, "object_radius_meters")
 
@@ -89,6 +97,7 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         scan_dir=scan_dir,
         image_count=len(images),
         frame_count=len(frames),
+        video_count=video_count,
         scan_id=session.get("scan_id"),
         scan_mode=session.get("scan_mode"),
         object_center_world=object_center_world,
@@ -139,6 +148,43 @@ def _validate_frame_image_references(scan_dir: Path, frames: list[dict[str, Any]
 
         if not image_path.is_file():
             raise ScanValidationError(f"Referenced image is not a file: {image}")
+
+
+def _validate_video_references(scan_dir: Path, videos: list[dict[str, Any]]) -> None:
+    for index, video in enumerate(videos):
+        path = video.get("path")
+        if not isinstance(path, str) or not path:
+            raise ScanValidationError(f"video.json[{index}].path must be a non-empty string")
+
+        if not path.startswith("video/"):
+            raise ScanValidationError(f"video.json[{index}].path must be inside the video directory")
+
+        video_path = (scan_dir / path).resolve()
+        if scan_dir not in video_path.parents:
+            raise ScanValidationError(f"video.json[{index}].path escapes the scan directory")
+
+        if not video_path.exists():
+            raise ScanValidationError(f"Referenced video does not exist: {path}")
+
+        if not video_path.is_file():
+            raise ScanValidationError(f"Referenced video is not a file: {path}")
+
+        if video_path.suffix.lower() not in SUPPORTED_VIDEO_SUFFIXES:
+            raise ScanValidationError(f"Referenced video has unsupported file type: {path}")
+
+
+def _video_file_count(scan_dir: Path) -> int:
+    video_dir = scan_dir / "video"
+    if not video_dir.is_dir():
+        return 0
+
+    return len(
+        [
+            path
+            for path in video_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_SUFFIXES
+        ]
+    )
 
 
 def _optional_float(value: dict[str, Any], key: str) -> float | None:

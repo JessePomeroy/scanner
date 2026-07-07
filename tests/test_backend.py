@@ -39,6 +39,7 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual(report.image_count, 1)
         self.assertEqual(report.frame_count, 1)
+        self.assertEqual(report.video_count, 0)
         self.assertEqual(report.scan_id, "scan_test")
         self.assertEqual(report.scan_mode, "scene_scan")
 
@@ -46,6 +47,68 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
             (scan_dir / "images" / "frame_000001.jpg").unlink()
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_accepts_optional_video_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mov").write_bytes(b"fake mov")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "path": "video/scan.mov",
+                            "captured_at": "2026-07-07T00:00:00Z",
+                            "duration_seconds": 12.5,
+                            "frame_rate": 30,
+                            "resolution": [1920, 1080],
+                            "codec": "h264",
+                            "includes_audio": False,
+                        }
+                    ]
+                )
+            )
+
+            report = validate_scan_package(scan_dir)
+
+        self.assertEqual(report.video_count, 1)
+
+    def test_validate_scan_package_rejects_missing_video_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/missing.mov"}])
+            )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_non_video_metadata_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "notes.txt").write_text("not a video")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/notes.txt"}])
+            )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_video_reference_outside_video_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            preview_dir = scan_dir / "preview"
+            preview_dir.mkdir()
+            (preview_dir / "scan.mp4").write_bytes(b"fake mp4")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "preview/scan.mp4"}])
+            )
 
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
@@ -320,6 +383,7 @@ class BackendTests(unittest.TestCase):
             payload = json.loads(report_path.read_text())
 
         self.assertEqual(payload["capture"]["image_count"], 1)
+        self.assertEqual(payload["capture"]["video_count"], 0)
         self.assertEqual(payload["capture"]["blur"]["mean"], 0.42)
         self.assertEqual(payload["capture"]["movement_delta_meters"]["max"], 0.12)
         self.assertIn("low_frame_count", payload["warnings"])
@@ -365,6 +429,11 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(package.validation.image_count, 1)
             self.assertEqual(package.report_path.name, "scan_report.json")
             self.assertTrue(package.manifest_path.exists())
+            manifest = json.loads(package.manifest_path.read_text())
+            self.assertEqual(manifest["schema_version"], "0.3.0")
+            self.assertEqual(manifest["file_counts"]["videos"], 0)
+            self.assertEqual(manifest["file_counts"]["video_metadata_entries"], 0)
+            self.assertFalse(manifest["sensors"]["video"])
 
     def test_scan_package_records_processing_metadata_in_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

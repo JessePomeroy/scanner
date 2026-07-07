@@ -135,6 +135,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
             let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
             let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+            let videoMetadata: [VideoCaptureMetadata] = []
             let session = ScanSessionMetadata(
                 scanId: currentScanId,
                 createdAt: createdAt,
@@ -147,6 +148,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 imageCount: capturedFrames.count,
                 depthFrameCount: 0,
                 imuSampleCount: motionSamples.count,
+                videoCount: videoMetadata.count,
                 rejectedFrameCount: qualityStats.rejectedTotal,
                 rejectedTrackingCount: qualityStats.rejectedTracking,
                 rejectedBlurCount: qualityStats.rejectedBlur,
@@ -163,7 +165,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             )
 
             let manifest = ScanPackageManifest(
-                schemaVersion: "0.2.0",
+                schemaVersion: "0.3.0",
                 scanId: currentScanId,
                 scanMode: scanMode.rawValue,
                 appVersion: appVersion,
@@ -171,11 +173,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 imageCount: capturedFrames.count,
                 depthFrameCount: 0,
                 imuSampleCount: motionSamples.count,
+                videoCount: videoMetadata.count,
                 usesLidar: usesLidar,
                 usesARKitMesh: usesARKitMesh,
+                usesVideo: !videoMetadata.isEmpty,
                 createdAt: createdAt,
                 limitations: [
                     "depth frames are optional and absent on non-LiDAR devices",
+                    "video capture metadata is scaffolded but recording is not implemented yet",
                     "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
                     "dense reconstruction requires a CUDA-capable COLMAP build"
                 ]
@@ -184,6 +189,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
             try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
             try packageWriter.saveMotionMetadata(motionSamples, in: currentScanDirectory)
+            try packageWriter.saveVideoMetadata(videoMetadata, in: currentScanDirectory)
             try packageWriter.saveManifest(manifest, in: currentScanDirectory)
             return try packageWriter.zipScanFolder(at: currentScanDirectory)
         }

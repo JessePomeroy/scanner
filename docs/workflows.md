@@ -46,6 +46,33 @@ entry point until the exact Windows/WSL2 install is verified. The direct
 AliceVision planner is experimental and may need command option tuning for the
 installed AliceVision release.
 
+## Video Package Scaffold
+
+Scan packages now reserve a `video/` folder and optional
+`metadata/video.json` file. Current iPhone exports write an empty
+`metadata/video.json` and set video counts to zero; actual `.mov` recording is
+planned as a later capture feature.
+
+Future video metadata entries should look like:
+
+```json
+[
+  {
+    "path": "video/scan.mov",
+    "captured_at": "2026-07-07T00:00:00Z",
+    "duration_seconds": 12.5,
+    "frame_rate": 30,
+    "resolution": [1920, 1080],
+    "codec": "h264",
+    "includes_audio": false
+  }
+]
+```
+
+The video path is optional for COLMAP/OpenMVS, but it will be useful for
+MASt3R-SLAM, Lingbot-style point-cloud workflows, Gaussian splatting, and other
+video-oriented neural reconstruction experiments.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:
