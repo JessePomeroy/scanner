@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -506,7 +507,7 @@ class BackendTests(unittest.TestCase):
             scan_dir = self._write_scan(Path(tmp))
             plan = build_neural_backend_plan(
                 scan_dir,
-                NeuralBackendConfig(backend="depth_anything", depth_anything_encoder="vits"),
+                NeuralBackendConfig(backend="depth_anything"),
             )
 
         self.assertEqual(plan.backend, "depth_anything")
@@ -530,6 +531,74 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "lingbot")
         self.assertEqual(payload["inputs"]["video_count"], 0)
         self.assertEqual(payload["commands"], [])
+
+    def test_neural_backend_cli_resets_stale_zip_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_root = tmp_path / "source"
+            archive = tmp_path / "scan_test.zip"
+            work_dir = tmp_path / "work dir"
+
+            scan_dir = self._write_scan(source_root)
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mp4").write_bytes(b"fake mp4")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/scan.mp4"}])
+            )
+            self._zip_scan(scan_dir, archive, source_root)
+
+            first = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn("Videos: 1", first.stdout)
+            self.assertIn("work dir", first.stdout)
+            self.assertIn("'", first.stdout)
+
+            for path in source_root.iterdir():
+                if path.is_dir():
+                    for child in sorted(path.rglob("*"), reverse=True):
+                        if child.is_file():
+                            child.unlink()
+                        elif child.is_dir():
+                            child.rmdir()
+                    path.rmdir()
+
+            scan_dir = self._write_scan(source_root)
+            self._zip_scan(scan_dir, archive, source_root)
+
+            second = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            report_path = work_dir / "scan_test" / "metadata" / "mast3r_slam_neural_plan.json"
+            payload = json.loads(report_path.read_text())
+
+        self.assertIn("Videos: 0", second.stdout)
+        self.assertEqual(payload["inputs"]["video_count"], 0)
+        self.assertFalse((work_dir / "scan_test" / "video" / "scan.mp4").exists())
 
     def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
         self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")
@@ -564,6 +633,14 @@ class BackendTests(unittest.TestCase):
             json.dumps({"scan_id": "scan_test", "scan_mode": "scene_scan"})
         )
         return scan_dir
+
+    def _zip_scan(self, scan_dir: Path, archive: Path, root: Path) -> None:
+        if archive.exists():
+            archive.unlink()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            for path in scan_dir.rglob("*"):
+                if path.is_file():
+                    zip_file.write(path, path.relative_to(root))
 
 
 if __name__ == "__main__":

@@ -35,7 +35,9 @@ default Blender asset pipeline.
 ## Depth Anything / DA3
 
 Use Depth Anything-style tools for depth estimation, scan diagnostics, object
-isolation, preview depth, and possible future DA3 multi-view experiments.
+isolation, preview depth, and possible future DA3 multi-view experiments. The
+planner defaults to the small encoder (`vits`) because larger Depth Anything V2
+checkpoints carry non-commercial terms.
 
 ```bash
 python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
@@ -60,5 +62,7 @@ the notes will indicate that video capture is needed.
 ## License Notes
 
 - MASt3R/DUSt3R-family projects may carry non-commercial research licenses.
+- Depth Anything V2 Small is Apache-2.0; Base/Large/Giant checkpoints are
+  non-commercial.
 - Lingbot wrapper code and model weights can have different terms; check both.
 - Keep neural tools optional and isolated in their own environments.

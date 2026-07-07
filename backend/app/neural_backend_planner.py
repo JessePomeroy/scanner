@@ -16,7 +16,7 @@ SUPPORTED_NEURAL_BACKENDS = ("mast3r_slam", "depth_anything", "lingbot")
 class NeuralBackendConfig:
     backend: str
     mast3r_slam_config: str = "config/base.yaml"
-    depth_anything_encoder: str = "vitl"
+    depth_anything_encoder: str = "vits"
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,7 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 "Experimental depth-estimation support path, not a textured mesh replacement.",
                 "Use outputs for scan diagnostics, object isolation, preview depth, or later DA3 experiments.",
                 "Run inside a separate Depth Anything checkout and Python environment.",
+                "Depth Anything V2 Small is Apache-2.0; larger V2 checkpoints are non-commercial.",
             ],
         )
 

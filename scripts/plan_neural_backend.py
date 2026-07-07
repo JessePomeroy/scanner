@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import shlex
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,14 +32,14 @@ def main() -> None:
     )
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument("--mast3r-slam-config", default="config/base.yaml")
-    parser.add_argument("--depth-anything-encoder", default="vitl")
+    parser.add_argument("--depth-anything-encoder", default="vits")
     args = parser.parse_args()
 
     scan_id = scan_id_from_path(args.scan)
     work_dir = args.work_dir or Path("NeuralPlans") / scan_id / args.backend
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    scan_root = prepare_scan_source(args.scan, work_dir, reset=False)
+    scan_root = prepare_scan_source(args.scan, work_dir, reset=True)
     package = validate_and_report_scan(scan_root)
     plan = build_neural_backend_plan(
         scan_root,
@@ -59,7 +60,7 @@ def main() -> None:
     if plan.commands:
         print("Commands:")
         for command in plan.commands:
-            print(" ".join(command))
+            print(shlex.join(command))
     else:
         print("Commands: none; see report notes")
     print(f"Work directory: {work_dir}")
