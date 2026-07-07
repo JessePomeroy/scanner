@@ -237,6 +237,26 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual(calls, [("legacy_obj", "scan.obj")])
 
+    def test_blender_import_asset_uses_legacy_ply_fallback(self) -> None:
+        module = load_blender_script_module()
+        calls: list[tuple[str, str]] = []
+        scene = SimpleNamespace(objects=[])
+
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=scene),
+            ops=SimpleNamespace(
+                wm=SimpleNamespace(),
+                import_scene=SimpleNamespace(),
+                import_mesh=SimpleNamespace(
+                    ply=lambda filepath: calls.append(("legacy_ply", filepath))
+                ),
+            ),
+        )
+
+        module.import_asset(bpy, Path("scan.ply"))
+
+        self.assertEqual(calls, [("legacy_ply", "scan.ply")])
+
     def test_blender_relink_textures_updates_matching_images(self) -> None:
         module = load_blender_script_module()
 
