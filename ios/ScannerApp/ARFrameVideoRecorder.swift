@@ -6,8 +6,6 @@ import Foundation
 enum ARFrameVideoRecorderError: Error {
     case writerUnavailable
     case inputUnavailable
-    case adaptorUnavailable
-    case missingVideoTrack
 }
 
 /// Encodes the live ARFrame camera stream into a scan-package video file.
@@ -23,10 +21,21 @@ final class ARFrameVideoRecorder {
     private var frameCount = 0
     private var width = 0
     private var height = 0
+    private var didReachDurationLimit = false
     private(set) var isRecording = false
 
+    var durationSeconds: Double? {
+        guard let lastPresentationTime else { return nil }
+        let seconds = CMTimeGetSeconds(lastPresentationTime)
+        return seconds.isFinite ? seconds : nil
+    }
+
+    var reachedDurationLimit: Bool {
+        didReachDurationLimit
+    }
+
     func start(outputURL: URL, relativePath: String, capturedAt: String, firstFrame: ARFrame) throws {
-        resetState()
+        cancel()
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -76,7 +85,7 @@ final class ARFrameVideoRecorder {
         isRecording = true
     }
 
-    func append(_ frame: ARFrame) {
+    func append(_ frame: ARFrame, maximumDurationSeconds: Double? = nil) {
         guard isRecording,
               let writer,
               writer.status == .writing,
@@ -93,6 +102,12 @@ final class ARFrameVideoRecorder {
         )
         if let lastPresentationTime,
            presentationTime <= lastPresentationTime {
+            return
+        }
+
+        if let maximumDurationSeconds,
+           CMTimeGetSeconds(presentationTime) > maximumDurationSeconds {
+            didReachDurationLimit = true
             return
         }
 
@@ -118,14 +133,15 @@ final class ARFrameVideoRecorder {
         writer.finishWriting {
             semaphore.signal()
         }
-        _ = semaphore.wait(timeout: .now() + 5)
+        let finished = semaphore.wait(timeout: .now() + 5) == .success
 
         let duration = CMTimeGetSeconds(lastPresentationTime ?? .zero)
-        guard writer.status == .completed,
+        guard finished,
+              writer.status == .completed,
               FileManager.default.fileExists(atPath: outputURL.path),
               duration.isFinite,
               duration > 0 else {
-            resetState()
+            cancel()
             return nil
         }
 
@@ -139,23 +155,23 @@ final class ARFrameVideoRecorder {
             includesAudio: false
         )
 
-        resetState()
+        resetState(removeOutputFile: false)
         return metadata
     }
 
     func cancel() {
         input?.markAsFinished()
         writer?.cancelWriting()
+        resetState(removeOutputFile: true)
+    }
 
-        if let outputURL,
+    private func resetState(removeOutputFile: Bool = false) {
+        if removeOutputFile,
+           let outputURL,
            FileManager.default.fileExists(atPath: outputURL.path) {
             try? FileManager.default.removeItem(at: outputURL)
         }
 
-        resetState()
-    }
-
-    private func resetState() {
         writer = nil
         input = nil
         adaptor = nil
@@ -168,5 +184,6 @@ final class ARFrameVideoRecorder {
         width = 0
         height = 0
         isRecording = false
+        didReachDurationLimit = false
     }
 }

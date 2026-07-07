@@ -51,7 +51,9 @@ installed AliceVision release.
 Scan packages include a `video/` folder and optional `metadata/video.json`
 file. The iPhone app records `video/scan.mov` from the live ARFrame camera
 stream while a scan is active, then writes one metadata entry when the recording
-finishes successfully.
+finishes successfully. The initial recorder caps video at 30 seconds to keep
+on-device ZIP export memory use manageable; keyframe image capture continues
+after the video cap is reached.
 
 Video metadata entries look like:
 

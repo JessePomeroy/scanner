@@ -58,9 +58,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var videoRelativePath: String?
     private var videoCapturedAt: String?
     private var videoRecordingFailed = false
+    private var videoDurationLimitMessageShown = false
 
     private let minimumSharpnessScore: Float = 0.18
     private let fastMovementWarningMetersPerSecond: Float = 0.45
+    private let maximumVideoDurationSeconds: Double = 30
 
     var arSession: ARSession {
         arTrackingManager.session
@@ -97,6 +99,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             videoOutputURL = scanDirectory.appendingPathComponent("video/scan.mov")
             videoCapturedAt = ISO8601DateFormatter().string(from: Date())
             videoRecordingFailed = false
+            videoDurationLimitMessageShown = false
             isScanning = true
         }
 
@@ -121,6 +124,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             _ = motionRecorder.stop()
             captureQueue.sync {
                 isScanning = false
+                videoRecorder.cancel()
             }
             updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
             throw error
@@ -192,6 +196,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 limitations: [
                     "depth frames are optional and absent on non-LiDAR devices",
                     "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
+                    "video capture is capped at 30 seconds to keep scan exports manageable",
                     "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
                     "dense reconstruction requires a CUDA-capable COLMAP build"
                 ]
@@ -233,9 +238,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     }
 
     func fail(_ error: Error) {
-        isScanning = false
-        _ = motionRecorder.stop()
-        videoRecorder.cancel()
+        captureQueue.sync {
+            cleanupCaptureAfterFailure()
+        }
         arTrackingManager.stopTracking()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
     }
@@ -281,11 +286,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         do {
             savedImage = try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
         } catch {
+            cleanupCaptureAfterFailure()
             updatePublishedState(
                 state: .failed("Image write failed"),
                 statusMessage: "Image write failed: \(error.localizedDescription)"
             )
-            isScanning = false
             return
         }
 
@@ -349,7 +354,16 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 )
             }
 
-            videoRecorder.append(frame)
+            videoRecorder.append(frame, maximumDurationSeconds: maximumVideoDurationSeconds)
+
+            if videoRecorder.reachedDurationLimit,
+               !videoDurationLimitMessageShown {
+                videoDurationLimitMessageShown = true
+                updatePublishedState(
+                    statusMessage: "Video capped",
+                    guidanceMessage: "Continuing keyframe capture; video is capped for export size"
+                )
+            }
         } catch {
             videoRecordingFailed = true
             videoRecorder.cancel()
@@ -358,6 +372,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 guidanceMessage: "Continuing with keyframe image capture"
             )
         }
+    }
+
+    private func cleanupCaptureAfterFailure() {
+        isScanning = false
+        _ = motionRecorder.stop()
+        videoRecorder.cancel()
     }
 
     private func recordRejectedFrame(
@@ -510,8 +530,8 @@ extension ScanCaptureManager: ARSessionDelegate {
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
+        cleanupCaptureAfterFailure()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
-        isScanning = false
     }
 }
 
