@@ -159,6 +159,9 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
   --export-glb /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.glb
 ```
 
+The helper supports Blender 4.x native OBJ/PLY import operators and falls back
+to the Blender 3.x legacy OBJ/PLY import operators when needed.
+
 To manually crop a point cloud in COLMAP/OpenMVS coordinates:
 
 ```bash

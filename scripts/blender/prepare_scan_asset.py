@@ -58,7 +58,12 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         default="geometry",
         help="Origin placement strategy for imported objects.",
     )
-    parser.add_argument("--set-units", default="METRIC", help="Scene unit system, or NONE to leave unchanged.")
+    parser.add_argument(
+        "--set-units",
+        choices=["NONE", "METRIC", "IMPERIAL", "none", "metric", "imperial"],
+        default="METRIC",
+        help="Scene unit system, or NONE to leave unchanged.",
+    )
     parsed = parser.parse_args(args)
 
     if parsed.input.suffix.lower() not in SUPPORTED_IMPORT_SUFFIXES:
@@ -76,7 +81,7 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         texture_dir=parsed.texture_dir,
         export_glb=parsed.export_glb,
         origin=parsed.origin,
-        set_units=parsed.set_units,
+        set_units=parsed.set_units.upper(),
     )
 
 
@@ -116,9 +121,15 @@ def import_asset(bpy: Any, input_path: Path) -> list[Any]:
     before = set(bpy.context.scene.objects)
 
     if suffix == ".obj":
-        bpy.ops.wm.obj_import(filepath=str(input_path))
+        if hasattr(bpy.ops.wm, "obj_import"):
+            bpy.ops.wm.obj_import(filepath=str(input_path))
+        else:
+            bpy.ops.import_scene.obj(filepath=str(input_path))
     elif suffix == ".ply":
-        bpy.ops.wm.ply_import(filepath=str(input_path))
+        if hasattr(bpy.ops.wm, "ply_import"):
+            bpy.ops.wm.ply_import(filepath=str(input_path))
+        else:
+            bpy.ops.import_mesh.ply(filepath=str(input_path))
     elif suffix in {".glb", ".gltf"}:
         bpy.ops.import_scene.gltf(filepath=str(input_path))
     else:
