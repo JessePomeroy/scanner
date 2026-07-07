@@ -94,6 +94,18 @@ accepted keyframes over to high-resolution stills needs phone testing because
 the ARKit pose timestamp and AVCapture photo timestamp must be synchronized
 carefully.
 
+## Export Summary
+
+After a scan is stopped and zipped, the iPhone UI shows a compact export
+summary with the scan ID, ZIP file name, mode, accepted/rejected frame counts,
+average and minimum blur scores, maximum movement speed, capture duration, and
+object subject/radius status when available.
+
+Use this summary as the quick on-device sanity check before sharing the ZIP to
+the Mac or Windows workstation. The same values are also written into
+`metadata/session.json` so desktop validation can compare the exported package
+against what the phone showed.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:

@@ -202,3 +202,17 @@ struct ScanPackageManifest: Codable, Equatable {
         case limitations
     }
 }
+
+struct ScanExportSummary: Equatable {
+    let scanId: String
+    let zipFileName: String
+    let scanModeTitle: String
+    let acceptedFrameCount: Int
+    let rejectedFrameCount: Int
+    let averageBlurScore: Float?
+    let minimumBlurScore: Float?
+    let maximumMovementSpeedMetersPerSecond: Float?
+    let captureDurationSeconds: Double?
+    let objectRadiusMeters: Float?
+    let objectCenterWasSet: Bool
+}
