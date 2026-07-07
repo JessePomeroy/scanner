@@ -38,9 +38,11 @@ def main() -> None:
     scan_id = scan_id_from_path(args.scan)
     work_dir = args.work_dir or Path("NeuralPlans") / scan_id / args.backend
     source_dir = work_dir / "source"
+    scan_path = args.scan.resolve()
+    source_path = source_dir.resolve()
+    if scan_path == source_path or source_path in scan_path.parents:
+        parser.error("--work-dir/source must not contain the input scan")
     if args.scan.is_dir():
-        scan_path = args.scan.resolve()
-        source_path = source_dir.resolve()
         if source_path == scan_path or scan_path in source_path.parents:
             parser.error("--work-dir must not be the scan directory or inside the scan directory")
 

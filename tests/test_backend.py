@@ -623,6 +623,59 @@ class BackendTests(unittest.TestCase):
             self.assertTrue((scan_dir / "images" / "frame_000001.jpg").exists())
             self.assertTrue((scan_dir / "metadata" / "frames.json").exists())
 
+    def test_neural_backend_cli_rejects_input_inside_reset_source_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            work_dir = tmp_path / "work"
+            source_dir = work_dir / "source"
+            source_root = tmp_path / "source"
+            scan_dir = self._write_scan(source_root)
+            archive = source_dir / "scan_test.zip"
+            source_dir.mkdir(parents=True)
+            self._zip_scan(scan_dir, archive, source_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not contain the input scan", result.stderr)
+            self.assertTrue(archive.exists())
+
+    def test_neural_backend_cli_rejects_extracted_input_inside_reset_source_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            work_dir = tmp_path / "work"
+            scan_dir = self._write_scan(work_dir / "source")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(scan_dir),
+                    "--backend",
+                    "mast3r_slam",
+                    "--work-dir",
+                    str(work_dir),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not contain the input scan", result.stderr)
+            self.assertTrue((scan_dir / "images" / "frame_000001.jpg").exists())
+
     def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
         self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")
         self.assertEqual(scan_id_from_path(Path("scan_002")), "scan_002")
