@@ -46,6 +46,12 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/scans", response_model=list[JobRecord])
+def list_scan_jobs(limit: int = Query(50, ge=1, le=200)) -> list[JobRecord]:
+    """Return recent scan jobs, newest first."""
+    return jobs.list(limit=limit)
+
+
 @app.post("/scans", response_model=JobRecord)
 async def upload_scan(
     background_tasks: BackgroundTasks,

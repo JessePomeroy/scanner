@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.jobs import JobStore  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
     build_neural_backend_plan,
@@ -567,6 +569,42 @@ class BackendTests(unittest.TestCase):
 
             with self.assertRaises(UnsafeArchiveError):
                 safe_extract_zip(archive, tmp_path / "out")
+
+    def test_job_store_lists_recent_jobs_newest_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("old")
+            store.create("new")
+            store.update("old", status="validated", message="older")
+            store.update("new", status="complete", message="newer")
+
+            old_path = Path(tmp) / "old.json"
+            new_path = Path(tmp) / "new.json"
+            old_time = 1000
+            new_time = 2000
+            old_path.touch()
+            new_path.touch()
+
+            os.utime(old_path, (old_time, old_time))
+            os.utime(new_path, (new_time, new_time))
+
+            jobs = store.list()
+
+        self.assertEqual([job.scan_id for job in jobs], ["new", "old"])
+
+    def test_job_store_list_respects_limit_and_skips_invalid_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("valid")
+            valid_path = Path(tmp) / "valid.json"
+            broken_path = Path(tmp) / "broken.json"
+            broken_path.write_text("{")
+            os.utime(valid_path, (1000, 1000))
+            os.utime(broken_path, (2000, 2000))
+
+            jobs = store.list(limit=1)
+
+        self.assertEqual([job.scan_id for job in jobs], ["valid"])
 
     def test_validate_scan_package_accepts_object_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
