@@ -36,6 +36,7 @@ final class ARFrameVideoRecorder {
 
     func start(outputURL: URL, relativePath: String, capturedAt: String, firstFrame: ARFrame) throws {
         cancel()
+        self.outputURL = outputURL
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -44,7 +45,13 @@ final class ARFrameVideoRecorder {
         let pixelBuffer = firstFrame.capturedImage
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
-        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+        let writer: AVAssetWriter
+        do {
+            writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+        } catch {
+            cancel()
+            throw error
+        }
         let outputSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
@@ -62,12 +69,15 @@ final class ARFrameVideoRecorder {
         )
 
         guard writer.canAdd(input) else {
+            cancel()
             throw ARFrameVideoRecorderError.inputUnavailable
         }
 
         writer.add(input)
         guard writer.startWriting() else {
-            throw writer.error ?? ARFrameVideoRecorderError.writerUnavailable
+            let error = writer.error ?? ARFrameVideoRecorderError.writerUnavailable
+            cancel()
+            throw error
         }
 
         let startTime = CMTime(seconds: 0, preferredTimescale: 600)
@@ -76,7 +86,6 @@ final class ARFrameVideoRecorder {
         self.writer = writer
         self.input = input
         self.adaptor = adaptor
-        self.outputURL = outputURL
         self.relativePath = relativePath
         self.capturedAt = capturedAt
         self.startTimestamp = firstFrame.timestamp
