@@ -112,6 +112,10 @@ The iPhone app has a `Scans` tab that lists exported `.zip` packages from the
 local `Scans/` documents folder. Pull to refresh or use the refresh button after
 exporting, then tap a package to reopen the share sheet.
 
+Swipe a scan row or use `Edit` to delete a package. Deleting from the gallery
+removes both the exported `.zip` and the matching extracted scan folder from the
+device.
+
 ## Backend Job Status
 
 The local FastAPI backend stores job records under `scans/jobs/`. Query a single
