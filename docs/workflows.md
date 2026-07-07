@@ -83,6 +83,17 @@ python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
 
 See `docs/neural_backends.md` for backend-specific notes and license cautions.
 
+## High-Resolution Photo Scaffold
+
+`CameraCaptureManager` contains reusable `AVCapturePhotoOutput` plumbing for
+capturing a high-resolution still directly to a scan package path. It writes the
+photo file, reports pixel dimensions, and extracts basic exposure/ISO metadata.
+
+The active scanner still uses ARFrame JPEG capture by default. Switching
+accepted keyframes over to high-resolution stills needs phone testing because
+the ARKit pose timestamp and AVCapture photo timestamp must be synchronized
+carefully.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:
