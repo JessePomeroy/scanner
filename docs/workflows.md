@@ -112,6 +112,21 @@ The iPhone app has a `Scans` tab that lists exported `.zip` packages from the
 local `Scans/` documents folder. Pull to refresh or use the refresh button after
 exporting, then tap a package to reopen the share sheet.
 
+## Backend Job Status
+
+The local FastAPI backend stores job records under `scans/jobs/`. Query a single
+job when you know its ID:
+
+```bash
+curl "http://localhost:8000/scans/<scan_id>"
+```
+
+Or list recent jobs, newest first:
+
+```bash
+curl "http://localhost:8000/scans?limit=20"
+```
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:

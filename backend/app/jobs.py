@@ -53,6 +53,25 @@ class JobStore:
             return JobRecord.model_validate_json(raw)
         return JobRecord.parse_raw(raw)
 
+    def list(self, *, limit: int = 50) -> list[JobRecord]:
+        paths = sorted(
+            self.jobs_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+
+        records: list[JobRecord] = []
+        for path in paths:
+            try:
+                records.append(self.read(path.stem))
+            except Exception:
+                continue
+
+            if len(records) >= limit:
+                break
+
+        return records
+
     def write(self, record: JobRecord) -> None:
         path = self.jobs_dir / f"{record.scan_id}.json"
         if hasattr(record, "model_dump_json"):

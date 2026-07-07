@@ -83,6 +83,12 @@ Check job status:
 curl "http://localhost:8000/scans/<scan_id>"
 ```
 
+List recent jobs:
+
+```bash
+curl "http://localhost:8000/scans?limit=20"
+```
+
 ## Local Scripts
 
 Inspect an extracted scan:
