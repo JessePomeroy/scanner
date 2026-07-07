@@ -58,6 +58,20 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Write `metadata/manifest.json` with schema version, app version, capture
      mode, enabled sensors, file counts, and known processing limitations.
 
+4. Add a video capture export mode.
+   - Record an optional `.mov` alongside high-quality keyframes.
+   - Keep the video mode secondary to high-resolution stills for textured mesh
+     quality.
+   - Use video exports for neural reconstruction experiments such as
+     MASt3R-SLAM, Lingbot-style point-cloud generation, and future splat/NSR
+     tests.
+
+5. Replace ARFrame JPEG capture with high-resolution still capture.
+   - Use `AVCapturePhotoOutput` for source images intended for photogrammetry.
+   - Keep ARFrame image capture available as a fallback/debug path.
+   - Preserve ARKit pose, intrinsics, IMU, and lighting metadata for each
+     accepted high-resolution photo.
+
 ## Object Scan Workflow
 
 1. Improve object scan guidance.
@@ -96,6 +110,67 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Add GLB after textured OBJ is stable.
    - Add USDZ only after core reconstruction works.
 
+4. Blender automation.
+   - Add import scripts for OBJ/PLY/GLB outputs.
+   - Add optional cleanup, origin placement, decimation, scale markers, and
+     material relinking.
+   - Save a ready-to-open `.blend` file in the Windows output folder.
+
+## Backend Tracks
+
+The production path should stay separate from experimental neural backends until
+one physical scan has produced a textured OBJ that opens cleanly in Blender.
+
+### Production Reconstruction
+
+1. COLMAP/OpenMVS. Status: primary path.
+   - Traditional image matching, sparse reconstruction, dense stereo, meshing,
+     and texturing.
+   - First milestone: real iPhone scan to textured OBJ on the Windows RTX 3070
+     workstation.
+
+2. Meshroom/AliceVision. Status: candidate alternate path.
+   - Evaluate after COLMAP/OpenMVS is working.
+   - Useful as a second photogrammetry stack for comparison and fallback.
+
+3. ThreeCrate. Status: candidate processing utility.
+   - Use as a possible Rust/Python point-cloud and mesh processing layer, not
+     as the first image-to-mesh backend.
+   - Candidate uses: fast PLY/OBJ I/O, voxel downsampling, normals, ICP,
+     registration, Poisson/BPA reconstruction, simplification, and lightweight
+     point-cloud viewing.
+   - Compare against Open3D before replacing any existing cleanup scripts.
+
+### Experimental Neural Reconstruction
+
+These tools are useful research paths for a personal art workflow, but they
+should not block the production COLMAP/OpenMVS path.
+
+1. MASt3R-SLAM.
+   - Strong first neural experiment because it accepts videos or image folders
+     and documents WSL usage.
+   - Test on the RTX 3070 with reduced frame counts/resolution if needed.
+
+2. MASt3R and DUSt3R.
+   - Useful for learned matching, pose estimation, and geometry experiments.
+   - Keep optional because their licenses are non-commercial.
+
+3. Depth Anything / Depth Anything 3.
+   - Use for monocular depth, segmentation/cropping assistance, preview depth,
+     and future multi-view geometry experiments.
+   - Treat as support for scan understanding, not a direct textured OBJ
+     replacement yet.
+
+4. Lingbot-style local viewer.
+   - Useful reference for drag-video-to-point-cloud UX.
+   - Treat as point-cloud/viewer experimentation rather than Blender-ready
+     textured mesh generation.
+
+5. Gaussian splatting and NSR.
+   - Add after video export and workstation processing are stable.
+   - Keep separate from editable mesh export because visual quality and
+     Blender-editable geometry are different goals.
+
 ## Reference Repositories To Learn From
 
 - `xiongyiheng/ARKit-Scanner`: RGB-D package design, transforms, exposure,
@@ -107,6 +182,20 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
 - `cedanmisquith/SwiftUI-LiDAR`: SwiftUI LiDAR scan UI and mesh export ideas.
 - `kentaroy47/apple-lidar-stream`: future live LiDAR/Open3D streaming ideas.
 - `apple/ARKitScenes`: dataset conventions and RGB-D/pose processing reference.
+- `alicevision/meshroom`: alternate open-source photogrammetry workflow.
+- `alicevision/alicevision`: alternate photogrammetry and camera-tracking
+  framework behind Meshroom.
+- `rajgandhi1/threecrate`: Rust/Python point-cloud and mesh processing library
+  to evaluate against Open3D for cleanup, simplification, registration, and
+  inspection.
+- `rmurai0610/MASt3R-SLAM`: experimental video/image-folder neural SLAM path
+  to test on WSL2.
+- `naver/mast3r` and `naver/dust3r`: experimental learned matching/geometry
+  references with non-commercial licenses.
+- `LiheYoung/Depth-Anything`: monocular depth reference for future depth
+  estimation, object isolation, and scan diagnostics.
+- `donalleniii/lingbot-desktop-mac`: local video-to-point-cloud viewer workflow
+  reference.
 
 ## Later Product Features
 
