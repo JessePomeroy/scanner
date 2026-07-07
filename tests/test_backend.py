@@ -16,6 +16,8 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.reconstruction_backends import BackendPlanConfig, build_backend_plan  # noqa: E402
+from app.reconstruction_plan import write_command_plan_report  # noqa: E402
 from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
 from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
@@ -77,6 +79,78 @@ class BackendTests(unittest.TestCase):
             "patch_match_stereo",
             "stereo_fusion",
         ])
+
+    def test_backend_plan_builds_colmap_openmvs_command_plan(self) -> None:
+        plan = build_backend_plan(
+            Path("/tmp/scan"),
+            BackendPlanConfig(
+                backend="colmap_openmvs",
+                include_dense=False,
+                include_openmvs=False,
+            ),
+        )
+
+        self.assertEqual(plan.backend, "colmap_openmvs")
+        self.assertEqual(
+            [command[1] for command in plan.commands],
+            [
+                "feature_extractor",
+                "sequential_matcher",
+                "mapper",
+                "model_converter",
+            ],
+        )
+        self.assertIn("sparse_point_cloud", plan.outputs)
+
+    def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
+        with self.assertRaises(ValueError):
+            build_backend_plan(
+                Path("/tmp/scan"),
+                BackendPlanConfig(
+                    backend="colmap_openmvs",
+                    include_dense=False,
+                    include_openmvs=True,
+                ),
+            )
+
+    def test_backend_plan_builds_meshroom_batch_command(self) -> None:
+        plan = build_backend_plan(Path("/tmp/scan"), BackendPlanConfig(backend="meshroom"))
+        command = plan.commands[0]
+
+        self.assertEqual(plan.backend, "meshroom")
+        self.assertEqual(command[0], "meshroom_batch")
+        self.assertIn("--input", command)
+        self.assertIn("--output", command)
+        self.assertIn("published_output", plan.outputs)
+
+    def test_backend_plan_builds_experimental_alicevision_chain(self) -> None:
+        plan = build_backend_plan(Path("/tmp/scan"), BackendPlanConfig(backend="alicevision"))
+
+        self.assertEqual(plan.backend, "alicevision")
+        self.assertEqual(plan.commands[0][0], "aliceVision_cameraInit")
+        self.assertEqual(plan.commands[-1][0], "aliceVision_texturing")
+        self.assertGreaterEqual(plan.command_count, 10)
+        self.assertIn("textured_output", plan.outputs)
+
+    def test_command_plan_report_writes_json_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "plan.json"
+            plan = build_backend_plan(
+                Path("/tmp/scan"),
+                BackendPlanConfig(
+                    backend="colmap_openmvs",
+                    include_dense=False,
+                    include_openmvs=False,
+                ),
+            )
+
+            write_command_plan_report(plan, report_path, extra={"scan_id": "scan_test"})
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["scan_id"], "scan_test")
+        self.assertEqual(payload["backend"], "colmap_openmvs")
+        self.assertEqual(payload["command_count"], 4)
+        self.assertIn("command_lines", payload)
 
     def test_safe_extract_zip_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

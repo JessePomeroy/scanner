@@ -20,6 +20,32 @@ The script also writes `metadata/scan_report.json` with capture-quality warnings
 The default local matcher is `sequential_matcher`; use
 `--matcher exhaustive_matcher` only when you want a slower quality check.
 
+To inspect a backend command plan without running native reconstruction tools:
+
+```bash
+python3 scripts/plan_reconstruction_backend.py scan.zip \
+  --backend colmap_openmvs
+```
+
+When `--work-dir` is omitted, the planner writes a persistent workspace under
+`ScannerPlans/<scan_id>/<backend>/`. This folder is ignored by Git because it
+contains extracted scan files and generated reports.
+
+Alternate dry-run planners are available for Meshroom/AliceVision research:
+
+```bash
+python3 scripts/plan_reconstruction_backend.py scan.zip \
+  --backend meshroom
+
+python3 scripts/plan_reconstruction_backend.py scan.zip \
+  --backend alicevision
+```
+
+The Meshroom planner uses `meshroom_batch`, which is the preferred AliceVision
+entry point until the exact Windows/WSL2 install is verified. The direct
+AliceVision planner is experimental and may need command option tuning for the
+installed AliceVision release.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:
@@ -48,6 +74,18 @@ python3 scripts/reconstruct_gpu.py scan.zip --output-root /mnt/c/Users/YOU/Scann
 ```
 
 6. Open OBJ/PLY outputs directly in Blender on Windows.
+
+To compare backend command plans on the workstation before a long run:
+
+```bash
+python3 scripts/plan_reconstruction_backend.py scan.zip \
+  --backend colmap_openmvs \
+  --work-dir /mnt/c/Users/YOU/ScannerPlans/colmap
+
+python3 scripts/plan_reconstruction_backend.py scan.zip \
+  --backend meshroom \
+  --work-dir /mnt/c/Users/YOU/ScannerPlans/meshroom
+```
 
 The expected output layout is:
 
