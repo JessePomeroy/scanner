@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,6 +12,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
+
+BLENDER_SCRIPT = ROOT / "scripts" / "blender" / "prepare_scan_asset.py"
 
 from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
@@ -35,6 +38,16 @@ from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
 from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
+
+
+def load_blender_script_module():
+    spec = importlib.util.spec_from_file_location("prepare_scan_asset", BLENDER_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load prepare_scan_asset.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class BackendTests(unittest.TestCase):
@@ -155,6 +168,46 @@ class BackendTests(unittest.TestCase):
             "patch_match_stereo",
             "stereo_fusion",
         ])
+
+    def test_blender_asset_parser_accepts_supported_options(self) -> None:
+        module = load_blender_script_module()
+        options = module.parse_blender_args(
+            [
+                "scan.obj",
+                "scan.blend",
+                "--scale",
+                "0.5",
+                "--decimate-ratio",
+                "0.25",
+                "--texture-dir",
+                "textures",
+                "--export-glb",
+                "scan.glb",
+                "--origin",
+                "none",
+            ]
+        )
+
+        self.assertEqual(options.input_path, Path("scan.obj"))
+        self.assertEqual(options.output_path, Path("scan.blend"))
+        self.assertEqual(options.scale, 0.5)
+        self.assertEqual(options.decimate_ratio, 0.25)
+        self.assertEqual(options.texture_dir, Path("textures"))
+        self.assertEqual(options.export_glb, Path("scan.glb"))
+        self.assertEqual(options.origin, "none")
+
+    def test_blender_asset_parser_rejects_bad_decimate_ratio(self) -> None:
+        module = load_blender_script_module()
+
+        with self.assertRaises(SystemExit):
+            module.parse_blender_args(["scan.obj", "scan.blend", "--decimate-ratio", "2"])
+
+    def test_blender_script_args_use_separator_payload(self) -> None:
+        module = load_blender_script_module()
+
+        args = module.blender_script_args(["blender", "--background", "--", "input.ply", "out.blend"])
+
+        self.assertEqual(args, ["input.ply", "out.blend"])
 
     def test_backend_plan_builds_colmap_openmvs_command_plan(self) -> None:
         plan = build_backend_plan(

@@ -145,6 +145,20 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
   /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.blend
 ```
 
+The Blender helper accepts OBJ, PLY, GLB, and GLTF. It can also apply a scale,
+set origins, relink textures, decimate meshes, and export a GLB:
+
+```bash
+blender --background --python scripts/blender/prepare_scan_asset.py -- \
+  /mnt/c/Users/YOU/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
+  /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.blend \
+  --texture-dir /mnt/c/Users/YOU/ScannerOutputs/scan_id/source/scan_id/dense \
+  --scale 1.0 \
+  --origin geometry \
+  --decimate-ratio 0.5 \
+  --export-glb /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.glb
+```
+
 To manually crop a point cloud in COLMAP/OpenMVS coordinates:
 
 ```bash
