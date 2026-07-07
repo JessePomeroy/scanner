@@ -8,6 +8,7 @@ venv/
 backend/scans/
 sample_scans/
 ScannerPlans/
+NeuralPlans/
 
 # Xcode/local build outputs.
 DerivedData/

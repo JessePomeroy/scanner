@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Plan an experimental neural reconstruction backend without running it."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "backend"))
+
+from app.neural_backend_planner import (  # noqa: E402
+    NeuralBackendConfig,
+    SUPPORTED_NEURAL_BACKENDS,
+    build_neural_backend_plan,
+    write_neural_backend_report,
+)
+from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scan", type=Path, help="Scan zip or extracted scan directory.")
+    parser.add_argument("--backend", choices=SUPPORTED_NEURAL_BACKENDS, required=True)
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        default=None,
+        help="Persistent planning workspace. Defaults to NeuralPlans/<scan_id>/<backend>.",
+    )
+    parser.add_argument("--report", type=Path, default=None)
+    parser.add_argument("--mast3r-slam-config", default="config/base.yaml")
+    parser.add_argument("--depth-anything-encoder", default="vitl")
+    args = parser.parse_args()
+
+    scan_id = scan_id_from_path(args.scan)
+    work_dir = args.work_dir or Path("NeuralPlans") / scan_id / args.backend
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    scan_root = prepare_scan_source(args.scan, work_dir, reset=False)
+    package = validate_and_report_scan(scan_root)
+    plan = build_neural_backend_plan(
+        scan_root,
+        NeuralBackendConfig(
+            backend=args.backend,
+            mast3r_slam_config=args.mast3r_slam_config,
+            depth_anything_encoder=args.depth_anything_encoder,
+        ),
+    )
+
+    report_path = args.report or package.metadata_dir / f"{args.backend}_neural_plan.json"
+    write_neural_backend_report(plan, report_path)
+
+    print(f"Backend: {plan.backend}")
+    print(f"Report: {report_path}")
+    print(f"Images: {plan.inputs['image_count']}")
+    print(f"Videos: {plan.inputs['video_count']}")
+    if plan.commands:
+        print("Commands:")
+        for command in plan.commands:
+            print(" ".join(command))
+    else:
+        print("Commands: none; see report notes")
+    print(f"Work directory: {work_dir}")
+
+
+if __name__ == "__main__":
+    main()

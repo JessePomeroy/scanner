@@ -16,6 +16,11 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.neural_backend_planner import (  # noqa: E402
+    NeuralBackendConfig,
+    build_neural_backend_plan,
+    write_neural_backend_report,
+)
 from app.open3d_cleanup import cleanup_outputs  # noqa: E402
 from app.point_cloud_processor import (  # noqa: E402
     PointCloudProcessingConfig,
@@ -476,6 +481,55 @@ class BackendTests(unittest.TestCase):
         self.assertNotIn("high_rejected_frame_count", payload["warnings"])
         self.assertNotIn("tracking_loss_during_capture", payload["warnings"])
         self.assertNotIn("many_blurry_rejected_frames", payload["warnings"])
+
+    def test_neural_backend_plan_prefers_video_for_mast3r_slam(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mp4").write_bytes(b"fake mp4")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([{"path": "video/scan.mp4"}])
+            )
+
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="mast3r_slam"),
+            )
+
+        self.assertEqual(plan.backend, "mast3r_slam")
+        self.assertEqual(plan.inputs["video_count"], 1)
+        self.assertTrue(any("video/scan.mp4" in part for part in plan.commands[0]))
+
+    def test_neural_backend_plan_uses_images_for_depth_anything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="depth_anything", depth_anything_encoder="vits"),
+            )
+
+        self.assertEqual(plan.backend, "depth_anything")
+        self.assertEqual(plan.inputs["image_count"], 1)
+        self.assertIn("--encoder", plan.commands[0])
+        self.assertIn("vits", plan.commands[0])
+
+    def test_neural_backend_report_writes_json_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scan_dir = self._write_scan(tmp_path)
+            report_path = tmp_path / "neural_plan.json"
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="lingbot"),
+            )
+
+            write_neural_backend_report(plan, report_path)
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["backend"], "lingbot")
+        self.assertEqual(payload["inputs"]["video_count"], 0)
+        self.assertEqual(payload["commands"], [])
 
     def test_scan_id_from_path_handles_zip_and_spaces(self) -> None:
         self.assertEqual(scan_id_from_path(Path("scan 001.zip")), "scan_001")
