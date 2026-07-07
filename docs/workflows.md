@@ -24,20 +24,21 @@ To inspect a backend command plan without running native reconstruction tools:
 
 ```bash
 python3 scripts/plan_reconstruction_backend.py scan.zip \
-  --backend colmap_openmvs \
-  --work-dir /tmp/scanner-plan
+  --backend colmap_openmvs
 ```
+
+When `--work-dir` is omitted, the planner writes a persistent workspace under
+`ScannerPlans/<scan_id>/<backend>/`. This folder is ignored by Git because it
+contains extracted scan files and generated reports.
 
 Alternate dry-run planners are available for Meshroom/AliceVision research:
 
 ```bash
 python3 scripts/plan_reconstruction_backend.py scan.zip \
-  --backend meshroom \
-  --work-dir /tmp/scanner-meshroom-plan
+  --backend meshroom
 
 python3 scripts/plan_reconstruction_backend.py scan.zip \
-  --backend alicevision \
-  --work-dir /tmp/scanner-alicevision-plan
+  --backend alicevision
 ```
 
 The Meshroom planner uses `meshroom_batch`, which is the preferred AliceVision

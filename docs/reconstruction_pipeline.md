@@ -34,6 +34,10 @@ python3 scripts/plan_reconstruction_backend.py scan.zip --backend meshroom
 python3 scripts/plan_reconstruction_backend.py scan.zip --backend alicevision
 ```
 
+By default, reports and extracted scan files are written to
+`ScannerPlans/<scan_id>/<backend>/`, which is ignored by Git. Use `--work-dir`
+or `--report` when you want a specific location.
+
 Supported planners:
 
 - `colmap_openmvs`: the primary production path for Blender-ready OBJ output.

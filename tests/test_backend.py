@@ -102,6 +102,17 @@ class BackendTests(unittest.TestCase):
         )
         self.assertIn("sparse_point_cloud", plan.outputs)
 
+    def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
+        with self.assertRaises(ValueError):
+            build_backend_plan(
+                Path("/tmp/scan"),
+                BackendPlanConfig(
+                    backend="colmap_openmvs",
+                    include_dense=False,
+                    include_openmvs=True,
+                ),
+            )
+
     def test_backend_plan_builds_meshroom_batch_command(self) -> None:
         plan = build_backend_plan(Path("/tmp/scan"), BackendPlanConfig(backend="meshroom"))
         command = plan.commands[0]

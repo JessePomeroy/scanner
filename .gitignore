@@ -7,6 +7,7 @@ venv/
 # Local scan data can be large and device-specific.
 backend/scans/
 sample_scans/
+ScannerPlans/
 
 # Xcode/local build outputs.
 DerivedData/

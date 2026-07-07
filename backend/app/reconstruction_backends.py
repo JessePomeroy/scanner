@@ -50,6 +50,9 @@ def build_backend_plan(scan_dir: Path, config: BackendPlanConfig | None = None) 
 
 
 def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> CommandPlan:
+    if config.include_openmvs and not config.include_dense:
+        raise ValueError("OpenMVS planning requires COLMAP dense commands. Set include_dense=True or include_openmvs=False.")
+
     scan_dir = scan_dir.resolve()
     colmap_config = ColmapConfig(
         matcher=config.matcher,
