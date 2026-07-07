@@ -879,6 +879,48 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["inputs"]["video_count"], 0)
         self.assertFalse((work_dir / "source" / "scan_test" / "video" / "scan.mp4").exists())
 
+    def test_neural_backend_cli_wires_gaussian_splat_flags_to_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_root = tmp_path / "source"
+            archive = tmp_path / "scan_test.zip"
+            work_dir = tmp_path / "gaussian work"
+
+            scan_dir = self._write_scan(source_root)
+            self._zip_scan(scan_dir, archive, source_root)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "plan_neural_backend.py"),
+                    str(archive),
+                    "--backend",
+                    "gaussian_splatting",
+                    "--work-dir",
+                    str(work_dir),
+                    "--splat-method",
+                    "splatfacto-big",
+                    "--splat-matching-method",
+                    "exhaustive",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            report_path = (
+                work_dir
+                / "source"
+                / "scan_test"
+                / "metadata"
+                / "gaussian_splatting_neural_plan.json"
+            )
+            payload = json.loads(report_path.read_text())
+
+        self.assertIn("Backend: gaussian_splatting", result.stdout)
+        self.assertIn("splatfacto-big", payload["commands"][1])
+        self.assertIn("exhaustive", payload["commands"][0])
+        self.assertEqual(payload["inputs"]["preferred_source_type"], "images")
+
     def test_neural_backend_cli_does_not_delete_extracted_scan_when_work_dir_matches_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
