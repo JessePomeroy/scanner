@@ -1,13 +1,15 @@
 import AVFoundation
 import Foundation
 import ImageIO
-import UIKit
 
 enum CameraCaptureError: Error {
     case cameraUnavailable
+    case cameraNotPrepared
+    case captureSessionNotRunning
     case outputUnavailable
     case photoDataUnavailable
-    case imageDecodeFailed
+    case imageMetadataUnavailable
+    case unsupportedPhotoDimensions
 }
 
 struct HighResolutionPhotoMetadata {
@@ -31,6 +33,7 @@ final class CameraCaptureManager: NSObject {
     private let photoOutput = AVCapturePhotoOutput()
 
     private(set) var isPrepared = false
+    private var selectedMaxPhotoDimensions: CMVideoDimensions?
     private var retainedDelegates: [UUID: PhotoCaptureDelegate] = [:]
     private let delegateQueue = DispatchQueue(label: "ScannerApp.CameraCaptureManager.delegates")
 
@@ -58,6 +61,10 @@ final class CameraCaptureManager: NSObject {
         captureSession.addInput(input)
         captureSession.addOutput(photoOutput)
         photoOutput.maxPhotoQualityPrioritization = .quality
+        selectedMaxPhotoDimensions = largestPhotoDimensions(for: camera)
+        if let selectedMaxPhotoDimensions {
+            photoOutput.maxPhotoDimensions = selectedMaxPhotoDimensions
+        }
 
         try lockStableCameraSettings(on: camera)
         isPrepared = true
@@ -76,19 +83,49 @@ final class CameraCaptureManager: NSObject {
     func capturePhoto(delegate: AVCapturePhotoCaptureDelegate) {
         let settings = AVCapturePhotoSettings()
         settings.photoQualityPrioritization = .quality
+        if let selectedMaxPhotoDimensions {
+            settings.maxPhotoDimensions = selectedMaxPhotoDimensions
+        }
         photoOutput.capturePhoto(with: settings, delegate: delegate)
     }
 
-    func capturePhoto(to url: URL, completion: @escaping (Result<SavedHighResolutionPhoto, Error>) -> Void) {
+    func capturePhoto(
+        to url: URL,
+        completionQueue: DispatchQueue = .main,
+        completion: @escaping (Result<SavedHighResolutionPhoto, Error>) -> Void
+    ) {
+        guard isPrepared else {
+            completionQueue.async {
+                completion(.failure(CameraCaptureError.cameraNotPrepared))
+            }
+            return
+        }
+        guard captureSession.isRunning else {
+            completionQueue.async {
+                completion(.failure(CameraCaptureError.captureSessionNotRunning))
+            }
+            return
+        }
+        guard selectedMaxPhotoDimensions != nil else {
+            completionQueue.async {
+                completion(.failure(CameraCaptureError.unsupportedPhotoDimensions))
+            }
+            return
+        }
+
         let identifier = UUID()
-        let delegate = PhotoCaptureDelegate(destinationURL: url) { [weak self] result in
-            if let self {
-                self.delegateQueue.sync {
-                    _ = self.retainedDelegates.removeValue(forKey: identifier)
+        let delegate = PhotoCaptureDelegate(
+            destinationURL: url,
+            completionQueue: completionQueue,
+            completion: completion,
+            onFinish: { [weak self] in
+                if let self {
+                    self.delegateQueue.sync {
+                        _ = self.retainedDelegates.removeValue(forKey: identifier)
+                    }
                 }
             }
-            completion(result)
-        }
+        )
 
         delegateQueue.sync {
             retainedDelegates[identifier] = delegate
@@ -113,18 +150,31 @@ final class CameraCaptureManager: NSObject {
             camera.whiteBalanceMode = .continuousAutoWhiteBalance
         }
     }
+
+    private func largestPhotoDimensions(for camera: AVCaptureDevice) -> CMVideoDimensions? {
+        camera.activeFormat.supportedMaxPhotoDimensions.max { left, right in
+            Int(left.width) * Int(left.height) < Int(right.width) * Int(right.height)
+        }
+    }
 }
 
 private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private let destinationURL: URL
+    private let completionQueue: DispatchQueue
     private let completion: (Result<SavedHighResolutionPhoto, Error>) -> Void
+    private let onFinish: () -> Void
+    private var processingResult: Result<SavedHighResolutionPhoto, Error>?
 
     init(
         destinationURL: URL,
-        completion: @escaping (Result<SavedHighResolutionPhoto, Error>) -> Void
+        completionQueue: DispatchQueue,
+        completion: @escaping (Result<SavedHighResolutionPhoto, Error>) -> Void,
+        onFinish: @escaping () -> Void
     ) {
         self.destinationURL = destinationURL
+        self.completionQueue = completionQueue
         self.completion = completion
+        self.onFinish = onFinish
         super.init()
     }
 
@@ -134,38 +184,39 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         error: Error?
     ) {
         if let error {
-            completion(.failure(error))
+            processingResult = .failure(error)
             return
         }
 
         guard let data = photo.fileDataRepresentation() else {
-            completion(.failure(CameraCaptureError.photoDataUnavailable))
+            processingResult = .failure(CameraCaptureError.photoDataUnavailable)
             return
         }
 
         do {
-            try data.write(to: destinationURL, options: [.atomic])
             let metadata = try photoMetadata(from: data, photo: photo)
-            completion(
-                .success(
-                    SavedHighResolutionPhoto(
-                        image: SavedFrameImage(
-                            url: destinationURL,
-                            width: metadata.width,
-                            height: metadata.height
-                        ),
-                        metadata: metadata
-                    )
+            try data.write(to: destinationURL, options: [.atomic])
+            processingResult = .success(
+                SavedHighResolutionPhoto(
+                    image: SavedFrameImage(
+                        url: destinationURL,
+                        width: metadata.width,
+                        height: metadata.height
+                    ),
+                    metadata: metadata
                 )
             )
         } catch {
-            completion(.failure(error))
+            processingResult = .failure(error)
         }
     }
 
     private func photoMetadata(from data: Data, photo: AVCapturePhoto) throws -> HighResolutionPhotoMetadata {
-        guard let image = UIImage(data: data) else {
-            throw CameraCaptureError.imageDecodeFailed
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+              let width = properties[kCGImagePropertyPixelWidth as String] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight as String] as? Int else {
+            throw CameraCaptureError.imageMetadataUnavailable
         }
 
         let exif = photo.metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
@@ -173,10 +224,25 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
         let isoValues = exif?[kCGImagePropertyExifISOSpeedRatings as String] as? [NSNumber]
 
         return HighResolutionPhotoMetadata(
-            width: Int(image.size.width * image.scale),
-            height: Int(image.size.height * image.scale),
+            width: width,
+            height: height,
             exposureDuration: exposureDuration,
             iso: isoValues?.first?.floatValue
         )
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+        error: Error?
+    ) {
+        let finalResult = error.map { Result<SavedHighResolutionPhoto, Error>.failure($0) }
+            ?? processingResult
+            ?? .failure(CameraCaptureError.photoDataUnavailable)
+
+        completionQueue.async {
+            self.completion(finalResult)
+            self.onFinish()
+        }
     }
 }
