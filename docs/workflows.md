@@ -115,6 +115,29 @@ python3 scripts/plan_object_crop.py scan.zip
 python3 scripts/crop_point_cloud.py input.ply cropped.ply --center 0 0 0 --radius 2.0
 ```
 
+To dry-run point-cloud cleanup or downsampling after any backend produces a PLY:
+
+```bash
+python3 scripts/process_point_cloud.py input.ply output.ply \
+  --processor open3d \
+  --voxel-size 0.03 \
+  --dry-run
+```
+
+Open3D is the default processing backend. ThreeCrate is available as an
+experimental optional processor and is not installed by default:
+
+```bash
+python3 scripts/process_point_cloud.py input.ply output.ply \
+  --processor threecrate \
+  --voxel-size 0.03 \
+  --dry-run
+```
+
+Remove `--dry-run` only after installing the selected processor in the active
+Python environment. ThreeCrate should be compared against Open3D on real scan
+outputs before replacing the default cleanup path.
+
 ## Object Scan Metadata
 
 Object scans store:

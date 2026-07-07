@@ -16,6 +16,12 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.open3d_cleanup import cleanup_outputs  # noqa: E402
+from app.point_cloud_processor import (  # noqa: E402
+    PointCloudProcessingConfig,
+    build_processing_summary,
+    write_processing_report,
+)
 from app.reconstruction_backends import BackendPlanConfig, build_backend_plan  # noqa: E402
 from app.reconstruction_plan import write_command_plan_report  # noqa: E402
 from app.report_writer import write_scan_report  # noqa: E402
@@ -151,6 +157,60 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["backend"], "colmap_openmvs")
         self.assertEqual(payload["command_count"], 4)
         self.assertIn("command_lines", payload)
+
+    def test_point_cloud_processing_summary_does_not_import_optional_backends(self) -> None:
+        summary = build_processing_summary(
+            Path("/tmp/input.ply"),
+            Path("/tmp/output.ply"),
+            PointCloudProcessingConfig(
+                processor="threecrate",
+                voxel_size=0.05,
+                estimate_normals=True,
+                statistical_outlier_neighbors=None,
+                statistical_outlier_std_ratio=None,
+            ),
+        )
+
+        self.assertEqual(summary["processor"], "threecrate")
+        self.assertEqual(summary["voxel_size"], 0.05)
+        self.assertIn("Experimental optional processing path.", summary["notes"])
+
+    def test_point_cloud_processing_rejects_unknown_processor(self) -> None:
+        with self.assertRaises(ValueError):
+            build_processing_summary(
+                Path("/tmp/input.ply"),
+                Path("/tmp/output.ply"),
+                PointCloudProcessingConfig(processor="unknown"),
+            )
+
+    def test_point_cloud_processing_rejects_threecrate_outlier_filter(self) -> None:
+        with self.assertRaises(ValueError):
+            build_processing_summary(
+                Path("/tmp/input.ply"),
+                Path("/tmp/output.ply"),
+                PointCloudProcessingConfig(processor="threecrate"),
+            )
+
+    def test_point_cloud_processing_report_writes_dry_run_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "point_cloud.json"
+            write_processing_report(
+                Path("/tmp/input.ply"),
+                Path("/tmp/output.ply"),
+                report_path,
+                PointCloudProcessingConfig(processor="open3d", voxel_size=0.1),
+                dry_run=True,
+            )
+            payload = json.loads(report_path.read_text())
+
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["processor"], "open3d")
+        self.assertEqual(payload["voxel_size"], 0.1)
+
+    def test_cleanup_outputs_fails_before_import_when_dense_cloud_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                cleanup_outputs(Path(tmp))
 
     def test_safe_extract_zip_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

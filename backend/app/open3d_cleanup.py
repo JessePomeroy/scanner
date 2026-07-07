@@ -4,22 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.point_cloud_processor import PointCloudProcessingConfig, process_point_cloud
+
 
 def cleanup_outputs(scan_dir: Path) -> Path:
     """Clean intermediate reconstruction outputs."""
-    try:
-        import open3d as o3d
-    except ImportError as error:
-        raise RuntimeError("open3d is required for cleanup_outputs") from error
-
     fused_path = scan_dir / "dense" / "fused.ply"
     if not fused_path.exists():
         raise FileNotFoundError(f"Missing dense point cloud: {fused_path}")
 
-    pcd = o3d.io.read_point_cloud(str(fused_path))
-    pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-    pcd.estimate_normals()
-
     cleaned_path = scan_dir / "dense" / "fused_cleaned.ply"
-    o3d.io.write_point_cloud(str(cleaned_path), pcd)
-    return cleaned_path
+    return process_point_cloud(
+        fused_path,
+        cleaned_path,
+        PointCloudProcessingConfig(
+            processor="open3d",
+            estimate_normals=True,
+            statistical_outlier_neighbors=20,
+            statistical_outlier_std_ratio=2.0,
+        ),
+    )
