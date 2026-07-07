@@ -26,6 +26,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     @Published private(set) var statusMessage = "Ready"
     @Published private(set) var guidanceMessage = "Choose a mode"
     @Published private(set) var lastZipURL: URL?
+    @Published private(set) var lastExportSummary: ScanExportSummary?
     @Published var scanMode: ScanMode = .scene {
         didSet {
             objectCenterWorld = nil
@@ -100,6 +101,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             lastMovementSpeed: nil,
             objectCenterIsSet: false,
             clearZipURL: true,
+            clearExportSummary: true,
             clearQualityMetrics: true
         )
 
@@ -121,7 +123,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         updatePublishedState(state: .exporting, statusMessage: "Exporting")
         arTrackingManager.stopTracking()
 
-        let zipURL: URL = try captureQueue.sync {
+        let exportResult: (zipURL: URL, summary: ScanExportSummary) = try captureQueue.sync {
             isScanning = false
 
             guard let currentScanDirectory,
@@ -191,17 +193,33 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             try packageWriter.saveMotionMetadata(motionSamples, in: currentScanDirectory)
             try packageWriter.saveVideoMetadata(videoMetadata, in: currentScanDirectory)
             try packageWriter.saveManifest(manifest, in: currentScanDirectory)
-            return try packageWriter.zipScanFolder(at: currentScanDirectory)
+            let zipURL = try packageWriter.zipScanFolder(at: currentScanDirectory)
+            let summary = ScanExportSummary(
+                scanId: currentScanId,
+                zipFileName: zipURL.lastPathComponent,
+                scanModeTitle: scanMode.title,
+                acceptedFrameCount: capturedFrames.count,
+                rejectedFrameCount: qualityStats.rejectedTotal,
+                averageBlurScore: qualityStats.averageBlurScore,
+                minimumBlurScore: qualityStats.minimumBlurScore,
+                maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
+                captureDurationSeconds: session.captureDurationSeconds,
+                objectRadiusMeters: session.objectRadiusMeters,
+                objectCenterWasSet: session.objectCenterWorld != nil
+            )
+
+            return (zipURL, summary)
         }
 
         updatePublishedState(
-            state: .completed(zipURL),
-            statusMessage: "Exported \(zipURL.lastPathComponent)",
-            guidanceMessage: exportSummary(frameCount: capturedFrames.count, stats: qualityStats),
-            lastZipURL: zipURL
+            state: .completed(exportResult.zipURL),
+            statusMessage: "Exported \(exportResult.zipURL.lastPathComponent)",
+            guidanceMessage: exportSummary(exportResult.summary),
+            lastZipURL: exportResult.zipURL,
+            lastExportSummary: exportResult.summary
         )
 
-        return zipURL
+        return exportResult.zipURL
     }
 
     func fail(_ error: Error) {
@@ -333,7 +351,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         lastMovementSpeed: Float? = nil,
         objectCenterIsSet: Bool? = nil,
         lastZipURL: URL? = nil,
+        lastExportSummary: ScanExportSummary? = nil,
         clearZipURL: Bool = false,
+        clearExportSummary: Bool = false,
         clearQualityMetrics: Bool = false
     ) {
         DispatchQueue.main.async {
@@ -370,6 +390,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             }
             if let lastZipURL {
                 self.lastZipURL = lastZipURL
+            }
+            if clearExportSummary {
+                self.lastExportSummary = nil
+            }
+            if let lastExportSummary {
+                self.lastExportSummary = lastExportSummary
             }
         }
     }
@@ -430,9 +456,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         }
     }
 
-    private func exportSummary(frameCount: Int, stats: CaptureQualityStats) -> String {
-        let blur = stats.averageBlurScore.map { String(format: "%.2f", $0) } ?? "n/a"
-        return "Frames \(frameCount), rejected \(stats.rejectedTotal), avg blur \(blur)"
+    private func exportSummary(_ summary: ScanExportSummary) -> String {
+        let blur = summary.averageBlurScore.map { String(format: "%.2f", $0) } ?? "n/a"
+        return "Frames \(summary.acceptedFrameCount), rejected \(summary.rejectedFrameCount), avg blur \(blur)"
     }
 }
 

@@ -14,6 +14,7 @@ struct ScanView: View {
             VStack(spacing: 12) {
                 modeControls
                 statusBar
+                exportSummaryPanel
                 controls
             }
             .padding(.horizontal, 16)
@@ -94,6 +95,117 @@ struct ScanView: View {
         }
         .font(.caption.monospacedDigit())
         .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var exportSummaryPanel: some View {
+        if let summary = scanManager.lastExportSummary {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "archivebox")
+                        .foregroundStyle(.blue)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(summary.scanId)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+
+                        Text(summary.zipFileName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Text(summary.scanModeTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 8),
+                        GridItem(.flexible(), spacing: 8),
+                        GridItem(.flexible(), spacing: 8)
+                    ],
+                    spacing: 8
+                ) {
+                    summaryMetric(
+                        title: "Frames",
+                        value: "\(summary.acceptedFrameCount)",
+                        systemImage: "photo.stack"
+                    )
+                    summaryMetric(
+                        title: "Rejected",
+                        value: "\(summary.rejectedFrameCount)",
+                        systemImage: "xmark.circle"
+                    )
+                    summaryMetric(
+                        title: "Blur",
+                        value: summary.averageBlurScore.map { String(format: "%.2f", $0) } ?? "--",
+                        systemImage: "camera.metering.center.weighted"
+                    )
+                    summaryMetric(
+                        title: "Min Blur",
+                        value: summary.minimumBlurScore.map { String(format: "%.2f", $0) } ?? "--",
+                        systemImage: "camera.aperture"
+                    )
+                    summaryMetric(
+                        title: "Speed",
+                        value: summary.maximumMovementSpeedMetersPerSecond.map { String(format: "%.2fm/s", $0) } ?? "--",
+                        systemImage: "speedometer"
+                    )
+                    summaryMetric(
+                        title: "Time",
+                        value: summary.captureDurationSeconds.map { String(format: "%.0fs", $0) } ?? "--",
+                        systemImage: "timer"
+                    )
+                }
+
+                if summary.objectRadiusMeters != nil || summary.objectCenterWasSet {
+                    HStack(spacing: 12) {
+                        Label(
+                            summary.objectCenterWasSet ? "Subject set" : "No subject",
+                            systemImage: summary.objectCenterWasSet ? "scope" : "questionmark.circle"
+                        )
+
+                        if let radius = summary.objectRadiusMeters {
+                            Label(String(format: "%.2fm", radius), systemImage: "circle.dashed")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func summaryMetric(title: String, value: String, systemImage: String) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modeControls: some View {
@@ -194,7 +306,7 @@ struct ScanView: View {
 
     private func stopScan() {
         do {
-            shareURL = try scanManager.stopScan()
+            try scanManager.stopScan()
         } catch {
             scanManager.fail(error)
         }

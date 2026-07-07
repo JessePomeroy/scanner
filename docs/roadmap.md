@@ -86,7 +86,7 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
      are available to test reliably.
    - Use the tapped object center and radius for automatic crop proposals.
 
-3. Add scan summary after export.
+3. Add scan summary after export. Status: implemented initial pass.
    - Show accepted frames, rejected frames, blur range, movement speed, scan
      mode, object radius, and whether object center was set.
 
