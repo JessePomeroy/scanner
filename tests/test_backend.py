@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 import zipfile
 
@@ -11,6 +13,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
+
+BLENDER_SCRIPT = ROOT / "scripts" / "blender" / "prepare_scan_asset.py"
 
 from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
@@ -35,6 +39,16 @@ from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
 from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
+
+
+def load_blender_script_module():
+    spec = importlib.util.spec_from_file_location("prepare_scan_asset", BLENDER_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load prepare_scan_asset.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class BackendTests(unittest.TestCase):
@@ -155,6 +169,200 @@ class BackendTests(unittest.TestCase):
             "patch_match_stereo",
             "stereo_fusion",
         ])
+
+    def test_blender_asset_parser_accepts_supported_options(self) -> None:
+        module = load_blender_script_module()
+        options = module.parse_blender_args(
+            [
+                "scan.obj",
+                "scan.blend",
+                "--scale",
+                "0.5",
+                "--decimate-ratio",
+                "0.25",
+                "--texture-dir",
+                "textures",
+                "--export-glb",
+                "scan.glb",
+                "--origin",
+                "none",
+            ]
+        )
+
+        self.assertEqual(options.input_path, Path("scan.obj"))
+        self.assertEqual(options.output_path, Path("scan.blend"))
+        self.assertEqual(options.scale, 0.5)
+        self.assertEqual(options.decimate_ratio, 0.25)
+        self.assertEqual(options.texture_dir, Path("textures"))
+        self.assertEqual(options.export_glb, Path("scan.glb"))
+        self.assertEqual(options.origin, "none")
+
+    def test_blender_asset_parser_rejects_bad_decimate_ratio(self) -> None:
+        module = load_blender_script_module()
+
+        with self.assertRaises(SystemExit):
+            module.parse_blender_args(["scan.obj", "scan.blend", "--decimate-ratio", "2"])
+
+    def test_blender_script_args_use_separator_payload(self) -> None:
+        module = load_blender_script_module()
+
+        args = module.blender_script_args(["blender", "--background", "--", "input.ply", "out.blend"])
+
+        self.assertEqual(args, ["input.ply", "out.blend"])
+
+    def test_blender_asset_parser_normalizes_units(self) -> None:
+        module = load_blender_script_module()
+
+        options = module.parse_blender_args(["scan.glb", "scan.blend", "--set-units", "imperial"])
+
+        self.assertEqual(options.set_units, "IMPERIAL")
+
+    def test_blender_import_asset_uses_legacy_obj_fallback(self) -> None:
+        module = load_blender_script_module()
+        calls: list[tuple[str, str]] = []
+        scene = SimpleNamespace(objects=[])
+
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=scene),
+            ops=SimpleNamespace(
+                wm=SimpleNamespace(),
+                import_scene=SimpleNamespace(
+                    obj=lambda filepath: calls.append(("legacy_obj", filepath))
+                ),
+                import_mesh=SimpleNamespace(),
+            ),
+        )
+
+        module.import_asset(bpy, Path("scan.obj"))
+
+        self.assertEqual(calls, [("legacy_obj", "scan.obj")])
+
+    def test_blender_import_asset_uses_legacy_ply_fallback(self) -> None:
+        module = load_blender_script_module()
+        calls: list[tuple[str, str]] = []
+        scene = SimpleNamespace(objects=[])
+
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=scene),
+            ops=SimpleNamespace(
+                wm=SimpleNamespace(),
+                import_scene=SimpleNamespace(),
+                import_mesh=SimpleNamespace(
+                    ply=lambda filepath: calls.append(("legacy_ply", filepath))
+                ),
+            ),
+        )
+
+        module.import_asset(bpy, Path("scan.ply"))
+
+        self.assertEqual(calls, [("legacy_ply", "scan.ply")])
+
+    def test_blender_relink_textures_updates_matching_images(self) -> None:
+        module = load_blender_script_module()
+
+        class FakeImage:
+            def __init__(self) -> None:
+                self.filepath = "missing/texture_0.jpg"
+
+            def filepath_from_user(self) -> str:
+                return self.filepath
+
+        with tempfile.TemporaryDirectory() as tmp:
+            texture_dir = Path(tmp)
+            replacement = texture_dir / "texture_0.jpg"
+            replacement.write_bytes(b"fake texture")
+            image = FakeImage()
+            bpy = SimpleNamespace(data=SimpleNamespace(images=[image]))
+
+            module.relink_textures(bpy, texture_dir)
+
+        self.assertEqual(image.filepath, str(replacement))
+
+    def test_blender_prepare_asset_runs_core_operations_with_fake_bpy(self) -> None:
+        module = load_blender_script_module()
+        calls: list[tuple[str, object]] = []
+
+        class FakeModifier:
+            name = "scanner_decimate"
+
+            def __init__(self) -> None:
+                self.ratio = None
+
+        class FakeModifiers:
+            def new(self, name: str, type: str) -> FakeModifier:
+                calls.append(("modifier_new", (name, type)))
+                return FakeModifier()
+
+        class FakeObject:
+            type = "MESH"
+
+            def __init__(self) -> None:
+                self.name = "Imported"
+                self.scale = (1.0, 1.0, 1.0)
+                self.modifiers = FakeModifiers()
+
+            def select_set(self, selected: bool) -> None:
+                calls.append(("select_set", selected))
+
+        fake_object = FakeObject()
+        objects: list[FakeObject] = []
+
+        class FakeWM:
+            def obj_import(self, filepath: str) -> None:
+                calls.append(("obj_import", filepath))
+                objects.append(fake_object)
+
+            def save_as_mainfile(self, filepath: str) -> None:
+                calls.append(("save", filepath))
+
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(
+                scene=SimpleNamespace(objects=objects, unit_settings=SimpleNamespace(system="NONE")),
+                view_layer=SimpleNamespace(objects=SimpleNamespace(active=None)),
+            ),
+            data=SimpleNamespace(images=[]),
+            ops=SimpleNamespace(
+                object=SimpleNamespace(
+                    select_all=lambda action: calls.append(("select_all", action)),
+                    delete=lambda: calls.append(("delete", None)),
+                    transform_apply=lambda location, rotation, scale: calls.append(
+                        ("transform_apply", (location, rotation, scale))
+                    ),
+                    origin_set=lambda type, center=None: calls.append(("origin_set", (type, center))),
+                    modifier_apply=lambda modifier: calls.append(("modifier_apply", modifier)),
+                ),
+                wm=FakeWM(),
+                import_scene=SimpleNamespace(gltf=lambda filepath: calls.append(("gltf_import", filepath))),
+                export_scene=SimpleNamespace(
+                    gltf=lambda filepath, export_format: calls.append(("gltf_export", (filepath, export_format)))
+                ),
+            ),
+        )
+
+        options = module.BlenderAssetOptions(
+            input_path=Path("scan.obj"),
+            output_path=Path("/tmp/scan.blend"),
+            scale=2.0,
+            decimate_ratio=0.5,
+            export_glb=Path("/tmp/scan.glb"),
+        )
+
+        module.clear_scene(bpy)
+        imported = module.import_asset(bpy, options.input_path)
+        module.configure_units(bpy, options.set_units)
+        module.apply_scale(bpy, imported, options.scale)
+        module.set_origins(bpy, imported, options.origin)
+        module.apply_decimation(bpy, imported, options.decimate_ratio)
+        bpy.ops.wm.save_as_mainfile(filepath=str(options.output_path))
+        bpy.ops.export_scene.gltf(filepath=str(options.export_glb), export_format="GLB")
+
+        self.assertIn(("obj_import", "scan.obj"), calls)
+        self.assertIn(("transform_apply", (False, False, True)), calls)
+        self.assertIn(("origin_set", ("ORIGIN_GEOMETRY", "BOUNDS")), calls)
+        self.assertIn(("modifier_apply", "scanner_decimate"), calls)
+        self.assertIn(("save", "/tmp/scan.blend"), calls)
+        self.assertIn(("gltf_export", ("/tmp/scan.glb", "GLB")), calls)
+        self.assertEqual(bpy.context.scene.unit_settings.system, "METRIC")
 
     def test_backend_plan_builds_colmap_openmvs_command_plan(self) -> None:
         plan = build_backend_plan(
