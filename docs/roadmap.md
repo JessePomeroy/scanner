@@ -167,7 +167,9 @@ should not block the production COLMAP/OpenMVS path.
      textured mesh generation.
 
 5. Gaussian splatting and NSR.
-   - Add after video export and workstation processing are stable.
+   - Status: implemented initial dry-run planner for Nerfstudio Splatfacto.
+   - Add full execution after video export and workstation processing are
+     stable.
    - Keep separate from editable mesh export because visual quality and
      Blender-editable geometry are different goals.
 

@@ -33,6 +33,8 @@ def main() -> None:
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument("--mast3r-slam-config", default="config/base.yaml")
     parser.add_argument("--depth-anything-encoder", default="vits")
+    parser.add_argument("--splat-method", default="splatfacto")
+    parser.add_argument("--splat-matching-method", default="sequential")
     args = parser.parse_args()
 
     scan_id = scan_id_from_path(args.scan)
@@ -56,6 +58,8 @@ def main() -> None:
             backend=args.backend,
             mast3r_slam_config=args.mast3r_slam_config,
             depth_anything_encoder=args.depth_anything_encoder,
+            splat_method=args.splat_method,
+            splat_matching_method=args.splat_matching_method,
         ),
     )
 

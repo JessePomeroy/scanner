@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_NEURAL_BACKENDS = ("mast3r_slam", "depth_anything", "lingbot")
+SUPPORTED_NEURAL_BACKENDS = (
+    "mast3r_slam",
+    "depth_anything",
+    "lingbot",
+    "gaussian_splatting",
+)
 
 
 @dataclass(frozen=True)
@@ -17,6 +22,8 @@ class NeuralBackendConfig:
     backend: str
     mast3r_slam_config: str = "config/base.yaml"
     depth_anything_encoder: str = "vits"
+    splat_method: str = "splatfacto"
+    splat_matching_method: str = "sequential"
 
 
 @dataclass(frozen=True)
@@ -106,6 +113,73 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 "Use outputs for scan diagnostics, object isolation, preview depth, or later DA3 experiments.",
                 "Run inside a separate Depth Anything checkout and Python environment.",
                 "Depth Anything V2 Small is Apache-2.0; larger V2 checkpoints are non-commercial.",
+            ],
+        )
+
+    if config.backend == "gaussian_splatting":
+        workspace = scan_root / "neural" / "gaussian_splatting"
+        nerfstudio_data = workspace / "nerfstudio"
+        export_dir = workspace / "exports" / "splat"
+        config_path = (
+            workspace
+            / "outputs"
+            / "<scene>"
+            / config.splat_method
+            / "<timestamp>"
+            / "config.yml"
+        )
+        process_source_type = "video" if video_paths else "images"
+        process_source = video_paths[0] if video_paths else image_dir
+
+        commands = [
+            [
+                "ns-process-data",
+                process_source_type,
+                "--data",
+                str(process_source),
+                "--output-dir",
+                str(nerfstudio_data),
+                "--matching-method",
+                config.splat_matching_method,
+            ],
+            [
+                "ns-train",
+                config.splat_method,
+                "--data",
+                str(nerfstudio_data),
+                "--output-dir",
+                str(workspace / "outputs"),
+            ],
+            [
+                "ns-export",
+                "gaussian-splat",
+                "--load-config",
+                str(config_path),
+                "--output-dir",
+                str(export_dir),
+            ],
+        ]
+
+        return NeuralBackendPlan(
+            backend=config.backend,
+            scan_root=scan_root,
+            commands=commands,
+            inputs={
+                **inputs,
+                "preferred_source": str(process_source),
+                "preferred_source_type": process_source_type,
+            },
+            outputs={
+                "workspace": workspace,
+                "nerfstudio_data": nerfstudio_data,
+                "train_outputs": workspace / "outputs",
+                "splat_export": export_dir,
+            },
+            notes=[
+                "Viewer-focused Gaussian splat path; this does not produce an editable textured mesh.",
+                "Run inside a CUDA-enabled Nerfstudio environment on the Windows RTX workstation.",
+                "The export command needs the real config.yml path printed by ns-train.",
+                "Start with scene scans or object scans with strong multi-angle coverage and static lighting.",
             ],
         )
 
