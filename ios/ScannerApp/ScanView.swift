@@ -306,7 +306,7 @@ struct ScanView: View {
 
     private func stopScan() {
         do {
-            shareURL = try scanManager.stopScan()
+            try scanManager.stopScan()
         } catch {
             scanManager.fail(error)
         }
