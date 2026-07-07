@@ -47,6 +47,18 @@ final class MetadataWriter {
         return url
     }
 
+    func writeVideoMetadata(_ videos: [VideoCaptureMetadata], to metadataDirectory: URL) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: metadataDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let url = metadataDirectory.appendingPathComponent("video.json")
+        let data = try encoder.encode(videos)
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+
     func writeManifest(_ manifest: ScanPackageManifest, to metadataDirectory: URL) throws -> URL {
         try FileManager.default.createDirectory(
             at: metadataDirectory,

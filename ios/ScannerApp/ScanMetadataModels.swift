@@ -97,6 +97,26 @@ struct MotionSampleMetadata: Codable, Equatable {
     }
 }
 
+struct VideoCaptureMetadata: Codable, Equatable {
+    let path: String
+    let capturedAt: String
+    let durationSeconds: Double?
+    let frameRate: Double?
+    let resolution: [Int]?
+    let codec: String?
+    let includesAudio: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case capturedAt = "captured_at"
+        case durationSeconds = "duration_seconds"
+        case frameRate = "frame_rate"
+        case resolution
+        case codec
+        case includesAudio = "includes_audio"
+    }
+}
+
 struct ScanSessionMetadata: Codable, Equatable {
     let scanId: String
     let createdAt: String
@@ -109,6 +129,7 @@ struct ScanSessionMetadata: Codable, Equatable {
     let imageCount: Int
     let depthFrameCount: Int
     let imuSampleCount: Int
+    let videoCount: Int
     let rejectedFrameCount: Int
     let rejectedTrackingCount: Int
     let rejectedBlurCount: Int
@@ -133,6 +154,7 @@ struct ScanSessionMetadata: Codable, Equatable {
         case imageCount = "image_count"
         case depthFrameCount = "depth_frame_count"
         case imuSampleCount = "imu_sample_count"
+        case videoCount = "video_count"
         case rejectedFrameCount = "rejected_frame_count"
         case rejectedTrackingCount = "rejected_tracking_count"
         case rejectedBlurCount = "rejected_blur_count"
@@ -156,8 +178,10 @@ struct ScanPackageManifest: Codable, Equatable {
     let imageCount: Int
     let depthFrameCount: Int
     let imuSampleCount: Int
+    let videoCount: Int
     let usesLidar: Bool
     let usesARKitMesh: Bool
+    let usesVideo: Bool
     let createdAt: String
     let limitations: [String]
 
@@ -170,8 +194,10 @@ struct ScanPackageManifest: Codable, Equatable {
         case imageCount = "image_count"
         case depthFrameCount = "depth_frame_count"
         case imuSampleCount = "imu_sample_count"
+        case videoCount = "video_count"
         case usesLidar = "uses_lidar"
         case usesARKitMesh = "uses_arkit_mesh"
+        case usesVideo = "uses_video"
         case createdAt = "created_at"
         case limitations
     }

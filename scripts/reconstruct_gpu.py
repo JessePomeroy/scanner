@@ -186,6 +186,7 @@ def validation_summary(report: Any) -> dict[str, Any] | None:
     return {
         "image_count": report.image_count,
         "frame_count": report.frame_count,
+        "video_count": report.video_count,
         "scan_mode": report.scan_mode,
         "object_center_world": report.object_center_world,
         "object_radius_meters": report.object_radius_meters,

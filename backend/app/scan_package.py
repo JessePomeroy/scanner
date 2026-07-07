@@ -95,12 +95,14 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
     metadata_dir.mkdir(parents=True, exist_ok=True)
     session = _read_json_object(metadata_dir / "session.json")
     frames = _read_json_array(metadata_dir / "frames.json")
+    video_metadata = _read_json_array(metadata_dir / "video.json")
     image_files = sorted((scan_root / "images").glob("*"))
     depth_files = sorted((scan_root / "depth").glob("*")) if (scan_root / "depth").is_dir() else []
+    video_files = sorted((scan_root / "video").glob("*")) if (scan_root / "video").is_dir() else []
     motion_path = metadata_dir / "imu.json"
 
     manifest = {
-        "schema_version": "0.2.0",
+        "schema_version": "0.3.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scan_id": validation.scan_id,
         "scan_mode": validation.scan_mode,
@@ -110,8 +112,10 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
         "file_counts": {
             "images": len([path for path in image_files if path.is_file()]),
             "depth": len([path for path in depth_files if path.is_file()]),
+            "videos": len([path for path in video_files if path.is_file()]),
             "frames": len(frames),
             "imu_samples": len(_read_json_array(motion_path)) if motion_path.exists() else 0,
+            "video_metadata_entries": len(video_metadata),
         },
         "sensors": {
             "camera": True,
@@ -119,6 +123,7 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
             "lidar_depth": bool(session.get("uses_lidar")),
             "arkit_mesh": bool(session.get("uses_arkit_mesh")),
             "imu": motion_path.exists(),
+            "video": bool(video_metadata) or validation.video_count > 0,
         },
         "object_scan": {
             "object_center_world": validation.object_center_world,
@@ -126,6 +131,7 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
         },
         "limitations": [
             "depth frames are optional and absent on non-LiDAR devices",
+            "video capture is optional and may be absent from photogrammetry-first scans",
             "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
             "dense reconstruction requires a CUDA-capable COLMAP build",
         ],
