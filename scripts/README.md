@@ -17,3 +17,15 @@ Current entry points:
 - `plan_object_crop.py`: inspect object-scan tap/radius metadata and print the
   next manual crop command.
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.
+- `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
+  source to round-trip the custom ZIP writer through Python `zipfile`.
+
+Run the ZIP writer verifier from the repo root:
+
+```bash
+swiftc ios/ScannerApp/ScanMetadataModels.swift \
+  ios/ScannerApp/MetadataWriter.swift \
+  ios/ScannerApp/ScanPackageWriter.swift \
+  scripts/verify_scan_zip_writer.swift \
+  -o /tmp/verify_scan_zip_writer && /tmp/verify_scan_zip_writer
+```

@@ -121,6 +121,9 @@ Swipe a scan row or use `Edit` to delete a package. Deleting from the gallery
 removes both the exported `.zip` and the matching extracted scan folder from the
 device.
 
+Scan package ZIP creation streams file contents to disk. This keeps export
+memory lower for packages that include `video/scan.mov` or many keyframes.
+
 ## Backend Job Status
 
 The local FastAPI backend stores job records under `scans/jobs/`. Query a single

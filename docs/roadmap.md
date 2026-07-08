@@ -58,18 +58,23 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Write `metadata/manifest.json` with schema version, app version, capture
      mode, enabled sensors, file counts, and known processing limitations.
 
-4. Add a video capture export mode. Status: implemented initial pass.
+4. Stream scan ZIP exports. Status: implemented.
+   - Write ZIP headers and file contents directly to disk.
+   - Avoid holding full scan archives or large video files in memory during
+     export.
+
+5. Add a video capture export mode. Status: implemented initial pass.
    - Record `video/scan.mov` from the live ARFrame camera stream alongside
      keyframes.
-   - Cap initial video capture at 30 seconds until ZIP export streams large
-     files instead of building the archive in memory.
+   - Keep the initial 30-second video cap until phone testing proves longer
+     recordings export reliably.
    - Keep the video mode secondary to high-resolution stills for textured mesh
      quality.
    - Use video exports for neural reconstruction experiments such as
      MASt3R-SLAM, Lingbot-style point-cloud generation, and future splat/NSR
      tests.
 
-5. Replace ARFrame JPEG capture with high-resolution still capture.
+6. Replace ARFrame JPEG capture with high-resolution still capture.
    - Use `AVCapturePhotoOutput` for source images intended for photogrammetry.
    - Keep ARFrame image capture available as a fallback/debug path.
    - Preserve ARKit pose, intrinsics, IMU, and lighting metadata for each

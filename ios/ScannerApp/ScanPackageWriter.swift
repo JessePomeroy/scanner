@@ -103,15 +103,28 @@ final class ScanPackageWriter {
         let destinationURL = scanDirectory
             .deletingPathExtension()
             .appendingPathExtension("zip")
+        let temporaryURL = destinationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
 
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
+        do {
+            try ZipArchiveWriter(fileManager: fileManager).writeArchive(
+                sourceDirectory: scanDirectory,
+                destinationURL: temporaryURL
+            )
+
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        } catch {
+            if fileManager.fileExists(atPath: temporaryURL.path) {
+                try? fileManager.removeItem(at: temporaryURL)
+            }
+
+            throw error
         }
-
-        try ZipArchiveWriter(fileManager: fileManager).writeArchive(
-            sourceDirectory: scanDirectory,
-            destinationURL: destinationURL
-        )
 
         return destinationURL
     }
@@ -144,39 +157,33 @@ private struct ZipArchiveWriter {
 
     func writeArchive(sourceDirectory: URL, destinationURL: URL) throws {
         let entries = try archiveURLs(for: sourceDirectory)
-        var archive = Data()
         var centralDirectoryEntries: [Entry] = []
+        var archiveOffset: UInt32 = 0
+
+        _ = fileManager.createFile(atPath: destinationURL.path, contents: nil)
+        let archive = try FileHandle(forWritingTo: destinationURL)
+        defer {
+            try? archive.close()
+        }
 
         for url in entries {
             let isDirectory = try resourceIsDirectory(url)
             let relativePath = try relativeArchivePath(for: url, sourceDirectory: sourceDirectory)
-            let fileData = isDirectory ? Data() : try Data(contentsOf: url)
+            let fileSize = isDirectory ? 0 : try uint32FileSize(url)
+            let crc = isDirectory ? 0 : try CRC32.checksum(fileAt: url)
 
-            guard fileData.count <= UInt32.max else {
-                throw ScanPackageWriterError.unsupportedLargeFile(url)
+            let localHeaderOffset = archiveOffset
+            let encodedPath = try encodedArchivePath(relativePath)
+            let header = localFileHeader(
+                encodedPath: encodedPath,
+                crc: crc,
+                fileSize: fileSize
+            )
+
+            try write(header, to: archive, offset: &archiveOffset)
+            if !isDirectory {
+                try writeFileData(url, to: archive, offset: &archiveOffset)
             }
-            guard archive.count <= UInt32.max else {
-                throw ScanPackageWriterError.unsupportedLargeArchive
-            }
-
-            let crc = CRC32.checksum(fileData)
-            let fileSize = UInt32(fileData.count)
-            let localHeaderOffset = UInt32(archive.count)
-            let encodedPath = Data(relativePath.utf8)
-
-            archive.appendUInt32(0x04034b50)
-            archive.appendUInt16(20)
-            archive.appendUInt16(0x0800)
-            archive.appendUInt16(0)
-            archive.appendUInt16(0)
-            archive.appendUInt16(33)
-            archive.appendUInt32(crc)
-            archive.appendUInt32(fileSize)
-            archive.appendUInt32(fileSize)
-            archive.appendUInt16(UInt16(encodedPath.count))
-            archive.appendUInt16(0)
-            archive.append(encodedPath)
-            archive.append(fileData)
 
             centralDirectoryEntries.append(
                 Entry(
@@ -190,53 +197,137 @@ private struct ZipArchiveWriter {
             )
         }
 
-        guard archive.count <= UInt32.max else {
-            throw ScanPackageWriterError.unsupportedLargeArchive
-        }
-
-        let centralDirectoryOffset = UInt32(archive.count)
+        let centralDirectoryOffset = archiveOffset
 
         for entry in centralDirectoryEntries {
-            let encodedPath = Data(entry.path.utf8)
-            let externalAttributes: UInt32 = entry.isDirectory ? 0x10 : 0
-
-            archive.appendUInt32(0x02014b50)
-            archive.appendUInt16(20)
-            archive.appendUInt16(20)
-            archive.appendUInt16(0x0800)
-            archive.appendUInt16(0)
-            archive.appendUInt16(0)
-            archive.appendUInt16(33)
-            archive.appendUInt32(entry.crc32)
-            archive.appendUInt32(entry.compressedSize)
-            archive.appendUInt32(entry.uncompressedSize)
-            archive.appendUInt16(UInt16(encodedPath.count))
-            archive.appendUInt16(0)
-            archive.appendUInt16(0)
-            archive.appendUInt16(0)
-            archive.appendUInt16(0)
-            archive.appendUInt32(externalAttributes)
-            archive.appendUInt32(entry.localHeaderOffset)
-            archive.append(encodedPath)
+            try write(
+                try centralDirectoryHeader(for: entry),
+                to: archive,
+                offset: &archiveOffset
+            )
         }
 
-        guard archive.count <= UInt32.max else {
+        let centralDirectorySize = archiveOffset - centralDirectoryOffset
+        let endRecord = try endOfCentralDirectoryRecord(
+            entryCount: centralDirectoryEntries.count,
+            centralDirectorySize: centralDirectorySize,
+            centralDirectoryOffset: centralDirectoryOffset
+        )
+        try write(endRecord, to: archive, offset: &archiveOffset)
+    }
+
+    private func localFileHeader(encodedPath: Data, crc: UInt32, fileSize: UInt32) -> Data {
+        var header = Data()
+        header.appendUInt32(0x04034b50)
+        header.appendUInt16(20)
+        header.appendUInt16(0x0800)
+        header.appendUInt16(0)
+        header.appendUInt16(0)
+        header.appendUInt16(33)
+        header.appendUInt32(crc)
+        header.appendUInt32(fileSize)
+        header.appendUInt32(fileSize)
+        header.appendUInt16(UInt16(encodedPath.count))
+        header.appendUInt16(0)
+        header.append(encodedPath)
+        return header
+    }
+
+    private func centralDirectoryHeader(for entry: Entry) throws -> Data {
+        let encodedPath = try encodedArchivePath(entry.path)
+        let externalAttributes: UInt32 = entry.isDirectory ? 0x10 : 0
+        var header = Data()
+
+        header.appendUInt32(0x02014b50)
+        header.appendUInt16(20)
+        header.appendUInt16(20)
+        header.appendUInt16(0x0800)
+        header.appendUInt16(0)
+        header.appendUInt16(0)
+        header.appendUInt16(33)
+        header.appendUInt32(entry.crc32)
+        header.appendUInt32(entry.compressedSize)
+        header.appendUInt32(entry.uncompressedSize)
+        header.appendUInt16(UInt16(encodedPath.count))
+        header.appendUInt16(0)
+        header.appendUInt16(0)
+        header.appendUInt16(0)
+        header.appendUInt16(0)
+        header.appendUInt32(externalAttributes)
+        header.appendUInt32(entry.localHeaderOffset)
+        header.append(encodedPath)
+        return header
+    }
+
+    private func encodedArchivePath(_ path: String) throws -> Data {
+        let encodedPath = Data(path.utf8)
+        guard encodedPath.count <= UInt16.max else {
             throw ScanPackageWriterError.unsupportedLargeArchive
         }
 
-        let centralDirectorySize = UInt32(archive.count) - centralDirectoryOffset
-        let entryCount = UInt16(centralDirectoryEntries.count)
+        return encodedPath
+    }
 
-        archive.appendUInt32(0x06054b50)
-        archive.appendUInt16(0)
-        archive.appendUInt16(0)
-        archive.appendUInt16(entryCount)
-        archive.appendUInt16(entryCount)
-        archive.appendUInt32(centralDirectorySize)
-        archive.appendUInt32(centralDirectoryOffset)
-        archive.appendUInt16(0)
+    private func endOfCentralDirectoryRecord(
+        entryCount: Int,
+        centralDirectorySize: UInt32,
+        centralDirectoryOffset: UInt32
+    ) throws -> Data {
+        guard entryCount <= UInt16.max else {
+            throw ScanPackageWriterError.unsupportedLargeArchive
+        }
 
-        try archive.write(to: destinationURL, options: [.atomic])
+        let entryCount = UInt16(entryCount)
+        var record = Data()
+        record.appendUInt32(0x06054b50)
+        record.appendUInt16(0)
+        record.appendUInt16(0)
+        record.appendUInt16(entryCount)
+        record.appendUInt16(entryCount)
+        record.appendUInt32(centralDirectorySize)
+        record.appendUInt32(centralDirectoryOffset)
+        record.appendUInt16(0)
+        return record
+    }
+
+    private func write(_ data: Data, to archive: FileHandle, offset: inout UInt32) throws {
+        try advanceOffset(by: UInt64(data.count), offset: &offset)
+        try archive.write(contentsOf: data)
+    }
+
+    private func writeFileData(_ url: URL, to archive: FileHandle, offset: inout UInt32) throws {
+        let source = try FileHandle(forReadingFrom: url)
+        defer {
+            try? source.close()
+        }
+
+        while true {
+            let data = try source.read(upToCount: 1024 * 1024) ?? Data()
+            if data.isEmpty {
+                break
+            }
+
+            try write(data, to: archive, offset: &offset)
+        }
+    }
+
+    private func uint32FileSize(_ url: URL) throws -> UInt32 {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        guard let fileSize = values.fileSize,
+              fileSize >= 0,
+              fileSize <= UInt32.max else {
+            throw ScanPackageWriterError.unsupportedLargeFile(url)
+        }
+
+        return UInt32(fileSize)
+    }
+
+    private func advanceOffset(by byteCount: UInt64, offset: inout UInt32) throws {
+        guard UInt64(offset) + byteCount <= UInt64(UInt32.max) else {
+            throw ScanPackageWriterError.unsupportedLargeArchive
+        }
+
+        offset += UInt32(byteCount)
     }
 
     private func archiveURLs(for sourceDirectory: URL) throws -> [URL] {
@@ -296,12 +387,34 @@ private enum CRC32 {
     static func checksum(_ data: Data) -> UInt32 {
         var crc: UInt32 = 0xffffffff
 
+        update(&crc, with: data)
+        return crc ^ 0xffffffff
+    }
+
+    static func checksum(fileAt url: URL) throws -> UInt32 {
+        let file = try FileHandle(forReadingFrom: url)
+        defer {
+            try? file.close()
+        }
+
+        var crc: UInt32 = 0xffffffff
+        while true {
+            let data = try file.read(upToCount: 1024 * 1024) ?? Data()
+            if data.isEmpty {
+                break
+            }
+
+            update(&crc, with: data)
+        }
+
+        return crc ^ 0xffffffff
+    }
+
+    private static func update(_ crc: inout UInt32, with data: Data) {
         for byte in data {
             let index = Int((crc ^ UInt32(byte)) & 0xff)
             crc = table[index] ^ (crc >> 8)
         }
-
-        return crc ^ 0xffffffff
     }
 }
 
