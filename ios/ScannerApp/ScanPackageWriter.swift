@@ -103,15 +103,28 @@ final class ScanPackageWriter {
         let destinationURL = scanDirectory
             .deletingPathExtension()
             .appendingPathExtension("zip")
+        let temporaryURL = destinationURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
 
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
+        do {
+            try ZipArchiveWriter(fileManager: fileManager).writeArchive(
+                sourceDirectory: scanDirectory,
+                destinationURL: temporaryURL
+            )
+
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+
+            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+        } catch {
+            if fileManager.fileExists(atPath: temporaryURL.path) {
+                try? fileManager.removeItem(at: temporaryURL)
+            }
+
+            throw error
         }
-
-        try ZipArchiveWriter(fileManager: fileManager).writeArchive(
-            sourceDirectory: scanDirectory,
-            destinationURL: destinationURL
-        )
 
         return destinationURL
     }
