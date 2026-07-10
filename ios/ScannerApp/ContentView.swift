@@ -12,6 +12,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("Scans", systemImage: "archivebox")
                 }
+
+            ProcessingHistoryView()
+                .tabItem {
+                    Label("Jobs", systemImage: "clock.arrow.circlepath")
+                }
         }
     }
 }

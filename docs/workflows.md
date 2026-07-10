@@ -151,6 +151,21 @@ Each job record includes:
 - `image_count`, `frame_count`, and `outputs`: final capture counts and output
   paths when available.
 
+The iOS app's `Jobs` tab consumes this list through a persisted, editable
+backend URL. Pull to refresh or use the refresh button. The initial URL is
+`http://localhost:8000`, which is useful for simulator development. On a
+physical iPhone, run the backend on the same trusted LAN with:
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0
+```
+
+Then enter `http://<workstation-lan-ip>:8000`. The app requests local-network
+permission and the client rejects cleartext HTTP unless the host is loopback, a
+private/link-local IP address, `.local`, or `.home.arpa`; HTTPS remains supported
+for other hosts. The backend has no authentication yet, so never expose this
+listener to the public internet or an untrusted network.
+
 The backend rejects attempts to restart terminal jobs and writes each job JSON
 record through a temporary sibling file followed by an atomic replacement.
 Concurrent status reads therefore see either the previous complete record or

@@ -22,6 +22,13 @@
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scanner uses the camera to capture images and AR tracking data for 3D reconstruction.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Scanner connects to your Mac or PC to show local reconstruction job status.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

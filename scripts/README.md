@@ -19,6 +19,8 @@ Current entry points:
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.
 - `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
   source to round-trip the custom ZIP writer through Python `zipfile`.
+- `verify_reconstruction_job_client.swift`: exercise the iOS job client through
+  mock HTTP and in-memory adapters.
 
 Run the ZIP writer verifier from the repo root:
 
@@ -28,4 +30,15 @@ swiftc ios/ScannerApp/ScanMetadataModels.swift \
   ios/ScannerApp/ScanPackageWriter.swift \
   scripts/verify_scan_zip_writer.swift \
   -o /tmp/verify_scan_zip_writer && /tmp/verify_scan_zip_writer
+```
+
+Run the reconstruction job client verifier from the repo root:
+
+```bash
+xcrun swiftc \
+  ios/ScannerApp/ReconstructionJobClient.swift \
+  ios/ScannerApp/ReconstructionJobStore.swift \
+  scripts/verify_reconstruction_job_client.swift \
+  -o /tmp/verify_reconstruction_job_client
+/tmp/verify_reconstruction_job_client
 ```
