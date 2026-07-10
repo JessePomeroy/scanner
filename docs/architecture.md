@@ -23,6 +23,13 @@ URLSession adapter reads the owned FastAPI status contract in production, while
 an in-memory adapter and mock-HTTP verifier exercise the same interface without
 a live backend.
 
+The iOS gallery upload path similarly depends on a `ScanUploading` interface.
+The HTTP adapter reuses the job model and shared backend URL policy, builds a
+multipart body from the ZIP in bounded chunks on a background task, and uploads
+the temporary body file through a small transport seam. The upload store owns
+one-at-a-time UI state and notices; the gallery owns user actions and prevents
+deleting the ZIP while it is being prepared or uploaded.
+
 The first end-to-end target is:
 
 1. iPhone creates `scan_id.zip`.

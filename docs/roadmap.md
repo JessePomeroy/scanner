@@ -232,7 +232,8 @@ should not block the production COLMAP/OpenMVS path.
 - Job status UI. Status: implemented initial read-only history.
   - Persist a configurable local backend URL on device.
   - Show recent job status, stage, message, capture counts, and update time.
-- Upload to local workstation or cloud worker.
+- Upload to local workstation or cloud worker. Status: implemented initial
+  validation-only local-workstation upload from the iOS scan gallery.
 - Result download/share UI.
 - Basic point cloud preview.
 - Blender helper scripts for import, cleanup, decimation, and export variants.

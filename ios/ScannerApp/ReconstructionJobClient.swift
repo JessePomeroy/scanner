@@ -174,17 +174,8 @@ enum ReconstructionJobClientError: LocalizedError, Equatable {
     }
 }
 
-struct HTTPReconstructionJobClient: ReconstructionJobLoading {
-    private let session: URLSession
-
-    init(session: URLSession = .shared) {
-        self.session = session
-    }
-
-    func listJobs(baseURL: URL, limit: Int = 50) async throws -> [ReconstructionJob] {
-        guard (1...200).contains(limit) else {
-            throw ReconstructionJobClientError.invalidLimit
-        }
+enum ReconstructionBackendEndpoint {
+    static func scansURL(baseURL: URL) throws -> URL {
         guard let scheme = baseURL.scheme?.lowercased(),
               ["http", "https"].contains(scheme),
               let host = baseURL.host,
@@ -192,37 +183,10 @@ struct HTTPReconstructionJobClient: ReconstructionJobLoading {
               baseURL.fragment == nil else {
             throw ReconstructionJobClientError.invalidBaseURL
         }
-        if scheme == "http" && !Self.isLocalHost(host) {
+        if scheme == "http" && !isLocalHost(host) {
             throw ReconstructionJobClientError.insecureNonLocalURL
         }
-
-        let scansURL = baseURL.appendingPathComponent("scans", isDirectory: false)
-        guard var components = URLComponents(url: scansURL, resolvingAgainstBaseURL: false) else {
-            throw ReconstructionJobClientError.invalidBaseURL
-        }
-        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-        guard let endpoint = components.url else {
-            throw ReconstructionJobClientError.invalidBaseURL
-        }
-
-        var request = URLRequest(url: endpoint)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 15
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, response) = try await session.data(for: request)
-        guard let response = response as? HTTPURLResponse else {
-            throw ReconstructionJobClientError.invalidResponse
-        }
-        guard (200...299).contains(response.statusCode) else {
-            throw ReconstructionJobClientError.httpStatus(response.statusCode)
-        }
-
-        do {
-            return try JSONDecoder().decode([ReconstructionJob].self, from: data)
-        } catch {
-            throw ReconstructionJobClientError.invalidPayload
-        }
+        return baseURL.appendingPathComponent("scans", isDirectory: false)
     }
 
     private static func isLocalHost(_ rawHost: String) -> Bool {
@@ -257,6 +221,48 @@ struct HTTPReconstructionJobClient: ReconstructionJobLoading {
             || host.hasPrefix("fea")
             || host.hasPrefix("feb")
     }
+}
+
+struct HTTPReconstructionJobClient: ReconstructionJobLoading {
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func listJobs(baseURL: URL, limit: Int = 50) async throws -> [ReconstructionJob] {
+        guard (1...200).contains(limit) else {
+            throw ReconstructionJobClientError.invalidLimit
+        }
+        let scansURL = try ReconstructionBackendEndpoint.scansURL(baseURL: baseURL)
+        guard var components = URLComponents(url: scansURL, resolvingAgainstBaseURL: false) else {
+            throw ReconstructionJobClientError.invalidBaseURL
+        }
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        guard let endpoint = components.url else {
+            throw ReconstructionJobClientError.invalidBaseURL
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: request)
+        guard let response = response as? HTTPURLResponse else {
+            throw ReconstructionJobClientError.invalidResponse
+        }
+        guard (200...299).contains(response.statusCode) else {
+            throw ReconstructionJobClientError.httpStatus(response.statusCode)
+        }
+
+        do {
+            return try JSONDecoder().decode([ReconstructionJob].self, from: data)
+        } catch {
+            throw ReconstructionJobClientError.invalidPayload
+        }
+    }
+
 }
 
 struct InMemoryReconstructionJobClient: ReconstructionJobLoading {

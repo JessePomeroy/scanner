@@ -1,9 +1,17 @@
 import SwiftUI
 
 struct ScanGalleryView: View {
+    @AppStorage("scanner.backendBaseURL") private var backendURLString = "http://localhost:8000"
     @StateObject private var gallery = ScanGalleryStore()
+    @StateObject private var uploadStore: ScanUploadStore
     @State private var shareURL: URL?
     @State private var deletionError: String?
+
+    init(uploadClient: ScanUploading = HTTPScanUploadClient()) {
+        _uploadStore = StateObject(
+            wrappedValue: ScanUploadStore(client: uploadClient)
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -16,10 +24,8 @@ struct ScanGalleryView: View {
                     )
                 } else {
                     List {
-                        ForEach(gallery.scans) { scan in
-                            Button {
-                                shareURL = scan.url
-                            } label: {
+                        Section {
+                            ForEach(gallery.scans) { scan in
                                 HStack(spacing: 12) {
                                     Image(systemName: "archivebox")
                                         .foregroundStyle(.blue)
@@ -40,15 +46,40 @@ struct ScanGalleryView: View {
 
                                     Spacer(minLength: 0)
 
-                                    Image(systemName: "square.and.arrow.up")
-                                        .foregroundStyle(.secondary)
+                                    if uploadStore.isUploading(scan.url) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .accessibilityLabel("Uploading \(scan.displayName)")
+                                    } else {
+                                        Button {
+                                            Task {
+                                                await uploadStore.upload(
+                                                    archiveURL: scan.url,
+                                                    baseURLString: backendURLString
+                                                )
+                                            }
+                                        } label: {
+                                            Image(systemName: "icloud.and.arrow.up")
+                                        }
+                                        .disabled(uploadStore.isUploading)
+                                        .buttonStyle(.borderless)
+                                        .accessibilityLabel("Upload \(scan.displayName)")
+                                    }
+
+                                    Button {
+                                        shareURL = scan.url
+                                    } label: {
+                                        Image(systemName: "square.and.arrow.up")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Share \(scan.displayName)")
                                 }
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Share \(scan.displayName)")
+                            .onDelete(perform: deleteScans)
+                        } footer: {
+                            Text("Uploads use the backend URL configured in the Jobs tab: \(backendURLString)")
                         }
-                        .onDelete(perform: deleteScans)
                     }
                     .refreshable {
                         gallery.refresh()
@@ -104,12 +135,34 @@ struct ScanGalleryView: View {
             } message: {
                 Text(deletionError ?? "The scan could not be removed from this device.")
             }
+            .alert(
+                uploadStore.notice?.title ?? "Scan Upload",
+                isPresented: Binding(
+                    get: { uploadStore.notice != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            uploadStore.clearNotice()
+                        }
+                    }
+                )
+            ) {
+                Button("OK", role: .cancel) {
+                    uploadStore.clearNotice()
+                }
+            } message: {
+                Text(uploadStore.notice?.message ?? "")
+            }
         }
     }
 
     private func deleteScans(at offsets: IndexSet) {
         let deletedURLs = offsets.compactMap { index in
             gallery.scans.indices.contains(index) ? gallery.scans[index].url : nil
+        }
+        if let uploadingURL = uploadStore.uploadingArchiveURL,
+           deletedURLs.contains(uploadingURL) {
+            deletionError = "Wait for the current upload to finish before deleting this scan."
+            return
         }
 
         do {

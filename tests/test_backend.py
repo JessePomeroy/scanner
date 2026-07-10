@@ -998,9 +998,10 @@ class BackendTests(unittest.TestCase):
 
             successes = [result for result in results if isinstance(result, int)]
             collisions = [result for result in results if isinstance(result, FileExistsError)]
-            self.assertEqual(successes, [5])
+            published = destination.read_bytes()
+            self.assertEqual(successes, [len(published)])
             self.assertEqual(len(collisions), 1)
-            self.assertIn(destination.read_bytes(), {b"first", b"second"})
+            self.assertIn(published, {b"first", b"second"})
             self.assertEqual(list(Path(tmp).glob(".scan.zip.*.part")), [])
 
     def test_store_upload_cancellation_does_not_delete_foreign_replacement(self) -> None:
