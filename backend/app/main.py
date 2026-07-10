@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 
 from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
+from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobStore
 from app.openmvs_runner import run_openmvs_pipeline
 from app.scan_package import validate_and_report_scan
@@ -28,7 +29,12 @@ from app.storage import UnsafeArchiveError, safe_extract_zip
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    jobs.reconcile_interrupted()
+    reconcile_interrupted_jobs(
+        jobs,
+        processing_dir=PROCESSING_DIR,
+        completed_dir=COMPLETED_DIR,
+        failed_dir=FAILED_DIR,
+    )
     yield
 
 

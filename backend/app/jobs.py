@@ -138,24 +138,14 @@ class JobStore:
         with self._lock:
             return self._list_records(limit=limit)
 
-    def reconcile_interrupted(self) -> list[JobRecord]:
-        """Fail jobs that cannot resume after the previous backend process exited."""
+    def list_active(self) -> list[JobRecord]:
+        """Return every non-terminal job for startup reconciliation."""
         with self._lock:
-            reconciled: list[JobRecord] = []
-            for record in self._list_records(limit=None):
-                if record.status not in {"received", "processing"}:
-                    continue
-                reconciled.append(
-                    self.update(
-                        record.scan_id,
-                        status="failed",
-                        message=(
-                            "Backend restarted before the job finished. "
-                            "Submit the scan again to retry."
-                        ),
-                    )
-                )
-            return reconciled
+            return [
+                record
+                for record in self._list_records(limit=None)
+                if record.status in {"received", "processing"}
+            ]
 
     def _list_records(self, *, limit: int | None) -> list[JobRecord]:
         records: list[tuple[float, JobRecord]] = []
@@ -212,6 +202,8 @@ class JobStore:
         stage: JobStage | None,
     ) -> JobStage | None:
         if status in _TERMINAL_STATUSES:
+            if status == current.status:
+                return "finished"
             if status == "validated" and current.stage not in {"validating", None}:
                 raise JobTransitionError(
                     f"Cannot validate job {current.scan_id} from stage {current.stage}"

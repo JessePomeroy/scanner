@@ -25,6 +25,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
@@ -681,6 +682,30 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(JobTransitionError):
                 store.update("scan-1", status="complete")
 
+    def test_job_store_terminal_updates_are_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("validated")
+            store.update("validated", status="processing", stage="validating")
+            store.update("validated", status="validated")
+
+            store.create("complete")
+            store.update("complete", status="processing", stage="validating")
+            store.update("complete", status="processing", stage="reconstructing")
+            store.update("complete", status="processing", stage="exporting")
+            store.update("complete", status="complete")
+
+            store.create("failed")
+            store.update("failed", status="failed")
+
+            validated = store.update("validated", status="validated", message="still valid")
+            complete = store.update("complete", status="complete", message="still complete")
+            failed = store.update("failed", status="failed", message="still failed")
+
+        self.assertEqual(validated.stage, "finished")
+        self.assertEqual(complete.stage, "finished")
+        self.assertEqual(failed.stage, "finished")
+
     def test_job_store_failed_write_preserves_last_valid_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = JobStore(Path(tmp))
@@ -766,31 +791,67 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(final_record.status, "complete")
         self.assertEqual(final_record.stage, "finished")
 
-    def test_job_store_reconciles_interrupted_jobs_after_restart(self) -> None:
+    def test_job_recovery_preserves_partial_and_recovers_completed_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            jobs_dir = Path(tmp)
+            root = Path(tmp)
+            jobs_dir = root / "jobs"
+            processing_dir = root / "processing"
+            completed_dir = root / "completed"
+            failed_dir = root / "failed"
+            for directory in [jobs_dir, processing_dir, completed_dir, failed_dir]:
+                directory.mkdir(parents=True)
+
             store = JobStore(jobs_dir)
-            store.create("received")
-            store.create("processing")
-            store.update("processing", status="processing", stage="validating")
+            store.create("partial")
+            store.update("partial", status="processing", stage="validating")
+            partial_path = processing_dir / "partial"
+            partial_path.mkdir()
+            (partial_path / "partial-output.txt").write_text("keep me")
+            existing_failed_path = failed_dir / "partial"
+            existing_failed_path.mkdir()
+            (existing_failed_path / "earlier-failure.txt").write_text("keep this too")
+
+            store.create("validated")
+            store.update("validated", status="processing", stage="validating")
+            self._write_scan(completed_dir / "validated")
+
             store.create("complete")
             store.update("complete", status="processing", stage="validating")
             store.update("complete", status="processing", stage="reconstructing")
             store.update("complete", status="processing", stage="exporting")
-            store.update("complete", status="complete")
+            self._write_scan(completed_dir / "complete")
 
-            restarted_store = JobStore(jobs_dir)
-            reconciled = restarted_store.reconcile_interrupted()
+            reconciled = reconcile_interrupted_jobs(
+                store,
+                processing_dir=processing_dir,
+                completed_dir=completed_dir,
+                failed_dir=failed_dir,
+            )
 
-            received = restarted_store.read("received")
-            processing = restarted_store.read("processing")
-            complete = restarted_store.read("complete")
+            partial = store.read("partial")
+            validated = store.read("validated")
+            complete = store.read("complete")
 
-        self.assertEqual({record.scan_id for record in reconciled}, {"received", "processing"})
-        self.assertEqual(received.status, "failed")
-        self.assertEqual(processing.status, "failed")
-        self.assertIn("restarted", processing.message)
-        self.assertEqual(complete.status, "complete")
+            self.assertEqual(
+                {record.scan_id for record in reconciled},
+                {"partial", "validated", "complete"},
+            )
+            self.assertEqual(partial.status, "failed")
+            self.assertTrue((existing_failed_path / "earlier-failure.txt").is_file())
+            moved_partial_path = failed_dir / "partial-interrupted-1"
+            self.assertTrue((moved_partial_path / "partial-output.txt").is_file())
+            self.assertEqual(partial.outputs["package_dir"], str(moved_partial_path))
+            self.assertEqual(validated.status, "validated")
+            self.assertEqual(
+                validated.outputs["package_dir"],
+                str(completed_dir / "validated"),
+            )
+            self.assertEqual(complete.status, "complete")
+            self.assertEqual(complete.image_count, 1)
+            self.assertEqual(
+                complete.outputs["package_dir"],
+                str(completed_dir / "complete"),
+            )
 
     def test_job_store_rejects_unsafe_scan_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -96,8 +96,11 @@ valid JSON record readable.
 
 The local backend uses in-process background tasks and should run as one process
 per scans directory. After a backend restart, unfinished records are marked
-failed rather than silently appearing active or attempting an unsafe automatic
-resume; their uploaded ZIP files remain available for inspection.
+failed and partial workspaces are preserved under `scans/failed/` rather than
+silently appearing active or attempting an unsafe automatic resume. If a valid
+workspace had already reached `scans/completed/`, its terminal record and
+download path are restored. Uploaded ZIP files also remain available for
+inspection.
 
 List recent jobs:
 

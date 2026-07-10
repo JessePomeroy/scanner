@@ -160,8 +160,12 @@ Reconstruction currently runs as an in-process FastAPI background task. Run a
 single backend process for each `SCANNER_SCANS_DIR`; the job store serializes
 threads within that process but is not a multi-process queue. On startup, any
 job left in `received` or `processing` is marked `failed` with an interruption
-message. Processing does not resume automatically, but the uploaded ZIP remains
-in `scans/incoming/` so it can be inspected before the scan is submitted again.
+message. Partial processing directories move to `scans/failed/` without
+overwriting an existing failed directory. If processing had already moved a
+valid package to `scans/completed/`, startup restores the matching `validated`
+or `complete` record and its download path. Processing does not resume
+automatically, and the uploaded ZIP remains in `scans/incoming/` so it can be
+inspected before the scan is submitted again.
 
 ## Windows GPU Workflow
 
