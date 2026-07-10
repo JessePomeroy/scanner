@@ -332,6 +332,56 @@ struct VerifyReconstructionArtifactClient {
             "Expected sheet dismissal to remove its released file asynchronously"
         )
 
+        try require(
+            artifacts[0].supportsPointCloudPreview,
+            "Expected case-insensitive PLY preview eligibility"
+        )
+        try artifactBytes.write(to: storeFile)
+        await store.download(
+            artifacts[0],
+            scanID: "scan-1",
+            baseURLString: "https://example.com",
+            destination: .pointCloudPreview
+        )
+        try require(
+            store.previewedDownload?.fileURL == storeFile && store.sharedDownload == nil,
+            "Expected point-cloud preview handoff"
+        )
+        store.dismissPreviewedDownload()
+        try require(
+            store.previewedDownload == nil,
+            "Expected preview dismissal to clear presentation state synchronously"
+        )
+        try await Task.sleep(nanoseconds: 25_000_000)
+        let previewDiscardedURLs = await discardCapture.snapshot()
+        try require(
+            previewDiscardedURLs == [storeFile, storeFile, storeFile],
+            "Expected preview dismissal to remove its temporary artifact"
+        )
+
+        let reportArtifact = ReconstructionArtifact(
+            name: "scan_report",
+            relativePath: "scan_report.json",
+            filename: "scan_report.json",
+            byteCount: 2,
+            mediaType: "application/json"
+        )
+        try require(
+            !reportArtifact.supportsPointCloudPreview,
+            "Expected non-PLY artifacts to remain share-only"
+        )
+        await store.download(
+            reportArtifact,
+            scanID: "scan-1",
+            baseURLString: "https://example.com",
+            destination: .pointCloudPreview
+        )
+        try require(
+            store.errorMessage == "Only PLY point clouds can be previewed.",
+            "Expected store-level preview type enforcement"
+        )
+        store.clearError()
+
         let lateFile = fileManager.temporaryDirectory
             .appendingPathComponent("artifact-late-\(UUID().uuidString).ply")
         try artifactBytes.write(to: lateFile)

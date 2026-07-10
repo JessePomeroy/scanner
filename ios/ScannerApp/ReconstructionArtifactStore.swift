@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+enum ReconstructionArtifactDownloadDestination: Equatable, Sendable {
+    case share
+    case pointCloudPreview
+}
+
 @MainActor
 final class ReconstructionArtifactStore: ObservableObject {
     @Published private(set) var artifacts: [ReconstructionArtifact] = []
@@ -9,6 +14,7 @@ final class ReconstructionArtifactStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var downloadingArtifactID: ReconstructionArtifact.ID?
     @Published private(set) var sharedDownload: DownloadedReconstructionArtifact?
+    @Published private(set) var previewedDownload: DownloadedReconstructionArtifact?
 
     private let client: any ReconstructionArtifactAccessing
     private var refreshSequence = 0
@@ -59,9 +65,14 @@ final class ReconstructionArtifactStore: ObservableObject {
     func download(
         _ artifact: ReconstructionArtifact,
         scanID: String,
-        baseURLString: String
+        baseURLString: String,
+        destination: ReconstructionArtifactDownloadDestination = .share
     ) async {
         guard downloadingArtifactID == nil else { return }
+        guard destination != .pointCloudPreview || artifact.supportsPointCloudPreview else {
+            errorMessage = "Only PLY point clouds can be previewed."
+            return
+        }
         guard let baseURL = Self.baseURL(from: baseURLString) else {
             errorMessage = ReconstructionJobClientError.invalidBaseURL.localizedDescription
             return
@@ -87,10 +98,20 @@ final class ReconstructionArtifactStore: ObservableObject {
                 await client.discardDownloadedArtifact(download)
                 return
             }
-            if let previous = sharedDownload {
+            let previousDownloads = releasePresentedDownloads()
+            for previous in previousDownloads {
                 await client.discardDownloadedArtifact(previous)
             }
-            sharedDownload = download
+            guard !Task.isCancelled, sequence == downloadSequence else {
+                await client.discardDownloadedArtifact(download)
+                return
+            }
+            switch destination {
+            case .share:
+                sharedDownload = download
+            case .pointCloudPreview:
+                previewedDownload = download
+            }
         } catch is CancellationError {
             guard sequence == downloadSequence else { return }
             errorMessage = "Result download was cancelled."
@@ -117,11 +138,28 @@ final class ReconstructionArtifactStore: ObservableObject {
         }
     }
 
+    func clearPreviewedDownload() async {
+        guard let download = previewedDownload else { return }
+        previewedDownload = nil
+        await client.discardDownloadedArtifact(download)
+    }
+
+    func dismissPreviewedDownload() {
+        guard let download = previewedDownload else { return }
+        previewedDownload = nil
+        Task {
+            await client.discardDownloadedArtifact(download)
+        }
+    }
+
     func deactivate() async {
         downloadSequence += 1
         downloadingArtifactID = nil
         errorMessage = nil
-        await clearSharedDownload()
+        let downloads = releasePresentedDownloads()
+        for download in downloads {
+            await client.discardDownloadedArtifact(download)
+        }
     }
 
     func clearError() {
@@ -148,5 +186,12 @@ final class ReconstructionArtifactStore: ObservableObject {
         isLoading = false
         hasLoaded = true
         errorMessage = error.localizedDescription
+    }
+
+    private func releasePresentedDownloads() -> [DownloadedReconstructionArtifact] {
+        let downloads = [sharedDownload, previewedDownload].compactMap { $0 }
+        sharedDownload = nil
+        previewedDownload = nil
+        return downloads
     }
 }

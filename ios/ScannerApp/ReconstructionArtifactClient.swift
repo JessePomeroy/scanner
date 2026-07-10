@@ -18,6 +18,10 @@ struct ReconstructionArtifact: Decodable, Identifiable, Equatable, Sendable {
         name.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
+    var supportsPointCloudPreview: Bool {
+        (filename as NSString).pathExtension.lowercased() == "ply"
+    }
+
     enum CodingKeys: String, CodingKey {
         case name
         case relativePath = "relative_path"

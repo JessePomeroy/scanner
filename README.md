@@ -69,6 +69,12 @@ sheet. Closing the sheet, leaving the result screen, or cancelling removes that
 temporary copy. A later launch also removes result files abandoned by a
 terminated process.
 
+PLY result rows also offer an in-app point-cloud preview. The loader memory-maps
+the owned temporary file, validates ASCII or little/big-endian binary vertex
+records, and deterministically samples at most 120,000 points for SceneKit.
+Vertex colors are preserved when present. The preview supports orbit, zoom, pan,
+and adjustable point size without changing the downloaded reconstruction.
+
 ## Backend
 
 Create an environment and install dependencies:

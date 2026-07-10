@@ -28,6 +28,9 @@ Current entry points:
 - `verify_reconstruction_artifact_client.swift`: verify typed manifests,
   encoded download URLs, disk handoff, exact-size checks, unsafe-input
   rejection, cancellation, temporary-file cleanup, and result-store state.
+- `verify_ply_point_cloud_loader.swift`: verify bounded ASCII and binary PLY
+  parsing, endian/scalar handling, color normalization, sampling, bounds,
+  malformed-layout rejection, file mapping, and symlink rejection.
 
 Run the ZIP writer verifier from the repo root:
 
@@ -72,4 +75,14 @@ xcrun swiftc -warnings-as-errors \
   scripts/verify_reconstruction_artifact_client.swift \
   -o /tmp/verify_reconstruction_artifact_client
 /tmp/verify_reconstruction_artifact_client
+```
+
+Run the PLY point-cloud loader verifier from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors \
+  ios/ScannerApp/PLYPointCloudLoader.swift \
+  scripts/verify_ply_point_cloud_loader.swift \
+  -o /tmp/verify_ply_point_cloud_loader
+/tmp/verify_ply_point_cloud_loader
 ```

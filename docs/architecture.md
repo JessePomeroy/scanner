@@ -43,6 +43,14 @@ sharing, cancellation, navigation away, and the next launch after an interrupted
 process. The artifact store owns loading and one-at-a-time download state; the
 SwiftUI view owns navigation and share-sheet presentation.
 
+The PLY preview is split at the rendering boundary. `PLYPointCloudLoader` owns
+header interpretation, scalar decoding, coordinate/color validation, sampled
+bounds, deterministic work limits, memory-mapped file access, and cancellation.
+It produces a small renderer-neutral value. `PointCloudPreviewView` converts
+only that bounded value into SceneKit geometry and owns camera gestures and
+point-size controls. The artifact store retains ownership of the downloaded PLY
+until the preview closes, then removes its private temporary directory.
+
 The iOS gallery upload path similarly depends on a `ScanUploading` interface.
 The HTTP adapter reuses the job model and shared backend URL policy, builds a
 multipart body from the ZIP in bounded chunks on a background task, and uploads
