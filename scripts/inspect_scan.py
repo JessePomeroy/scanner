@@ -26,6 +26,9 @@ def main() -> None:
     print(f"scan_mode={report.scan_mode}")
     print(f"images={report.image_count}")
     print(f"frames={report.frame_count}")
+    print(f"videos={report.video_count}")
+    print(f"video_metadata_entries={report.video_metadata_count}")
+    print(f"integrity_warnings={','.join(report.integrity_warnings) or 'none'}")
     print(f"object_center_world={report.object_center_world}")
     print(f"object_radius_meters={report.object_radius_meters}")
 

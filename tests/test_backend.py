@@ -43,7 +43,11 @@ from app.reconstruction_backends import BackendPlanConfig, build_backend_plan  #
 from app.reconstruction_plan import write_command_plan_report  # noqa: E402
 from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
-from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
+from app.scan_validator import (  # noqa: E402
+    ScanValidationError,
+    find_scan_root,
+    validate_scan_package,
+)
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
 
 
@@ -77,6 +81,22 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
 
+    def test_find_scan_root_skips_child_directory_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            external_scan = self._write_scan(root / "external")
+            extracted_dir = root / "extracted"
+            extracted_dir.mkdir()
+            (extracted_dir / "scan_link").symlink_to(external_scan, target_is_directory=True)
+
+            scan_root = find_scan_root(extracted_dir)
+
+            self.assertEqual(scan_root, extracted_dir.resolve())
+            with self.assertRaises(ScanValidationError):
+                validate_and_report_scan(scan_root)
+            self.assertFalse((external_scan / "metadata" / "manifest.json").exists())
+            self.assertFalse((external_scan / "metadata" / "scan_report.json").exists())
+
     def test_validate_scan_package_accepts_optional_video_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
@@ -84,30 +104,26 @@ class BackendTests(unittest.TestCase):
             video_dir.mkdir()
             (video_dir / "scan.mov").write_bytes(b"fake mov")
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "path": "video/scan.mov",
-                            "captured_at": "2026-07-07T00:00:00Z",
-                            "duration_seconds": 12.5,
-                            "frame_rate": 30,
-                            "resolution": [1920, 1080],
-                            "codec": "h264",
-                            "includes_audio": False,
-                        }
-                    ]
-                )
+                json.dumps([self._video_metadata()])
             )
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update({"image_count": 1, "video_count": 1})
+            session_path.write_text(json.dumps(session))
 
             report = validate_scan_package(scan_dir)
 
         self.assertEqual(report.video_count, 1)
+        self.assertEqual(report.video_metadata_count, 1)
+        self.assertEqual(report.session_image_count, 1)
+        self.assertEqual(report.session_video_count, 1)
+        self.assertEqual(report.integrity_warnings, ())
 
     def test_validate_scan_package_rejects_missing_video_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps([{"path": "video/missing.mov"}])
+                json.dumps([self._video_metadata(path="video/missing.mov")])
             )
 
             with self.assertRaises(ScanValidationError):
@@ -120,7 +136,7 @@ class BackendTests(unittest.TestCase):
             video_dir.mkdir()
             (video_dir / "notes.txt").write_text("not a video")
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps([{"path": "video/notes.txt"}])
+                json.dumps([self._video_metadata(path="video/notes.txt")])
             )
 
             with self.assertRaises(ScanValidationError):
@@ -133,11 +149,238 @@ class BackendTests(unittest.TestCase):
             preview_dir.mkdir()
             (preview_dir / "scan.mp4").write_bytes(b"fake mp4")
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps([{"path": "preview/scan.mp4"}])
+                json.dumps([self._video_metadata(path="preview/scan.mp4")])
             )
 
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_frame_reference_outside_images_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image"] = "metadata/session.json"
+            frame_path.write_text(json.dumps(frames))
+
+            with self.assertRaisesRegex(ScanValidationError, "inside the images directory"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_symlinked_owned_directories(self) -> None:
+        for directory_name in ("images", "metadata", "video"):
+            with self.subTest(directory=directory_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scan_dir = self._write_scan(root)
+                owned_path = scan_dir / directory_name
+                external_path = root / f"external_{directory_name}"
+
+                if directory_name == "video":
+                    external_path.mkdir()
+                    (external_path / "legacy.mov").write_bytes(b"fake mov")
+                else:
+                    owned_path.rename(external_path)
+
+                owned_path.symlink_to(external_path, target_is_directory=True)
+
+                with self.assertRaisesRegex(ScanValidationError, "must not be a symbolic link"):
+                    if directory_name == "metadata":
+                        validate_and_report_scan(scan_dir)
+                    else:
+                        validate_scan_package(scan_dir)
+
+                if directory_name == "metadata":
+                    self.assertFalse((external_path / "manifest.json").exists())
+                    self.assertFalse((external_path / "scan_report.json").exists())
+
+    def test_validate_scan_package_rejects_symlinked_metadata_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_dir = self._write_scan(root)
+            frames_path = scan_dir / "metadata" / "frames.json"
+            external_frames = root / "external_frames.json"
+            frames_path.rename(external_frames)
+            frames_path.symlink_to(external_frames)
+
+            with self.assertRaisesRegex(ScanValidationError, "symbolic links: frames.json"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_symlinked_metadata_read_write_targets(self) -> None:
+        for name in (
+            "manifest.json",
+            "processing.json",
+            "imu.json",
+            "scan_report.json",
+            "colmap_openmvs_plan.json",
+            "mast3r_slam_neural_plan.json",
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scan_dir = self._write_scan(root)
+                external_target = root / f"external_{name}"
+                external_target.write_text("external sentinel")
+                (scan_dir / "metadata" / name).symlink_to(external_target)
+
+                with self.assertRaisesRegex(ScanValidationError, f"symbolic links: {name}"):
+                    validate_and_report_scan(scan_dir)
+
+                self.assertEqual(external_target.read_text(), "external sentinel")
+
+    def test_validate_scan_package_rejects_symlinked_optional_capture_files(self) -> None:
+        for directory_name in ("depth", "arkit", "preview"):
+            with self.subTest(directory=directory_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scan_dir = self._write_scan(root)
+                capture_dir = scan_dir / directory_name
+                capture_dir.mkdir()
+                external_file = root / f"external_{directory_name}.bin"
+                external_file.write_bytes(b"external sentinel")
+                (capture_dir / "frame.bin").symlink_to(external_file)
+
+                with self.assertRaisesRegex(ScanValidationError, "symbolic links: frame.bin"):
+                    validate_and_report_scan(scan_dir)
+
+                self.assertEqual(external_file.read_bytes(), b"external sentinel")
+
+    def test_validate_scan_package_rejects_nested_image_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            nested_dir = scan_dir / "images" / "nested"
+            nested_dir.mkdir()
+            image_path = scan_dir / "images" / "frame_000001.jpg"
+            image_path.rename(nested_dir / image_path.name)
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image"] = "images/nested/frame_000001.jpg"
+            frame_path.write_text(json.dumps(frames))
+
+            with self.assertRaisesRegex(ScanValidationError, "must not contain nested directories"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_duplicate_frame_ids_and_image_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            image_path = scan_dir / "images" / "frame_000002.jpg"
+            image_path.write_bytes(b"not a real jpeg")
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            duplicate = dict(frames[0])
+            duplicate["image"] = "images/frame_000002.jpg"
+            frames.append(duplicate)
+            frame_path.write_text(json.dumps(frames))
+
+            with self.assertRaisesRegex(ScanValidationError, "Duplicate frame id"):
+                validate_scan_package(scan_dir)
+
+            frames[1]["id"] = 2
+            frames[1]["image"] = frames[0]["image"]
+            frame_path.write_text(json.dumps(frames))
+
+            with self.assertRaisesRegex(ScanValidationError, "Duplicate image reference"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_invalid_frame_scalar_contract(self) -> None:
+        invalid_values = {
+            "id": True,
+            "timestamp": float("inf"),
+            "resolution": [1920, 0],
+            "blur_score": float("nan"),
+        }
+        for key, value in invalid_values.items():
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                scan_dir = self._write_scan(Path(tmp))
+                frame_path = scan_dir / "metadata" / "frames.json"
+                frames = json.loads(frame_path.read_text())
+                frames[0][key] = value
+                frame_path.write_text(json.dumps(frames))
+
+                with self.assertRaises(ScanValidationError):
+                    validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_non_increasing_frame_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "images" / "frame_000002.jpg").write_bytes(b"not a real jpeg")
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            second = dict(frames[0])
+            second.update({"id": 2, "image": "images/frame_000002.jpg"})
+            frames.append(second)
+            frame_path.write_text(json.dumps(frames))
+
+            with self.assertRaisesRegex(ScanValidationError, "timestamps must increase"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_session_file_count_mismatch(self) -> None:
+        count_fields = {"image_count": 2, "video_count": 1}
+        for key, value in count_fields.items():
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                scan_dir = self._write_scan(Path(tmp))
+                session_path = scan_dir / "metadata" / "session.json"
+                session = json.loads(session_path.read_text())
+                session[key] = value
+                session_path.write_text(json.dumps(session))
+
+                with self.assertRaisesRegex(ScanValidationError, f"{key} .* does not match"):
+                    validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_invalid_video_scalar_contract(self) -> None:
+        invalid_values = {
+            "captured_at": "2026-07-07T00:00:00",
+            "duration_seconds": 0,
+            "frame_rate": float("nan"),
+            "resolution": [1920, -1],
+            "codec": "",
+            "includes_audio": 0,
+        }
+        for key, value in invalid_values.items():
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                scan_dir = self._write_scan(Path(tmp))
+                video_dir = scan_dir / "video"
+                video_dir.mkdir()
+                (video_dir / "scan.mov").write_bytes(b"fake mov")
+                metadata = self._video_metadata()
+                metadata[key] = value
+                (scan_dir / "metadata" / "video.json").write_text(json.dumps([metadata]))
+
+                with self.assertRaises(ScanValidationError):
+                    validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_duplicate_or_unreferenced_video_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mov").write_bytes(b"fake mov")
+            video_path = scan_dir / "metadata" / "video.json"
+            video_path.write_text(json.dumps([self._video_metadata(), self._video_metadata()]))
+
+            with self.assertRaisesRegex(ScanValidationError, "Duplicate video reference"):
+                validate_scan_package(scan_dir)
+
+            video_path.write_text("[]")
+            with self.assertRaisesRegex(ScanValidationError, "without metadata references"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_reports_legacy_video_without_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "legacy.mov").write_bytes(b"fake mov")
+
+            validation = validate_scan_package(scan_dir)
+            report_path = write_scan_report(scan_dir, validation)
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(validation.video_count, 1)
+        self.assertEqual(validation.video_metadata_count, 0)
+        self.assertEqual(validation.integrity_warnings, ("video_metadata_missing",))
+        self.assertEqual(
+            payload["package_integrity"]["validated_image_references"],
+            1,
+        )
+        self.assertEqual(payload["package_integrity"]["warnings"], ["video_metadata_missing"])
+        self.assertIn("video_metadata_missing", payload["warnings"])
 
     def test_colmap_command_sequence_contains_expected_stages(self) -> None:
         commands = build_colmap_commands(Path("/tmp/scan"))
@@ -986,6 +1229,20 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["capture"]["movement_delta_meters"]["max"], 0.12)
         self.assertIn("low_frame_count", payload["warnings"])
 
+    def test_inspect_scan_cli_prints_integrity_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "inspect_scan.py"), str(scan_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertIn("images=1", result.stdout)
+        self.assertIn("video_metadata_entries=0", result.stdout)
+        self.assertIn("integrity_warnings=none", result.stdout)
+
     def test_write_scan_report_marks_object_crop_alignment_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
@@ -1032,6 +1289,22 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(manifest["file_counts"]["videos"], 0)
             self.assertEqual(manifest["file_counts"]["video_metadata_entries"], 0)
             self.assertFalse(manifest["sensors"]["video"])
+
+    def test_manifest_and_neural_plan_ignore_unsupported_image_files_consistently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "images" / "notes.txt").write_text("not a capture image")
+
+            package = validate_and_report_scan(scan_dir)
+            manifest = json.loads(package.manifest_path.read_text())
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="mast3r_slam"),
+            )
+
+        self.assertEqual(package.validation.image_count, 1)
+        self.assertEqual(manifest["file_counts"]["images"], 1)
+        self.assertEqual(plan.inputs["image_count"], 1)
 
     def test_scan_package_records_processing_metadata_in_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1082,7 +1355,7 @@ class BackendTests(unittest.TestCase):
             video_dir.mkdir()
             (video_dir / "scan.mp4").write_bytes(b"fake mp4")
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps([{"path": "video/scan.mp4"}])
+                json.dumps([self._video_metadata(path="video/scan.mp4")])
             )
 
             plan = build_neural_backend_plan(
@@ -1129,7 +1402,7 @@ class BackendTests(unittest.TestCase):
             video_dir.mkdir()
             (video_dir / "scan.mov").write_bytes(b"fake mov")
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps([{"path": "video/scan.mov"}])
+                json.dumps([self._video_metadata()])
             )
 
             plan = build_neural_backend_plan(
@@ -1169,7 +1442,7 @@ class BackendTests(unittest.TestCase):
             video_dir.mkdir()
             (video_dir / "scan.mp4").write_bytes(b"fake mp4")
             (scan_dir / "metadata" / "video.json").write_text(
-                json.dumps([{"path": "video/scan.mp4"}])
+                json.dumps([self._video_metadata(path="video/scan.mp4")])
             )
             self._zip_scan(scan_dir, archive, source_root)
 
@@ -1376,6 +1649,17 @@ class BackendTests(unittest.TestCase):
             json.dumps({"scan_id": "scan_test", "scan_mode": "scene_scan"})
         )
         return scan_dir
+
+    def _video_metadata(self, *, path: str = "video/scan.mov") -> dict[str, object]:
+        return {
+            "path": path,
+            "captured_at": "2026-07-07T00:00:00Z",
+            "duration_seconds": 12.5,
+            "frame_rate": 30,
+            "resolution": [1920, 1080],
+            "codec": "h264",
+            "includes_audio": False,
+        }
 
     def _zip_scan(self, scan_dir: Path, archive: Path, root: Path) -> None:
         if archive.exists():

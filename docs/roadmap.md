@@ -80,6 +80,14 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Preserve ARKit pose, intrinsics, IMU, and lighting metadata for each
      accepted high-resolution photo.
 
+7. Strengthen package metadata integrity. Status: implemented initial pass.
+   - Parse frame, session, and video metadata into typed records.
+   - Reject duplicate, nested, symlinked, or escaping references; invalid scalar
+     values; non-increasing frame timestamps; and declared file-count
+     mismatches.
+   - Report legacy video files without `metadata/video.json` as a compatibility
+     warning instead of silently ignoring the missing metadata.
+
 ## Object Scan Workflow
 
 1. Improve object scan guidance.

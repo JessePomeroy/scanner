@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from app.scan_metadata import (
+    FrameMetadata,
+    ScanMetadataError,
+    VideoMetadata,
+    load_scan_metadata,
+)
 
 
 class ScanValidationError(ValueError):
@@ -13,6 +18,8 @@ class ScanValidationError(ValueError):
 
 
 SUPPORTED_VIDEO_SUFFIXES = {".mov", ".mp4", ".m4v"}
+SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".heic", ".png"}
+OPTIONAL_CAPTURE_DIRECTORIES = ("video", "depth", "arkit", "preview")
 
 
 @dataclass(frozen=True)
@@ -21,17 +28,27 @@ class ScanValidationReport:
     image_count: int
     frame_count: int
     video_count: int
+    video_metadata_count: int
     scan_id: str | None
     scan_mode: str | None
     object_center_world: list[float] | None
     object_radius_meters: float | None
+    session_image_count: int | None
+    session_video_count: int | None
+    integrity_warnings: tuple[str, ...]
 
 
 def find_scan_root(extracted_dir: Path) -> Path:
     """Find the scan folder inside an extracted archive."""
     extracted_dir = extracted_dir.resolve()
     candidates = [extracted_dir]
-    candidates.extend(path for path in extracted_dir.iterdir() if path.is_dir())
+    for path in extracted_dir.iterdir():
+        if path.is_symlink() or not path.is_dir():
+            continue
+        resolved = path.resolve()
+        if extracted_dir not in resolved.parents:
+            continue
+        candidates.append(resolved)
 
     for candidate in candidates:
         if (candidate / "images").is_dir() and (candidate / "metadata").is_dir():
@@ -63,155 +80,211 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         formatted = ", ".join(str(path) for path in missing)
         raise ScanValidationError(f"Missing required scan package paths: {formatted}")
 
-    if not images_dir.is_dir():
-        raise ScanValidationError("images must be a directory")
+    _validate_owned_directory(scan_dir, images_dir, label="images")
+    _validate_owned_directory(scan_dir, metadata_dir, label="metadata")
+    image_files = _validated_flat_files(images_dir, label="images")
+    _validated_flat_files(metadata_dir, label="metadata")
+    capture_files: dict[str, list[Path]] = {}
+    for name in OPTIONAL_CAPTURE_DIRECTORIES:
+        capture_path = scan_dir / name
+        if capture_path.exists() or capture_path.is_symlink():
+            _validate_owned_directory(scan_dir, capture_path, label=name)
+            capture_files[name] = _validated_flat_files(capture_path, label=name)
 
-    frames = _read_json_array(frames_path)
-    session = _read_json_object(session_path)
-    video_metadata_path = metadata_dir / "video.json"
-    video_metadata = _read_json_array(video_metadata_path) if video_metadata_path.exists() else []
-    images = sorted(
-        path
-        for path in images_dir.iterdir()
-        if path.suffix.lower() in {".jpg", ".jpeg", ".heic", ".png"}
-    )
-    video_count = _video_file_count(scan_dir)
+    try:
+        metadata = load_scan_metadata(metadata_dir)
+    except ScanMetadataError as error:
+        raise ScanValidationError(str(error)) from error
+
+    images = _supported_files(image_files, SUPPORTED_IMAGE_SUFFIXES)
+    video_files = _supported_files(capture_files.get("video", []), SUPPORTED_VIDEO_SUFFIXES)
 
     if not images:
         raise ScanValidationError("images directory does not contain supported image files")
 
-    if len(frames) != len(images):
+    if len(metadata.frames) != len(images):
         raise ScanValidationError(
-            f"Frame metadata count ({len(frames)}) does not match image count ({len(images)})"
+            f"Frame metadata count ({len(metadata.frames)}) does not match image count ({len(images)})"
         )
 
-    _validate_frame_image_references(scan_dir, frames)
-    _validate_video_references(scan_dir, video_metadata)
-    object_center_world = _optional_float_list(session, "object_center_world", expected_length=3)
-    object_radius_meters = _optional_float(session, "object_radius_meters")
+    _validate_frame_image_references(scan_dir, metadata.frames, images)
+    _validate_session_counts(
+        image_count=len(images),
+        video_count=len(video_files),
+        session_image_count=metadata.session.image_count,
+        session_video_count=metadata.session.video_count,
+    )
+    video_references = _validate_video_references(scan_dir, metadata.videos)
+    actual_video_paths = {path.resolve() for path in video_files}
+    integrity_warnings: list[str] = []
 
-    if object_radius_meters is not None and object_radius_meters <= 0:
-        raise ScanValidationError("object_radius_meters must be positive when present")
+    if metadata.has_video_metadata:
+        unreferenced_videos = actual_video_paths - video_references
+        if unreferenced_videos:
+            names = ", ".join(
+                str(path.relative_to(scan_dir)) for path in sorted(unreferenced_videos)
+            )
+            raise ScanValidationError(f"Video files without metadata references: {names}")
+    elif actual_video_paths:
+        integrity_warnings.append("video_metadata_missing")
 
     return ScanValidationReport(
         scan_dir=scan_dir,
         image_count=len(images),
-        frame_count=len(frames),
-        video_count=video_count,
-        scan_id=session.get("scan_id"),
-        scan_mode=session.get("scan_mode"),
-        object_center_world=object_center_world,
-        object_radius_meters=object_radius_meters,
+        frame_count=len(metadata.frames),
+        video_count=len(video_files),
+        video_metadata_count=len(metadata.videos),
+        scan_id=metadata.session.scan_id,
+        scan_mode=metadata.session.scan_mode,
+        object_center_world=(
+            list(metadata.session.object_center_world)
+            if metadata.session.object_center_world is not None
+            else None
+        ),
+        object_radius_meters=metadata.session.object_radius_meters,
+        session_image_count=metadata.session.image_count,
+        session_video_count=metadata.session.video_count,
+        integrity_warnings=tuple(integrity_warnings),
     )
 
 
-def _read_json_array(path: Path) -> list[dict[str, Any]]:
-    try:
-        value = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
-        raise ScanValidationError(f"Invalid JSON in {path}: {error}") from error
-
-    if not isinstance(value, list):
-        raise ScanValidationError(f"{path.name} must contain a JSON array")
-
-    for index, item in enumerate(value):
-        if not isinstance(item, dict):
-            raise ScanValidationError(f"{path.name}[{index}] must be an object")
-
-    return value
-
-
-def _read_json_object(path: Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
-        raise ScanValidationError(f"Invalid JSON in {path}: {error}") from error
-
-    if not isinstance(value, dict):
-        raise ScanValidationError(f"{path.name} must contain a JSON object")
-
-    return value
-
-
-def _validate_frame_image_references(scan_dir: Path, frames: list[dict[str, Any]]) -> None:
+def _validate_frame_image_references(
+    scan_dir: Path,
+    frames: tuple[FrameMetadata, ...],
+    images: list[Path],
+) -> None:
+    frame_ids: set[int] = set()
+    referenced_images: set[Path] = set()
+    previous_timestamp: float | None = None
     for index, frame in enumerate(frames):
-        image = frame.get("image")
-        if not isinstance(image, str) or not image:
-            raise ScanValidationError(f"frames.json[{index}].image must be a non-empty string")
+        if frame.id in frame_ids:
+            raise ScanValidationError(f"Duplicate frame id in frames.json: {frame.id}")
+        frame_ids.add(frame.id)
 
-        image_path = (scan_dir / image).resolve()
-        if scan_dir not in image_path.parents:
-            raise ScanValidationError(f"frames.json[{index}].image escapes the scan directory")
+        image_path = _validate_package_file_reference(
+            scan_dir,
+            frame.image,
+            label=f"frames.json[{index}].image",
+            directory="images",
+            suffixes=SUPPORTED_IMAGE_SUFFIXES,
+        )
+        if image_path in referenced_images:
+            raise ScanValidationError(f"Duplicate image reference in frames.json: {frame.image}")
+        referenced_images.add(image_path)
 
-        if not image_path.exists():
-            raise ScanValidationError(f"Referenced image does not exist: {image}")
+        if previous_timestamp is not None and frame.timestamp <= previous_timestamp:
+            raise ScanValidationError(
+                f"frames.json timestamps must increase; index {index} is not after index {index - 1}"
+            )
+        previous_timestamp = frame.timestamp
 
-        if not image_path.is_file():
-            raise ScanValidationError(f"Referenced image is not a file: {image}")
+    actual_images = {path.resolve() for path in images}
+    unreferenced_images = actual_images - referenced_images
+    if unreferenced_images:
+        names = ", ".join(
+            str(path.relative_to(scan_dir)) for path in sorted(unreferenced_images)
+        )
+        raise ScanValidationError(f"Image files without frame metadata references: {names}")
 
 
-def _validate_video_references(scan_dir: Path, videos: list[dict[str, Any]]) -> None:
+def _validate_video_references(
+    scan_dir: Path,
+    videos: tuple[VideoMetadata, ...],
+) -> set[Path]:
+    referenced_videos: set[Path] = set()
     for index, video in enumerate(videos):
-        path = video.get("path")
-        if not isinstance(path, str) or not path:
-            raise ScanValidationError(f"video.json[{index}].path must be a non-empty string")
-
-        if not path.startswith("video/"):
-            raise ScanValidationError(f"video.json[{index}].path must be inside the video directory")
-
-        video_path = (scan_dir / path).resolve()
-        if scan_dir not in video_path.parents:
-            raise ScanValidationError(f"video.json[{index}].path escapes the scan directory")
-
-        if not video_path.exists():
-            raise ScanValidationError(f"Referenced video does not exist: {path}")
-
-        if not video_path.is_file():
-            raise ScanValidationError(f"Referenced video is not a file: {path}")
-
-        if video_path.suffix.lower() not in SUPPORTED_VIDEO_SUFFIXES:
-            raise ScanValidationError(f"Referenced video has unsupported file type: {path}")
+        video_path = _validate_package_file_reference(
+            scan_dir,
+            video.path,
+            label=f"video.json[{index}].path",
+            directory="video",
+            suffixes=SUPPORTED_VIDEO_SUFFIXES,
+        )
+        if video_path in referenced_videos:
+            raise ScanValidationError(f"Duplicate video reference in video.json: {video.path}")
+        referenced_videos.add(video_path)
+    return referenced_videos
 
 
-def _video_file_count(scan_dir: Path) -> int:
-    video_dir = scan_dir / "video"
-    if not video_dir.is_dir():
-        return 0
-
-    return len(
-        [
-            path
-            for path in video_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_SUFFIXES
-        ]
-    )
-
-
-def _optional_float(value: dict[str, Any], key: str) -> float | None:
-    raw = value.get(key)
-    if raw is None:
-        return None
-    if not isinstance(raw, (int, float)):
-        raise ScanValidationError(f"{key} must be a number when present")
-    return float(raw)
-
-
-def _optional_float_list(
-    value: dict[str, Any],
-    key: str,
+def _validate_package_file_reference(
+    scan_dir: Path,
+    relative_path: str,
     *,
-    expected_length: int,
-) -> list[float] | None:
-    raw = value.get(key)
-    if raw is None:
-        return None
-    if not isinstance(raw, list) or len(raw) != expected_length:
-        raise ScanValidationError(f"{key} must be an array of {expected_length} numbers")
+    label: str,
+    directory: str,
+    suffixes: set[str],
+) -> Path:
+    if not relative_path.startswith(f"{directory}/"):
+        raise ScanValidationError(f"{label} must be inside the {directory} directory")
+    if "\\" in relative_path:
+        raise ScanValidationError(f"{label} must use forward slashes")
 
-    result: list[float] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, (int, float)):
-            raise ScanValidationError(f"{key}[{index}] must be a number")
-        result.append(float(item))
+    relative = Path(relative_path)
+    if relative.parent != Path(directory):
+        raise ScanValidationError(f"{label} must be a direct child of the {directory} directory")
 
-    return result
+    package_path = scan_dir / relative_path
+    if package_path.is_symlink():
+        raise ScanValidationError(f"{label} must not be a symbolic link")
+
+    file_path = package_path.resolve()
+    expected_dir = (scan_dir / directory).resolve()
+    if expected_dir not in file_path.parents:
+        raise ScanValidationError(f"{label} escapes the {directory} directory")
+    if not file_path.exists():
+        raise ScanValidationError(f"Referenced file does not exist: {relative_path}")
+    if not file_path.is_file():
+        raise ScanValidationError(f"Referenced path is not a file: {relative_path}")
+    if file_path.suffix.lower() not in suffixes:
+        raise ScanValidationError(f"Referenced file has unsupported type: {relative_path}")
+    return file_path
+
+
+def _validate_owned_directory(scan_dir: Path, path: Path, *, label: str) -> None:
+    if path.is_symlink():
+        raise ScanValidationError(f"{label} must not be a symbolic link")
+    if not path.is_dir():
+        raise ScanValidationError(f"{label} must be a directory")
+
+    resolved = path.resolve()
+    if scan_dir not in resolved.parents:
+        raise ScanValidationError(f"{label} directory escapes the scan directory")
+
+
+def _validated_flat_files(directory: Path, *, label: str) -> list[Path]:
+    files: list[Path] = []
+    root = directory.resolve()
+    for path in directory.iterdir():
+        if path.is_symlink():
+            raise ScanValidationError(f"{label} must not contain symbolic links: {path.name}")
+        if path.is_dir():
+            raise ScanValidationError(f"{label} must not contain nested directories: {path.name}")
+        if not path.is_file():
+            raise ScanValidationError(f"{label} contains an unsupported filesystem entry: {path.name}")
+
+        resolved = path.resolve()
+        if root not in resolved.parents:
+            raise ScanValidationError(f"{label} entry escapes its directory: {path.name}")
+        files.append(path)
+    return sorted(files)
+
+
+def _supported_files(files: list[Path], suffixes: set[str]) -> list[Path]:
+    return [path for path in files if path.suffix.lower() in suffixes]
+
+
+def _validate_session_counts(
+    *,
+    image_count: int,
+    video_count: int,
+    session_image_count: int | None,
+    session_video_count: int | None,
+) -> None:
+    if session_image_count is not None and session_image_count != image_count:
+        raise ScanValidationError(
+            f"session.json image_count ({session_image_count}) does not match image files ({image_count})"
+        )
+    if session_video_count is not None and session_video_count != video_count:
+        raise ScanValidationError(
+            f"session.json video_count ({session_video_count}) does not match video files ({video_count})"
+        )

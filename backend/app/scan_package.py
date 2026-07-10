@@ -96,7 +96,6 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
     session = _read_json_object(metadata_dir / "session.json")
     frames = _read_json_array(metadata_dir / "frames.json")
     video_metadata = _read_json_array(metadata_dir / "video.json")
-    image_files = sorted((scan_root / "images").glob("*"))
     depth_files = sorted((scan_root / "depth").glob("*")) if (scan_root / "depth").is_dir() else []
     motion_path = metadata_dir / "imu.json"
 
@@ -109,7 +108,7 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
         "build_version": session.get("build_version"),
         "device": session.get("device"),
         "file_counts": {
-            "images": len([path for path in image_files if path.is_file()]),
+            "images": validation.image_count,
             "depth": len([path for path in depth_files if path.is_file()]),
             "videos": validation.video_count,
             "frames": len(frames),
