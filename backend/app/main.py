@@ -25,6 +25,7 @@ from app.scan_validator import (
 )
 from app.schemas import JobRecord
 from app.storage import UnsafeArchiveError, safe_extract_zip
+from app.upload_lifecycle import store_job_upload
 
 
 @asynccontextmanager
@@ -75,10 +76,21 @@ async def upload_scan(
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
     scan_id = str(uuid.uuid4())
-    record = jobs.create(scan_id)
+    jobs.create(scan_id)
     incoming_zip = INCOMING_DIR / f"{scan_id}.zip"
 
-    incoming_zip.write_bytes(await file.read())
+    try:
+        await store_job_upload(
+            file,
+            incoming_zip,
+            scan_id=scan_id,
+            jobs=jobs,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store uploaded scan package",
+        ) from error
 
     if run_reconstruction:
         background_tasks.add_task(

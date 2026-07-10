@@ -82,6 +82,16 @@ Upload a scan package in validation-only mode:
 curl -F "file=@scan.zip" "http://localhost:8000/scans"
 ```
 
+Incoming uploads are copied from FastAPI's spooled upload in bounded 1 MiB
+chunks. Blocking writes and syncs run off the event loop. The backend fsyncs a
+temporary sibling file, atomically publishes the final incoming ZIP without
+clobbering late or concurrent paths, and syncs the containing directory on
+macOS/Linux/WSL. Read failures and request
+cancellation remove partial or newly published files and mark the job failed
+instead of leaving a truncated package that looks complete. Job-state failure
+recording is best-effort and never replaces the original storage error or
+cancellation.
+
 Run reconstruction mode when COLMAP is installed:
 
 ```bash

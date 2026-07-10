@@ -88,6 +88,14 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Report legacy video files without `metadata/video.json` as a compatibility
      warning instead of silently ignoring the missing metadata.
 
+8. Stream backend upload persistence. Status: implemented.
+   - Copy FastAPI's spooled upload to disk in bounded chunks instead of loading
+     the full ZIP into process memory.
+   - Run sink I/O off-loop and publish through a temporary sibling, atomic
+     no-clobber hard link, and POSIX directory sync.
+   - Remove partial files and mark the job failed after read, write, or request
+     cancellation errors.
+
 ## Object Scan Workflow
 
 1. Improve object scan guidance.
