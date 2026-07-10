@@ -226,6 +226,28 @@ Each job record includes:
 - `image_count`, `frame_count`, and `outputs`: final capture counts and output
   paths when available.
 
+Treat `outputs` as backend-internal diagnostics rather than client download
+instructions. Ask for the typed downloadable manifest instead:
+
+```bash
+curl "http://localhost:8000/scans/<scan_id>/artifacts"
+```
+
+The response contains only declared output files that currently exist inside
+the job package. Each entry includes `name`, `relative_path`, `filename`,
+`byte_count`, and `media_type`. Download one with:
+
+```bash
+curl -O "http://localhost:8000/scans/<scan_id>/files/<relative_path>"
+```
+
+The manifest omits directories, missing/stale declarations, duplicate files,
+symlinks, and paths outside `scans/completed/` or `scans/failed/`. Download
+requests independently repeat containment, symlink, and manifest-membership
+validation. Reconstruction output paths are rebased when their workspace moves
+from processing to completed storage so future terminal jobs do not retain stale
+processing paths.
+
 The iOS app's `Jobs` tab consumes this list through a persisted, editable
 backend URL. Pull to refresh or use the refresh button. The initial URL is
 `http://localhost:8000`, which is useful for simulator development. On a

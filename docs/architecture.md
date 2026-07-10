@@ -18,6 +18,13 @@ files, off-loop sink workers, file/directory sync, no-clobber publication, and
 cleanup. The upload-lifecycle module owns best-effort terminal job recording,
 and the API endpoint owns HTTP error mapping.
 
+The backend artifact module owns the boundary between internal reconstruction
+paths and downloadable results. It rebases declared outputs when a processing
+workspace moves to completed storage, discovers only existing regular files,
+and validates both persisted and requested paths against the configured
+completed/failed roots. The FastAPI layer maps those outcomes to a typed
+artifact manifest and file responses without duplicating containment logic.
+
 The iOS processing-history view depends on a small job-loading interface. A
 URLSession adapter reads the owned FastAPI status contract in production, while
 an in-memory adapter and mock-HTTP verifier exercise the same interface without

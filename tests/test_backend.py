@@ -22,6 +22,13 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 BLENDER_SCRIPT = ROOT / "scripts" / "blender" / "prepare_scan_asset.py"
 
+from app.artifacts import (  # noqa: E402
+    ArtifactUnavailableError,
+    UnsafeArtifactPathError,
+    list_downloadable_artifacts,
+    rebase_output_paths,
+    resolve_downloadable_artifact,
+)
 from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
     build_colmap_dense_commands,
@@ -130,6 +137,150 @@ def load_blender_script_module():
 
 
 class BackendTests(unittest.TestCase):
+    def test_list_downloadable_artifacts_exposes_only_owned_regular_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            report = package / "metadata" / "scan_report.json"
+            mesh = package / "dense" / "scene.obj"
+            report.parent.mkdir(parents=True)
+            mesh.parent.mkdir()
+            failed.mkdir()
+            report.write_text("{}")
+            mesh.write_bytes(b"mesh")
+            external = root / "outside.ply"
+            external.write_bytes(b"outside")
+            (package / "metadata" / "report-link.json").symlink_to(report)
+
+            artifacts = list_downloadable_artifacts(
+                {
+                    "package_dir": str(package),
+                    "scan_report": str(report),
+                    "textured_mesh": "dense/scene.obj",
+                    "duplicate_mesh": str(mesh),
+                    "output_directory": str(mesh.parent),
+                    "external": str(external),
+                    "missing": str(package / "missing.ply"),
+                    "symlink": str(package / "metadata" / "report-link.json"),
+                },
+                allowed_package_roots=(completed, failed),
+            )
+
+        self.assertEqual(
+            [(item.name, item.relative_path) for item in artifacts],
+            [
+                ("duplicate_mesh", "dense/scene.obj"),
+                ("scan_report", "metadata/scan_report.json"),
+            ],
+        )
+        self.assertEqual(artifacts[0].byte_count, 4)
+        self.assertEqual(artifacts[0].filename, "scene.obj")
+        self.assertTrue(artifacts[0].media_type)
+
+    def test_resolve_downloadable_artifact_rejects_unsafe_or_missing_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            report = package / "metadata" / "scan_report.json"
+            report.parent.mkdir(parents=True)
+            failed.mkdir()
+            report.write_text("{}")
+            undeclared = package / "images" / "frame.jpg"
+            undeclared.parent.mkdir()
+            undeclared.write_bytes(b"image")
+            (package / "metadata" / "report-link.json").symlink_to(report)
+            outputs = {
+                "package_dir": str(package),
+                "scan_report": str(report),
+            }
+
+            resolved = resolve_downloadable_artifact(
+                outputs,
+                "metadata/scan_report.json",
+                allowed_package_roots=(completed, failed),
+            )
+            self.assertEqual(resolved, report.resolve())
+
+            for unsafe_path in [
+                "",
+                "/etc/passwd",
+                "../outside.ply",
+                "metadata/../metadata/scan_report.json",
+                "metadata/report-link.json",
+            ]:
+                with self.subTest(path=unsafe_path), self.assertRaises(
+                    UnsafeArtifactPathError
+                ):
+                    resolve_downloadable_artifact(
+                        outputs,
+                        unsafe_path,
+                        allowed_package_roots=(completed, failed),
+                    )
+
+            with self.assertRaises(ArtifactUnavailableError):
+                resolve_downloadable_artifact(
+                    outputs,
+                    "metadata/missing.json",
+                    allowed_package_roots=(completed, failed),
+                )
+            with self.assertRaises(ArtifactUnavailableError):
+                resolve_downloadable_artifact(
+                    outputs,
+                    "images/frame.jpg",
+                    allowed_package_roots=(completed, failed),
+                )
+
+    def test_artifact_package_directory_must_belong_to_scanner_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            completed.mkdir()
+            failed.mkdir()
+            external = root / "external"
+            external.mkdir()
+
+            with self.assertRaises(UnsafeArtifactPathError):
+                list_downloadable_artifacts(
+                    {"package_dir": str(external)},
+                    allowed_package_roots=(completed, failed),
+                )
+            with self.assertRaises(ArtifactUnavailableError):
+                list_downloadable_artifacts(
+                    {},
+                    allowed_package_roots=(completed, failed),
+                )
+
+    def test_rebase_output_paths_preserves_owned_relative_locations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            processing = root / "processing" / "job-1"
+            completed = root / "completed" / "job-1"
+            output = processing / "dense" / "scene.obj"
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"mesh")
+
+            rebased = rebase_output_paths(
+                {"textured_mesh": str(output)},
+                old_root=processing,
+                new_root=completed,
+            )
+            self.assertEqual(
+                rebased,
+                {"textured_mesh": str(completed / "dense" / "scene.obj")},
+            )
+
+            with self.assertRaises(UnsafeArtifactPathError):
+                rebase_output_paths(
+                    {"outside": str(root / "outside.ply")},
+                    old_root=processing,
+                    new_root=completed,
+                )
+
     def test_validate_scan_package_accepts_valid_minimal_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))

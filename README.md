@@ -143,6 +143,19 @@ List recent jobs:
 curl "http://localhost:8000/scans?limit=20"
 ```
 
+List the currently downloadable single-file outputs for a job:
+
+```bash
+curl "http://localhost:8000/scans/<scan_id>/artifacts"
+```
+
+Each artifact has a stable result name, package-relative path, filename, byte
+count, and media type. Download the returned relative path through
+`/scans/<scan_id>/files/<relative_path>`. The backend resolves both persisted
+output declarations and requested paths inside its completed/failed scan roots,
+rejects traversal and symlinks, serves only manifest-published outputs, and never
+exposes raw server paths as download instructions.
+
 ## Local Scripts
 
 Inspect an extracted scan:

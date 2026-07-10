@@ -13,6 +13,13 @@ from time import perf_counter
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
+from app.artifacts import (
+    ArtifactUnavailableError,
+    UnsafeArtifactPathError,
+    list_downloadable_artifacts,
+    rebase_output_paths,
+    resolve_downloadable_artifact,
+)
 from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.job_recovery import reconcile_interrupted_jobs
@@ -23,7 +30,7 @@ from app.scan_validator import (
     ScanValidationError,
     find_scan_root,
 )
-from app.schemas import JobRecord
+from app.schemas import JobRecord, ScanArtifact
 from app.storage import UnsafeArchiveError, safe_extract_zip
 from app.upload_lifecycle import store_job_upload
 
@@ -149,19 +156,43 @@ def get_scan_status(scan_id: str) -> JobRecord:
         raise HTTPException(status_code=404, detail="Unknown scan id") from error
 
 
+@app.get("/scans/{scan_id}/artifacts", response_model=list[ScanArtifact])
+def list_scan_artifacts(scan_id: str) -> list[ScanArtifact]:
+    record = get_scan_status(scan_id)
+    try:
+        artifacts = list_downloadable_artifacts(
+            record.outputs,
+            allowed_package_roots=(COMPLETED_DIR, FAILED_DIR),
+        )
+    except ArtifactUnavailableError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except UnsafeArtifactPathError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return [
+        ScanArtifact(
+            name=artifact.name,
+            relative_path=artifact.relative_path,
+            filename=artifact.filename,
+            byte_count=artifact.byte_count,
+            media_type=artifact.media_type,
+        )
+        for artifact in artifacts
+    ]
+
+
 @app.get("/scans/{scan_id}/files/{relative_path:path}")
 def download_scan_file(scan_id: str, relative_path: str) -> FileResponse:
     record = get_scan_status(scan_id)
-    package_dir = record.outputs.get("package_dir")
-    if package_dir is None:
-        raise HTTPException(status_code=404, detail="No package directory available")
-
-    base = Path(package_dir).resolve()
-    target = (base / relative_path).resolve()
-    if target != base and base not in target.parents:
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        target = resolve_downloadable_artifact(
+            record.outputs,
+            relative_path,
+            allowed_package_roots=(COMPLETED_DIR, FAILED_DIR),
+        )
+    except ArtifactUnavailableError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except UnsafeArtifactPathError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     return FileResponse(target)
 
@@ -233,10 +264,17 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         )
         export_blender_formats(scan_root)
         package = validate_and_report_scan(scan_root)
+        rebased_outputs = rebase_output_paths(
+            outputs,
+            old_root=processing_dir,
+            new_root=COMPLETED_DIR / scan_id,
+        )
         completed_dir = move_to_completed(scan_id, processing_dir)
         completed_scan_root = find_scan_root(completed_dir)
-        outputs["package_dir"] = str(completed_dir)
-        outputs["scan_report"] = str(completed_scan_root / "metadata" / "scan_report.json")
+        rebased_outputs["package_dir"] = str(completed_dir)
+        rebased_outputs["scan_report"] = str(
+            completed_scan_root / "metadata" / "scan_report.json"
+        )
 
         jobs.update(
             scan_id,
@@ -244,7 +282,7 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
             message="Reconstruction completed.",
             image_count=report.image_count,
             frame_count=report.frame_count,
-            outputs=outputs,
+            outputs=rebased_outputs,
         )
     except Exception as error:
         fail_processing(scan_id, processing_dir)
