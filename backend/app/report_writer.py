@@ -33,11 +33,15 @@ def write_scan_report(
         "scan_dir": str(scan_dir),
         "manifest": manifest_summary(manifest),
         "capture": capture_summary(frames, session, validation, video_metadata),
+        "package_integrity": package_integrity_summary(validation),
         "object_scan": object_scan_summary(validation),
         "processing": processing_summary(processing),
         "reconstruction": reconstruction_summary(scan_dir),
     }
-    report["warnings"] = capture_warnings(report["capture"], report["object_scan"])
+    report["warnings"] = [
+        *capture_warnings(report["capture"], report["object_scan"]),
+        *validation.integrity_warnings,
+    ]
 
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True))
     return output_path
@@ -97,6 +101,16 @@ def object_scan_summary(validation: ScanValidationReport) -> dict[str, Any]:
             if has_object_center and has_object_radius
             else "missing_object_center_or_radius"
         ),
+    }
+
+
+def package_integrity_summary(validation: ScanValidationReport) -> dict[str, Any]:
+    return {
+        "validated_image_references": validation.frame_count,
+        "validated_video_references": validation.video_metadata_count,
+        "session_image_count": validation.session_image_count,
+        "session_video_count": validation.session_video_count,
+        "warnings": list(validation.integrity_warnings),
     }
 
 

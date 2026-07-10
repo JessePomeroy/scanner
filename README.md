@@ -139,6 +139,11 @@ python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-co
 ```
 
 Validation writes `metadata/scan_report.json` with capture-quality diagnostics.
+It also validates the typed frame/session/video metadata contract, exact image
+references, unique frame and video identities, increasing frame timestamps,
+optional session file counts, and video metadata values before reconstruction
+starts. Older packages that contain video files but predate `video.json` remain
+readable and receive a visible `video_metadata_missing` integrity warning.
 After COLMAP/OpenMVS stages run, the same report is refreshed with any sparse or
 dense output counts that can be detected.
 Local COLMAP smoke tests default to `sequential_matcher`, which is much faster

@@ -8,7 +8,8 @@ move into `backend/app`.
 
 Current entry points:
 
-- `inspect_scan.py`: validate a scan package and print capture metadata.
+- `inspect_scan.py`: validate typed package metadata and file-reference
+  integrity, then print capture counts and compatibility warnings.
 - `reconstruct_local.py`: validate and optionally run local COLMAP/OpenMVS.
 - `reconstruct_gpu.py`: WSL2/RTX workstation command runner.
 - `plan_neural_backend.py`: dry-run command planner for MASt3R-SLAM, Depth

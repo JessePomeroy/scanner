@@ -5,6 +5,12 @@ The project is split into two foundations:
 - `ios/ScannerApp`: captures images and AR metadata into a portable scan package.
 - `backend/app`: validates uploaded scan packages and runs reconstruction tools.
 
+Raw JSON field parsing is owned by `scan_metadata`, which returns typed frame,
+session, and video records. `scan_validator` owns filesystem/reference
+integrity and exposes the existing `validate_scan_package` interface to backend
+and script callers. This keeps metadata-shape compatibility rules out of
+reconstruction planners.
+
 The iOS processing-history view depends on a small job-loading interface. A
 URLSession adapter reads the owned FastAPI status contract in production, while
 an in-memory adapter and mock-HTTP verifier exercise the same interface without
