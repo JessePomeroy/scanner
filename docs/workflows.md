@@ -100,6 +100,11 @@ single inventory rule also covers dynamically named planner reports, keeping
 validation, manifests, reports, and downstream planners on the same files
 inside the scan package.
 
+Archive root discovery also ignores child-directory symbolic links before a
+scan root is selected. Regular unsupported files such as Finder metadata or
+notes may remain in a flat capture directory, but they are not counted as
+capture images by validation, manifests, or neural planners.
+
 Legacy packages with video files but no `video.json` are accepted so old user
 data remains inspectable. Their `scan_report.json` includes
 `package_integrity.warnings: ["video_metadata_missing"]`, and the same code is

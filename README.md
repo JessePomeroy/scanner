@@ -142,9 +142,11 @@ Validation writes `metadata/scan_report.json` with capture-quality diagnostics.
 It also validates the typed frame/session/video metadata contract, exact flat
 image/video references, unique frame and video identities, increasing frame
 timestamps, optional session file counts, and video metadata values before
-reconstruction starts. Package-owned metadata and capture directories are flat,
-and none of their entries can redirect through symbolic links. Older packages
-that contain video files but predate
+reconstruction starts. Package root discovery ignores symbolic links;
+package-owned metadata and capture directories are flat, and none of their
+entries can redirect through symbolic links. Supported-file counts stay
+consistent across validation, manifests, and planners. Older packages that
+contain video files but predate
 `video.json` remain readable and receive a visible `video_metadata_missing`
 integrity warning.
 After COLMAP/OpenMVS stages run, the same report is refreshed with any sparse or

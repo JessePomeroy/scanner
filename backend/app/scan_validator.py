@@ -42,7 +42,13 @@ def find_scan_root(extracted_dir: Path) -> Path:
     """Find the scan folder inside an extracted archive."""
     extracted_dir = extracted_dir.resolve()
     candidates = [extracted_dir]
-    candidates.extend(path for path in extracted_dir.iterdir() if path.is_dir())
+    for path in extracted_dir.iterdir():
+        if path.is_symlink() or not path.is_dir():
+            continue
+        resolved = path.resolve()
+        if extracted_dir not in resolved.parents:
+            continue
+        candidates.append(resolved)
 
     for candidate in candidates:
         if (candidate / "images").is_dir() and (candidate / "metadata").is_dir():

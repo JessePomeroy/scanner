@@ -43,7 +43,11 @@ from app.reconstruction_backends import BackendPlanConfig, build_backend_plan  #
 from app.reconstruction_plan import write_command_plan_report  # noqa: E402
 from app.report_writer import write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
-from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
+from app.scan_validator import (  # noqa: E402
+    ScanValidationError,
+    find_scan_root,
+    validate_scan_package,
+)
 from app.storage import UnsafeArchiveError, safe_extract_zip  # noqa: E402
 
 
@@ -76,6 +80,22 @@ class BackendTests(unittest.TestCase):
 
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
+
+    def test_find_scan_root_skips_child_directory_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            external_scan = self._write_scan(root / "external")
+            extracted_dir = root / "extracted"
+            extracted_dir.mkdir()
+            (extracted_dir / "scan_link").symlink_to(external_scan, target_is_directory=True)
+
+            scan_root = find_scan_root(extracted_dir)
+
+            self.assertEqual(scan_root, extracted_dir.resolve())
+            with self.assertRaises(ScanValidationError):
+                validate_and_report_scan(scan_root)
+            self.assertFalse((external_scan / "metadata" / "manifest.json").exists())
+            self.assertFalse((external_scan / "metadata" / "scan_report.json").exists())
 
     def test_validate_scan_package_accepts_optional_video_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1269,6 +1289,22 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(manifest["file_counts"]["videos"], 0)
             self.assertEqual(manifest["file_counts"]["video_metadata_entries"], 0)
             self.assertFalse(manifest["sensors"]["video"])
+
+    def test_manifest_and_neural_plan_ignore_unsupported_image_files_consistently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "images" / "notes.txt").write_text("not a capture image")
+
+            package = validate_and_report_scan(scan_dir)
+            manifest = json.loads(package.manifest_path.read_text())
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="mast3r_slam"),
+            )
+
+        self.assertEqual(package.validation.image_count, 1)
+        self.assertEqual(manifest["file_counts"]["images"], 1)
+        self.assertEqual(plan.inputs["image_count"], 1)
 
     def test_scan_package_records_processing_metadata_in_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
