@@ -62,6 +62,13 @@ and shows status, lifecycle stage, message, capture counts, and update time. The
 URL is saved on device. `http://localhost:8000` works when the backend is local
 to the simulator; on iPhone, enter the Mac or PC LAN URL instead.
 
+Terminal jobs with published outputs open a typed result list. The app downloads
+one result at a time directly to an app-owned temporary file, verifies the exact
+byte count declared by the backend, and presents the file through the iOS share
+sheet. Closing the sheet, leaving the result screen, or cancelling removes that
+temporary copy. A later launch also removes result files abandoned by a
+terminated process.
+
 ## Backend
 
 Create an environment and install dependencies:

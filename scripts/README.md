@@ -25,6 +25,9 @@ Current entry points:
 - `verify_scan_upload_client.swift`: verify multipart ZIP construction, shared
   backend URL policy, upload response handling, cancellation cleanup, and UI
   store notices without a live backend.
+- `verify_reconstruction_artifact_client.swift`: verify typed manifests,
+  encoded download URLs, disk handoff, exact-size checks, unsafe-input
+  rejection, cancellation, temporary-file cleanup, and result-store state.
 
 Run the ZIP writer verifier from the repo root:
 
@@ -57,4 +60,16 @@ xcrun swiftc -warnings-as-errors \
   scripts/verify_scan_upload_client.swift \
   -o /tmp/verify_scan_upload_client
 /tmp/verify_scan_upload_client
+```
+
+Run the reconstruction artifact client verifier from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors \
+  ios/ScannerApp/ReconstructionJobClient.swift \
+  ios/ScannerApp/ReconstructionArtifactClient.swift \
+  ios/ScannerApp/ReconstructionArtifactStore.swift \
+  scripts/verify_reconstruction_artifact_client.swift \
+  -o /tmp/verify_reconstruction_artifact_client
+/tmp/verify_reconstruction_artifact_client
 ```

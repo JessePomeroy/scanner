@@ -273,6 +273,16 @@ private/link-local IP address, `.local`, or `.home.arpa`; HTTPS remains supporte
 for other hosts. The backend has no authentication yet, so never expose this
 listener to the public internet or an untrusted network.
 
+A terminal job with published outputs opens a result screen backed by the typed
+artifact manifest. The app treats the job record's `outputs` only as an
+availability signal; it never turns those internal paths into download URLs.
+Manifest identifiers and nested relative paths are validated and percent-
+encoded before the app downloads one file at a time through URLSession's file
+API. The downloaded regular file must match the declared filename and exact
+byte count before it is moved into an app-owned temporary directory and offered
+to the iOS share sheet. Dismissing the sheet, navigating away, cancelling, or a
+later app launch removes the owned temporary copy.
+
 The backend rejects attempts to restart terminal jobs and writes each job JSON
 record through a temporary sibling file followed by an atomic replacement.
 Concurrent status reads therefore see either the previous complete record or

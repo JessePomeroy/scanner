@@ -14,6 +14,8 @@
 		A14C00000000000000000013 /* ReconstructionJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14C00000000000000000003 /* ReconstructionJobStore.swift */; };
 		A17C00000000000000000011 /* ScanUploadClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17C00000000000000000001 /* ScanUploadClient.swift */; };
 		A17C00000000000000000012 /* ScanUploadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17C00000000000000000002 /* ScanUploadStore.swift */; };
+		A20C00000000000000000011 /* ReconstructionArtifactClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20C00000000000000000001 /* ReconstructionArtifactClient.swift */; };
+		A20C00000000000000000012 /* ReconstructionArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20C00000000000000000002 /* ReconstructionArtifactStore.swift */; };
 		649F798CB362496BBAD84628 /* CameraCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85807AC3B97142D3A6F139C0 /* CameraCaptureManager.swift */; };
 		73917A366014483DA0D903BE /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDD18124A7BC45C9B9869EAA /* ShareSheet.swift */; };
 		78F8813B510D4356BC1CC900 /* ARFrameImageWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FD6A72028F84033843455DC /* ARFrameImageWriter.swift */; };
@@ -36,6 +38,8 @@
 		A14C00000000000000000003 /* ReconstructionJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconstructionJobStore.swift; sourceTree = "<group>"; };
 		A17C00000000000000000001 /* ScanUploadClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanUploadClient.swift; sourceTree = "<group>"; };
 		A17C00000000000000000002 /* ScanUploadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanUploadStore.swift; sourceTree = "<group>"; };
+		A20C00000000000000000001 /* ReconstructionArtifactClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconstructionArtifactClient.swift; sourceTree = "<group>"; };
+		A20C00000000000000000002 /* ReconstructionArtifactStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconstructionArtifactStore.swift; sourceTree = "<group>"; };
 		1741AE6950DA4309BB7732D3 /* ScanGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanGalleryView.swift; sourceTree = "<group>"; };
 		2665A66CFE8047BC82B37593 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		2F38B5BED7974BB2BD11A900 /* ScanPackageWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanPackageWriter.swift; sourceTree = "<group>"; };
@@ -93,6 +97,8 @@
 				A14C00000000000000000003 /* ReconstructionJobStore.swift */,
 				A17C00000000000000000001 /* ScanUploadClient.swift */,
 				A17C00000000000000000002 /* ScanUploadStore.swift */,
+				A20C00000000000000000001 /* ReconstructionArtifactClient.swift */,
+				A20C00000000000000000002 /* ReconstructionArtifactStore.swift */,
 				9E9E00CDB1AD45C0ADF14734 /* ARSessionView.swift */,
 				47A171A1C63A4CE6A6E6E3A5 /* ScanCaptureManager.swift */,
 				44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */,
@@ -175,6 +181,8 @@
 				A14C00000000000000000013 /* ReconstructionJobStore.swift in Sources */,
 				A17C00000000000000000011 /* ScanUploadClient.swift in Sources */,
 				A17C00000000000000000012 /* ScanUploadStore.swift in Sources */,
+				A20C00000000000000000011 /* ReconstructionArtifactClient.swift in Sources */,
+				A20C00000000000000000012 /* ReconstructionArtifactStore.swift in Sources */,
 				E82260E9C3CC44FE87B3767D /* ARSessionView.swift in Sources */,
 				8FC8547323AA42859CA9B9E5 /* ScanCaptureManager.swift in Sources */,
 				F08270898A2D43E8AD613035 /* ARTrackingManager.swift in Sources */,

@@ -234,7 +234,7 @@ should not block the production COLMAP/OpenMVS path.
   - Show recent job status, stage, message, capture counts, and update time.
 - Upload to local workstation or cloud worker. Status: implemented initial
   validation-only local-workstation upload from the iOS scan gallery.
-- Result download/share UI. Status: backend artifact manifest and hardened
-  single-file download contract implemented; iOS download/share remains.
+- Result download/share UI. Status: implemented initial typed single-file
+  download and share flow for published job artifacts.
 - Basic point cloud preview.
 - Blender helper scripts for import, cleanup, decimation, and export variants.

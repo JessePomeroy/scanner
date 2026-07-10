@@ -2,9 +2,18 @@ import SwiftUI
 
 struct ProcessingHistoryView: View {
     @AppStorage("scanner.backendBaseURL") private var backendURLString = "http://localhost:8000"
-    @StateObject private var store = ReconstructionJobStore(
-        client: HTTPReconstructionJobClient()
-    )
+    @StateObject private var store: ReconstructionJobStore
+    private let artifactClient: any ReconstructionArtifactAccessing
+
+    init(
+        jobClient: any ReconstructionJobLoading = HTTPReconstructionJobClient(),
+        artifactClient: any ReconstructionArtifactAccessing = HTTPReconstructionArtifactClient()
+    ) {
+        _store = StateObject(
+            wrappedValue: ReconstructionJobStore(client: jobClient)
+        )
+        self.artifactClient = artifactClient
+    }
 
     var body: some View {
         NavigationStack {
@@ -74,7 +83,19 @@ struct ProcessingHistoryView: View {
                         .padding(.vertical, 20)
                     } else {
                         ForEach(store.jobs) { job in
-                            ReconstructionJobRow(job: job)
+                            if job.canOfferArtifacts {
+                                NavigationLink {
+                                    ReconstructionArtifactListView(
+                                        job: job,
+                                        baseURLString: backendURLString,
+                                        client: artifactClient
+                                    )
+                                } label: {
+                                    ReconstructionJobRow(job: job)
+                                }
+                            } else {
+                                ReconstructionJobRow(job: job)
+                            }
                         }
                     }
                 }
@@ -108,6 +129,228 @@ struct ProcessingHistoryView: View {
             await store.refresh(baseURLString: backendURLString)
         }
     }
+}
+
+private extension ReconstructionJob {
+    var canOfferArtifacts: Bool {
+        guard !outputs.isEmpty else { return false }
+        switch status {
+        case .validated, .complete, .failed:
+            return true
+        case .received, .processing, .unknown:
+            return false
+        }
+    }
+}
+
+private struct ReconstructionArtifactListView: View {
+    let job: ReconstructionJob
+    let baseURLString: String
+    @StateObject private var store: ReconstructionArtifactStore
+    @State private var downloadTask: Task<Void, Never>?
+
+    init(
+        job: ReconstructionJob,
+        baseURLString: String,
+        client: any ReconstructionArtifactAccessing
+    ) {
+        self.job = job
+        self.baseURLString = baseURLString
+        _store = StateObject(
+            wrappedValue: ReconstructionArtifactStore(client: client)
+        )
+    }
+
+    var body: some View {
+        resultList
+            .navigationTitle("Job Results")
+            .navigationBarTitleDisplayMode(.inline)
+            .refreshable {
+                await refresh()
+            }
+            .task {
+                await store.loadIfNeeded(
+                    scanID: job.scanID,
+                    baseURLString: baseURLString
+                )
+            }
+            .onDisappear {
+                downloadTask?.cancel()
+                downloadTask = nil
+                Task {
+                    await store.deactivate()
+                }
+            }
+            .sheet(isPresented: sharePresented) {
+                shareSheet
+            }
+            .alert("Unable to Load Result", isPresented: errorPresented) {
+                Button("OK", role: .cancel) {
+                    store.clearError()
+                }
+            } message: {
+                Text(store.errorMessage ?? "The result request failed.")
+            }
+    }
+
+    private var resultList: some View {
+        List {
+            Section("Job") {
+                ReconstructionJobRow(job: job)
+            }
+
+            Section {
+                resultsContent
+            } header: {
+                Text("Downloadable Results")
+            } footer: {
+                Text("Downloaded results are temporary and removed after the share sheet closes.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var resultsContent: some View {
+        if store.isLoading && store.artifacts.isEmpty {
+            HStack {
+                Spacer()
+                ProgressView("Loading results")
+                Spacer()
+            }
+        } else if store.artifacts.isEmpty {
+            ContentUnavailableView(
+                "No Downloadable Results",
+                systemImage: "shippingbox",
+                description: Text(emptyDescription)
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        } else {
+            ForEach(store.artifacts) { artifact in
+                artifactButton(artifact)
+            }
+        }
+    }
+
+    private func artifactButton(_ artifact: ReconstructionArtifact) -> some View {
+        Button {
+            guard downloadTask == nil else { return }
+            downloadTask = Task {
+                await store.download(
+                    artifact,
+                    scanID: job.scanID,
+                    baseURLString: baseURLString
+                )
+                downloadTask = nil
+            }
+        } label: {
+            ReconstructionArtifactRow(
+                artifact: artifact,
+                isDownloading: store.isDownloading(artifact)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(store.downloadingArtifactID != nil)
+        .accessibilityLabel("Download and share \(artifact.displayName)")
+    }
+
+    @ViewBuilder
+    private var shareSheet: some View {
+        if let download = store.sharedDownload {
+            ShareSheet(items: [download.fileURL])
+        }
+    }
+
+    private var emptyDescription: String {
+        store.hasLoaded
+            ? "This job has no published result files."
+            : "Refresh to load published result files."
+    }
+
+    private var sharePresented: Binding<Bool> {
+        Binding(
+            get: { store.sharedDownload != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.dismissSharedDownload()
+                }
+            }
+        )
+    }
+
+    private var errorPresented: Binding<Bool> {
+        Binding(
+            get: { store.errorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.clearError()
+                }
+            }
+        )
+    }
+
+    private func refresh() async {
+        await store.refresh(
+            scanID: job.scanID,
+            baseURLString: baseURLString
+        )
+    }
+}
+
+private struct ReconstructionArtifactRow: View {
+    let artifact: ReconstructionArtifact
+    let isDownloading: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.blue)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(artifact.displayName)
+                    .font(.subheadline.weight(.semibold))
+                Text(artifact.filename)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(
+                    "\(Self.byteFormatter.string(fromByteCount: artifact.byteCount)) · "
+                        + artifact.mediaType
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 8)
+
+            if isDownloading {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "square.and.arrow.up")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var systemImage: String {
+        switch artifact.filename.split(separator: ".").last?.lowercased() {
+        case "obj", "glb", "gltf": return "cube"
+        case "ply": return "circle.grid.3x3.fill"
+        case "json": return "doc.text.magnifyingglass"
+        default: return "doc"
+        }
+    }
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter
+    }()
 }
 
 private struct ReconstructionJobRow: View {

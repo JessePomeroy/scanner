@@ -33,6 +33,16 @@ URLSession adapter reads the owned FastAPI status contract in production, while
 an in-memory adapter and mock-HTTP verifier exercise the same interface without
 a live backend.
 
+Result retrieval has a separate `ReconstructionArtifactAccessing` boundary. Its
+URLSession adapter decodes the typed manifest and downloads into a system file
+rather than materializing an entire reconstruction result as `Data`. The client
+validates identifiers, relative paths, filenames, duplicate declarations, media
+types, and the final regular-file byte count before moving the file into an
+app-owned temporary directory. That ownership boundary also removes files after
+sharing, cancellation, navigation away, and the next launch after an interrupted
+process. The artifact store owns loading and one-at-a-time download state; the
+SwiftUI view owns navigation and share-sheet presentation.
+
 The iOS gallery upload path similarly depends on a `ScanUploading` interface.
 The HTTP adapter reuses the job model and shared backend URL policy, builds a
 multipart body from the ZIP in bounded chunks on a background task, and uploads
