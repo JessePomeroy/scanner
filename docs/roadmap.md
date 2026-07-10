@@ -213,7 +213,9 @@ should not block the production COLMAP/OpenMVS path.
 - Backend job lifecycle/status API. Status: implemented initial pass.
   - Persist lifecycle stages and UTC timestamps for processing history clients.
   - Replace job records atomically and prevent terminal jobs from restarting.
-- Job status UI.
+- Job status UI. Status: implemented initial read-only history.
+  - Persist a configurable local backend URL on device.
+  - Show recent job status, stage, message, capture counts, and update time.
 - Upload to local workstation or cloud worker.
 - Result download/share UI.
 - Basic point cloud preview.

@@ -48,6 +48,11 @@ extracted scan folder from the device. ZIP export streams file contents to disk
 so packages with video or many keyframes do not require the full archive to sit
 in memory.
 
+The `Jobs` tab reads recent reconstruction jobs from a configurable backend URL
+and shows status, lifecycle stage, message, capture counts, and update time. The
+URL is saved on device. `http://localhost:8000` works when the backend is local
+to the simulator; on iPhone, enter the Mac or PC LAN URL instead.
+
 ## Backend
 
 Create an environment and install dependencies:
@@ -59,6 +64,17 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
+
+To view job status from an iPhone on the same trusted LAN, bind the backend to
+the workstation network interface:
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0
+```
+
+Then enter `http://<workstation-lan-ip>:8000` in the app's `Jobs` tab. The
+backend currently has no authentication, so do not expose this listener to the
+public internet or an untrusted network.
 
 Upload a scan package in validation-only mode:
 
