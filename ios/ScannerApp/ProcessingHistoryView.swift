@@ -10,7 +10,11 @@ struct ProcessingHistoryView: View {
         NavigationStack {
             List {
                 Section("Backend") {
-                    TextField("http://192.168.1.10:8000", text: $backendURLString)
+                    TextField(
+                        "Backend URL",
+                        text: $backendURLString,
+                        prompt: Text("http://192.168.1.10:8000")
+                    )
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -18,6 +22,7 @@ struct ProcessingHistoryView: View {
                         .onSubmit {
                             refresh()
                         }
+                        .accessibilityLabel("Backend URL")
 
                     Text("On iPhone, use the LAN address of the Mac or PC running the backend.")
                         .font(.caption)
@@ -89,6 +94,9 @@ struct ProcessingHistoryView: View {
             .refreshable {
                 await store.refresh(baseURLString: backendURLString)
             }
+            .onChange(of: backendURLString) { _, newValue in
+                store.backendURLDidChange(to: newValue)
+            }
             .task {
                 await store.loadIfNeeded(baseURLString: backendURLString)
             }
@@ -137,10 +145,16 @@ private struct ReconstructionJobRow: View {
 
                 HStack(spacing: 12) {
                     if let imageCount = job.imageCount {
-                        Label("\(imageCount)", systemImage: "photo")
+                        Label(
+                            imageCount == 1 ? "1 image" : "\(imageCount) images",
+                            systemImage: "photo"
+                        )
                     }
                     if let frameCount = job.frameCount {
-                        Label("\(frameCount)", systemImage: "viewfinder")
+                        Label(
+                            frameCount == 1 ? "1 frame" : "\(frameCount) frames",
+                            systemImage: "viewfinder"
+                        )
                     }
                     if let date = job.updatedAt ?? job.createdAt {
                         Text(date, style: .relative)
@@ -167,74 +181,6 @@ private struct ReconstructionJobRow: View {
         case .unknown:
             return .secondary
         }
-    }
-}
-
-@MainActor
-final class ReconstructionJobStore: ObservableObject {
-    @Published private(set) var jobs: [ReconstructionJob] = []
-    @Published private(set) var isLoading = false
-    @Published private(set) var errorMessage: String?
-    @Published private(set) var hasLoaded = false
-
-    private let client: any ReconstructionJobLoading
-    private var refreshSequence = 0
-    private var historySource: String?
-
-    init(client: any ReconstructionJobLoading) {
-        self.client = client
-    }
-
-    func loadIfNeeded(baseURLString: String) async {
-        guard !hasLoaded else { return }
-        await refresh(baseURLString: baseURLString)
-    }
-
-    func refresh(baseURLString: String) async {
-        refreshSequence += 1
-        let sequence = refreshSequence
-        isLoading = true
-        errorMessage = nil
-
-        let trimmedURL = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if historySource != trimmedURL {
-            jobs = []
-            historySource = trimmedURL
-        }
-        guard let baseURL = URL(string: trimmedURL), !trimmedURL.isEmpty else {
-            finish(sequence: sequence, error: ReconstructionJobClientError.invalidBaseURL)
-            return
-        }
-
-        do {
-            let loadedJobs = try await client.listJobs(baseURL: baseURL, limit: 50)
-            guard !Task.isCancelled else {
-                cancel(sequence: sequence)
-                return
-            }
-            guard sequence == refreshSequence else { return }
-            jobs = loadedJobs
-            hasLoaded = true
-            isLoading = false
-        } catch is CancellationError {
-            cancel(sequence: sequence)
-        } catch let error as URLError where error.code == .cancelled {
-            cancel(sequence: sequence)
-        } catch {
-            finish(sequence: sequence, error: error)
-        }
-    }
-
-    private func cancel(sequence: Int) {
-        guard sequence == refreshSequence else { return }
-        isLoading = false
-    }
-
-    private func finish(sequence: Int, error: Error) {
-        guard sequence == refreshSequence else { return }
-        hasLoaded = true
-        isLoading = false
-        errorMessage = error.localizedDescription
     }
 }
 

@@ -150,6 +150,7 @@ protocol ReconstructionJobLoading {
 
 enum ReconstructionJobClientError: LocalizedError, Equatable {
     case invalidBaseURL
+    case insecureNonLocalURL
     case invalidLimit
     case invalidResponse
     case httpStatus(Int)
@@ -159,6 +160,8 @@ enum ReconstructionJobClientError: LocalizedError, Equatable {
         switch self {
         case .invalidBaseURL:
             return "Enter a full HTTP or HTTPS backend URL."
+        case .insecureNonLocalURL:
+            return "HTTP is limited to private or local-network hosts. Use HTTPS for other hosts."
         case .invalidLimit:
             return "The job history limit must be between 1 and 200."
         case .invalidResponse:
@@ -184,10 +187,13 @@ struct HTTPReconstructionJobClient: ReconstructionJobLoading {
         }
         guard let scheme = baseURL.scheme?.lowercased(),
               ["http", "https"].contains(scheme),
-              baseURL.host != nil,
+              let host = baseURL.host,
               baseURL.query == nil,
               baseURL.fragment == nil else {
             throw ReconstructionJobClientError.invalidBaseURL
+        }
+        if scheme == "http" && !Self.isLocalHost(host) {
+            throw ReconstructionJobClientError.insecureNonLocalURL
         }
 
         let scansURL = baseURL.appendingPathComponent("scans", isDirectory: false)
@@ -217,6 +223,39 @@ struct HTTPReconstructionJobClient: ReconstructionJobLoading {
         } catch {
             throw ReconstructionJobClientError.invalidPayload
         }
+    }
+
+    private static func isLocalHost(_ rawHost: String) -> Bool {
+        let host = rawHost
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .lowercased()
+        if host == "localhost"
+            || host.hasSuffix(".localhost")
+            || host.hasSuffix(".local")
+            || host.hasSuffix(".home.arpa") {
+            return true
+        }
+
+        let ipv4Parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        let octets = ipv4Parts.compactMap { Int($0) }
+        if ipv4Parts.count == 4,
+           octets.count == 4,
+           octets.allSatisfy({ (0...255).contains($0) }) {
+            return octets[0] == 10
+                || octets[0] == 127
+                || (octets[0] == 169 && octets[1] == 254)
+                || (octets[0] == 172 && (16...31).contains(octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+        }
+
+        guard host.contains(":") else { return false }
+        return host == "::1"
+            || host.hasPrefix("fc")
+            || host.hasPrefix("fd")
+            || host.hasPrefix("fe8")
+            || host.hasPrefix("fe9")
+            || host.hasPrefix("fea")
+            || host.hasPrefix("feb")
     }
 }
 

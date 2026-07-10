@@ -30,8 +30,23 @@ enum VerificationError: Error {
     case assertionFailed(String)
 }
 
+struct DelayedSourceJobClient: ReconstructionJobLoading {
+    let delayedHost: String
+    let delayedJobs: [ReconstructionJob]
+    let immediateJobs: [ReconstructionJob]
+
+    func listJobs(baseURL: URL, limit: Int) async throws -> [ReconstructionJob] {
+        if baseURL.host == delayedHost {
+            try await Task.sleep(nanoseconds: 150_000_000)
+            return Array(delayedJobs.prefix(limit))
+        }
+        return Array(immediateJobs.prefix(limit))
+    }
+}
+
 @main
 struct VerifyReconstructionJobClient {
+    @MainActor
     static func main() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockJobURLProtocol.self]
@@ -91,6 +106,49 @@ struct VerifyReconstructionJobClient {
         let memoryClient = InMemoryReconstructionJobClient(jobs: jobs)
         let limitedJobs = try await memoryClient.listJobs(baseURL: baseURL, limit: 1)
         try require(limitedJobs.map(\.scanID) == ["scan-complete"], "Expected in-memory limit")
+
+        let publicHTTPSJobs = try await client.listJobs(
+            baseURL: URL(string: "https://example.com/api")!,
+            limit: 2
+        )
+        try require(publicHTTPSJobs.count == 2, "Expected public HTTPS to remain supported")
+
+        do {
+            _ = try await client.listJobs(baseURL: URL(string: "http://8.8.8.8:8000")!, limit: 2)
+            throw VerificationError.assertionFailed("Expected public cleartext URL failure")
+        } catch ReconstructionJobClientError.insecureNonLocalURL {
+            // Expected.
+        }
+        do {
+            _ = try await client.listJobs(baseURL: URL(string: "http://scanner.example")!, limit: 2)
+            throw VerificationError.assertionFailed("Expected public hostname cleartext failure")
+        } catch ReconstructionJobClientError.insecureNonLocalURL {
+            // Expected.
+        }
+
+        let sourceClient = DelayedSourceJobClient(
+            delayedHost: "backend-a.example",
+            delayedJobs: [jobs[0]],
+            immediateJobs: [jobs[1]]
+        )
+        let store = ReconstructionJobStore(client: sourceClient)
+        let backendA = "https://backend-a.example"
+        let backendB = "https://backend-b.example"
+        let firstRefresh = Task {
+            await store.refresh(baseURLString: backendA)
+        }
+        try await Task.sleep(nanoseconds: 25_000_000)
+        store.backendURLDidChange(to: backendB)
+        try require(store.jobs.isEmpty, "Expected source edit to clear prior rows")
+        try require(!store.hasLoaded, "Expected source edit to require a new load")
+        await firstRefresh.value
+        try require(store.jobs.isEmpty, "Expected stale in-flight response to be discarded")
+
+        await store.loadIfNeeded(baseURLString: backendB)
+        try require(
+            store.jobs.map(\.scanID) == ["scan-future"],
+            "Expected re-entry load to use the current backend"
+        )
 
         MockJobURLProtocol.handler = { request in
             let response = HTTPURLResponse(

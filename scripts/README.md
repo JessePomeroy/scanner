@@ -37,6 +37,7 @@ Run the reconstruction job client verifier from the repo root:
 ```bash
 xcrun swiftc \
   ios/ScannerApp/ReconstructionJobClient.swift \
+  ios/ScannerApp/ReconstructionJobStore.swift \
   scripts/verify_reconstruction_job_client.swift \
   -o /tmp/verify_reconstruction_job_client
 /tmp/verify_reconstruction_job_client
