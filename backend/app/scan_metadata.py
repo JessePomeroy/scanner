@@ -154,11 +154,18 @@ def _parse_video(value: Any, index: int) -> VideoMetadata:
 
 def _read_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text())
+        return json.loads(
+            path.read_text(),
+            parse_constant=lambda value: _reject_non_finite_json_constant(path, value),
+        )
     except FileNotFoundError:
         raise ScanMetadataError(f"Missing required metadata file: {path.name}") from None
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ScanMetadataError(f"Invalid JSON in {path}: {error}") from error
+
+
+def _reject_non_finite_json_constant(path: Path, value: str) -> None:
+    raise ScanMetadataError(f"Invalid JSON in {path}: non-finite number {value}")
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:

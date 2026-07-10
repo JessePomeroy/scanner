@@ -173,6 +173,7 @@ class BackendTests(unittest.TestCase):
             "id": True,
             "timestamp": float("inf"),
             "resolution": [1920, 0],
+            "blur_score": float("nan"),
         }
         for key, value in invalid_values.items():
             with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
