@@ -26,8 +26,8 @@ from app.artifacts import (  # noqa: E402
     ArtifactUnavailableError,
     UnsafeArtifactPathError,
     list_downloadable_artifacts,
+    open_downloadable_artifact,
     rebase_output_paths,
-    resolve_downloadable_artifact,
 )
 from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
@@ -153,6 +153,8 @@ class BackendTests(unittest.TestCase):
             external = root / "outside.ply"
             external.write_bytes(b"outside")
             (package / "metadata" / "report-link.json").symlink_to(report)
+            hardlink = package / "dense" / "hardlinked.ply"
+            os.link(external, hardlink)
 
             artifacts = list_downloadable_artifacts(
                 {
@@ -164,6 +166,7 @@ class BackendTests(unittest.TestCase):
                     "external": str(external),
                     "missing": str(package / "missing.ply"),
                     "symlink": str(package / "metadata" / "report-link.json"),
+                    "hardlink": str(hardlink),
                 },
                 allowed_package_roots=(completed, failed),
             )
@@ -198,16 +201,21 @@ class BackendTests(unittest.TestCase):
                 "scan_report": str(report),
             }
 
-            resolved = resolve_downloadable_artifact(
+            opened = open_downloadable_artifact(
                 outputs,
                 "metadata/scan_report.json",
                 allowed_package_roots=(completed, failed),
             )
-            self.assertEqual(resolved, report.resolve())
+            try:
+                self.assertEqual(opened.file.read(), b"{}")
+                self.assertEqual(opened.descriptor.relative_path, "metadata/scan_report.json")
+            finally:
+                opened.file.close()
 
             for unsafe_path in [
                 "",
                 "/etc/passwd",
+                "..\\outside.ply",
                 "../outside.ply",
                 "metadata/../metadata/scan_report.json",
                 "metadata/report-link.json",
@@ -215,22 +223,82 @@ class BackendTests(unittest.TestCase):
                 with self.subTest(path=unsafe_path), self.assertRaises(
                     UnsafeArtifactPathError
                 ):
-                    resolve_downloadable_artifact(
+                    open_downloadable_artifact(
                         outputs,
                         unsafe_path,
                         allowed_package_roots=(completed, failed),
                     )
 
             with self.assertRaises(ArtifactUnavailableError):
-                resolve_downloadable_artifact(
+                open_downloadable_artifact(
                     outputs,
                     "metadata/missing.json",
                     allowed_package_roots=(completed, failed),
                 )
             with self.assertRaises(ArtifactUnavailableError):
-                resolve_downloadable_artifact(
+                open_downloadable_artifact(
                     outputs,
                     "images/frame.jpg",
+                    allowed_package_roots=(completed, failed),
+                )
+
+    def test_open_downloadable_artifact_holds_authorized_inode_across_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            artifact_path = package / "dense" / "mesh.ply"
+            artifact_path.parent.mkdir(parents=True)
+            failed.mkdir()
+            artifact_path.write_bytes(b"authorized mesh")
+            external = root / "secret.txt"
+            external.write_bytes(b"external secret")
+            outputs = {
+                "package_dir": str(package),
+                "colmap_output": str(artifact_path),
+            }
+
+            opened = open_downloadable_artifact(
+                outputs,
+                "dense/mesh.ply",
+                allowed_package_roots=(completed, failed),
+            )
+            artifact_path.unlink()
+            artifact_path.symlink_to(external)
+            try:
+                self.assertEqual(opened.file.read(), b"authorized mesh")
+            finally:
+                opened.file.close()
+
+    def test_hardlinked_output_is_not_published_or_downloadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            artifact_path = package / "dense" / "mesh.ply"
+            artifact_path.parent.mkdir(parents=True)
+            failed.mkdir()
+            external = root / "external.ply"
+            external.write_bytes(b"external")
+            os.link(external, artifact_path)
+            outputs = {
+                "package_dir": str(package),
+                "colmap_output": str(artifact_path),
+            }
+
+            self.assertEqual(
+                list_downloadable_artifacts(
+                    outputs,
+                    allowed_package_roots=(completed, failed),
+                ),
+                [],
+            )
+            with self.assertRaises(ArtifactUnavailableError):
+                open_downloadable_artifact(
+                    outputs,
+                    "dense/mesh.ply",
                     allowed_package_roots=(completed, failed),
                 )
 
@@ -265,13 +333,34 @@ class BackendTests(unittest.TestCase):
             output.write_bytes(b"mesh")
 
             rebased = rebase_output_paths(
-                {"textured_mesh": str(output)},
+                {
+                    "textured_mesh": str(output),
+                    "relative_mesh": "dense/scene.obj",
+                },
                 old_root=processing,
                 new_root=completed,
             )
             self.assertEqual(
                 rebased,
-                {"textured_mesh": str(completed / "dense" / "scene.obj")},
+                {
+                    "textured_mesh": str(completed / "dense" / "scene.obj"),
+                    "relative_mesh": str(completed / "dense" / "scene.obj"),
+                },
+            )
+
+            previous_directory = Path.cwd()
+            os.chdir(root)
+            try:
+                relative_rebased = rebase_output_paths(
+                    {"relative_mesh": "dense/scene.obj"},
+                    old_root=Path("processing/job-1"),
+                    new_root=Path("completed/job-1"),
+                )
+            finally:
+                os.chdir(previous_directory)
+            self.assertEqual(
+                relative_rebased,
+                {"relative_mesh": "completed/job-1/dense/scene.obj"},
             )
 
             with self.assertRaises(UnsafeArtifactPathError):
@@ -1612,8 +1701,33 @@ class BackendTests(unittest.TestCase):
             store.create("complete")
             store.update("complete", status="processing", stage="validating")
             store.update("complete", status="processing", stage="reconstructing")
-            store.update("complete", status="processing", stage="exporting")
-            self._write_scan(completed_dir / "complete")
+            store.update(
+                "complete",
+                status="processing",
+                stage="exporting",
+                outputs={
+                    "colmap_output": str(
+                        processing_dir
+                        / "complete"
+                        / "scan_test"
+                        / "dense"
+                        / "fused.ply"
+                    ),
+                    "textured_mesh": str(
+                        processing_dir
+                        / "complete"
+                        / "scan_test"
+                        / "dense"
+                        / "scene_textured.obj"
+                    ),
+                },
+            )
+            complete_scan = self._write_scan(completed_dir / "complete")
+            complete_dense = complete_scan / "dense"
+            complete_dense.mkdir()
+            (complete_dense / "fused.ply").write_bytes(b"dense cloud")
+            (complete_dense / "scene_textured.obj").write_bytes(b"textured mesh")
+            (complete_scan / "metadata" / "scan_report.json").write_text("{}")
 
             reconciled = reconcile_interrupted_jobs(
                 store,
@@ -1645,6 +1759,18 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(
                 complete.outputs["package_dir"],
                 str(completed_dir / "complete"),
+            )
+            self.assertEqual(
+                complete.outputs["colmap_output"],
+                str((complete_scan / "dense" / "fused.ply").resolve()),
+            )
+            self.assertEqual(
+                complete.outputs["textured_mesh"],
+                str((complete_scan / "dense" / "scene_textured.obj").resolve()),
+            )
+            self.assertEqual(
+                complete.outputs["scan_report"],
+                str((complete_scan / "metadata" / "scan_report.json").resolve()),
             )
 
     def test_job_recovery_retries_collision_after_terminal_write_failure(self) -> None:

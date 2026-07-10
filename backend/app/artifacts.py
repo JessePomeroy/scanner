@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import mimetypes
 import os
 from pathlib import Path
-from typing import Mapping, Sequence
+import stat as stat_module
+from typing import BinaryIO, Mapping, Sequence
 
 
 class ArtifactUnavailableError(FileNotFoundError):
@@ -26,6 +28,14 @@ class ArtifactDescriptor:
     filename: str
     byte_count: int
     media_type: str
+
+
+@dataclass
+class OpenedArtifact:
+    """An already-authorized artifact inode held open for response streaming."""
+
+    descriptor: ArtifactDescriptor
+    file: BinaryIO
 
 
 def list_downloadable_artifacts(
@@ -52,22 +62,24 @@ def list_downloadable_artifacts(
         if relative_path is None or relative_path in seen_paths:
             continue
 
-        target = resolved_package / Path(relative_path)
         try:
-            stat = target.stat()
-        except OSError:
+            descriptor, target_stat = _open_owned_regular_file(
+                lexical_package,
+                resolved_package,
+                Path(relative_path),
+            )
+        except (ArtifactUnavailableError, UnsafeArtifactPathError):
             continue
-        if not target.is_file():
-            continue
+        os.close(descriptor)
 
-        filename = target.name
+        filename = Path(relative_path).name
         media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         artifacts.append(
             ArtifactDescriptor(
                 name=name,
                 relative_path=relative_path,
                 filename=filename,
-                byte_count=stat.st_size,
+                byte_count=target_stat.st_size,
                 media_type=media_type,
             )
         )
@@ -76,13 +88,13 @@ def list_downloadable_artifacts(
     return artifacts
 
 
-def resolve_downloadable_artifact(
+def open_downloadable_artifact(
     outputs: Mapping[str, str],
     relative_path: str,
     *,
     allowed_package_roots: Sequence[Path],
-) -> Path:
-    """Resolve a canonical, non-symlink file path inside an owned package."""
+) -> OpenedArtifact:
+    """Open one published output without following replaceable pathnames."""
     lexical_package, resolved_package = _package_directory(
         outputs,
         allowed_package_roots=allowed_package_roots,
@@ -91,6 +103,7 @@ def resolve_downloadable_artifact(
     if (
         not relative_path
         or relative_path.startswith("/")
+        or "\\" in relative_path
         or "\0" in relative_path
         or any(part in {"", ".", ".."} for part in path_parts)
     ):
@@ -100,21 +113,37 @@ def resolve_downloadable_artifact(
     if _contains_symlink(lexical_package, relative):
         raise UnsafeArtifactPathError("Artifact path must not contain symbolic links")
 
-    target = (lexical_package / relative).resolve()
-    if resolved_package not in target.parents:
-        raise UnsafeArtifactPathError("Artifact path escapes the package directory")
-    if not target.is_file():
-        raise ArtifactUnavailableError("Artifact file not found")
-    published_paths = {
-        artifact.relative_path
+    published = {
+        artifact.relative_path: artifact
         for artifact in list_downloadable_artifacts(
             outputs,
             allowed_package_roots=allowed_package_roots,
         )
     }
-    if relative.as_posix() not in published_paths:
+    artifact = published.get(relative.as_posix())
+    if artifact is None:
         raise ArtifactUnavailableError("Artifact file is not a published job output")
-    return target
+
+    descriptor, target_stat = _open_owned_regular_file(
+        lexical_package,
+        resolved_package,
+        relative,
+    )
+    try:
+        file = os.fdopen(descriptor, "rb", closefd=True)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return OpenedArtifact(
+        descriptor=ArtifactDescriptor(
+            name=artifact.name,
+            relative_path=artifact.relative_path,
+            filename=artifact.filename,
+            byte_count=target_stat.st_size,
+            media_type=artifact.media_type,
+        ),
+        file=file,
+    )
 
 
 def rebase_output_paths(
@@ -132,7 +161,9 @@ def rebase_output_paths(
         declared = Path(raw_path)
         if ".." in declared.parts:
             raise UnsafeArtifactPathError(f"Output '{name}' contains parent traversal")
-        lexical_target = _absolute_lexical(declared)
+        lexical_target = _absolute_lexical(
+            declared if declared.is_absolute() else lexical_old_root / declared
+        )
         try:
             relative = lexical_target.relative_to(lexical_old_root)
         except ValueError as error:
@@ -150,6 +181,40 @@ def rebase_output_paths(
         rebased[name] = str(new_root / relative)
 
     return rebased
+
+
+def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
+    """Recover known single-file results from a completed reconstruction tree."""
+    lexical_root = _absolute_lexical(scan_root)
+    resolved_root = lexical_root.resolve()
+    candidates: list[tuple[str, Path]] = [
+        ("scan_report", Path("metadata/scan_report.json")),
+        ("textured_mesh", Path("dense/scene_textured.obj")),
+    ]
+    dense_cloud = Path("dense/fused.ply")
+    sparse_cloud = Path("sparse/sparse_points.ply")
+    for cloud in (dense_cloud, sparse_cloud):
+        try:
+            descriptor, _ = _open_owned_regular_file(lexical_root, resolved_root, cloud)
+        except (ArtifactUnavailableError, UnsafeArtifactPathError):
+            continue
+        os.close(descriptor)
+        candidates.append(("colmap_output", cloud))
+        break
+
+    outputs: dict[str, str] = {}
+    for name, relative in candidates:
+        try:
+            descriptor, _ = _open_owned_regular_file(
+                lexical_root,
+                resolved_root,
+                relative,
+            )
+        except (ArtifactUnavailableError, UnsafeArtifactPathError):
+            continue
+        os.close(descriptor)
+        outputs[name] = str(resolved_root / relative)
+    return outputs
 
 
 def _package_directory(
@@ -204,6 +269,94 @@ def _declared_output_relative_path(
 
 def _absolute_lexical(path: Path) -> Path:
     return Path(os.path.abspath(path))
+
+
+def _open_owned_regular_file(
+    lexical_root: Path,
+    resolved_root: Path,
+    relative: Path,
+) -> tuple[int, os.stat_result]:
+    """Open one inode through no-follow directory descriptors."""
+    if (
+        not relative.parts
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise UnsafeArtifactPathError("Invalid owned file path")
+    if (
+        not hasattr(os, "O_NOFOLLOW")
+        or not hasattr(os, "O_DIRECTORY")
+        or os.open not in os.supports_dir_fd
+    ):
+        raise UnsafeArtifactPathError(
+            "Secure artifact downloads require POSIX no-follow file descriptors"
+        )
+
+    try:
+        expected_root_stat = resolved_root.stat(follow_symlinks=False)
+    except OSError as error:
+        raise ArtifactUnavailableError("Artifact package directory not found") from error
+
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    directory_descriptors: list[int] = []
+    file_descriptor: int | None = None
+
+    try:
+        root_descriptor = os.open(lexical_root, directory_flags)
+        directory_descriptors.append(root_descriptor)
+        opened_root_stat = os.fstat(root_descriptor)
+        if (
+            not stat_module.S_ISDIR(opened_root_stat.st_mode)
+            or (opened_root_stat.st_dev, opened_root_stat.st_ino)
+            != (expected_root_stat.st_dev, expected_root_stat.st_ino)
+        ):
+            raise UnsafeArtifactPathError("Artifact package changed during authorization")
+
+        for part in relative.parts[:-1]:
+            child_descriptor = os.open(
+                part,
+                directory_flags,
+                dir_fd=directory_descriptors[-1],
+            )
+            directory_descriptors.append(child_descriptor)
+
+        file_descriptor = os.open(
+            relative.parts[-1],
+            file_flags,
+            dir_fd=directory_descriptors[-1],
+        )
+        target_stat = os.fstat(file_descriptor)
+        if not stat_module.S_ISREG(target_stat.st_mode):
+            raise ArtifactUnavailableError("Artifact output is not a regular file")
+        if target_stat.st_nlink != 1:
+            raise UnsafeArtifactPathError("Artifact output must have exactly one hard link")
+        return file_descriptor, target_stat
+    except (ArtifactUnavailableError, UnsafeArtifactPathError):
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        raise
+    except OSError as error:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        if error.errno in {errno.ELOOP, errno.EXDEV}:
+            raise UnsafeArtifactPathError(
+                "Artifact path must not contain symbolic links"
+            ) from error
+        raise ArtifactUnavailableError("Artifact file not found") from error
+    finally:
+        for descriptor in reversed(directory_descriptors):
+            os.close(descriptor)
 
 
 def _contains_symlink(base: Path, relative: Path) -> bool:

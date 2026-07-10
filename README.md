@@ -153,8 +153,10 @@ Each artifact has a stable result name, package-relative path, filename, byte
 count, and media type. Download the returned relative path through
 `/scans/<scan_id>/files/<relative_path>`. The backend resolves both persisted
 output declarations and requested paths inside its completed/failed scan roots,
-rejects traversal and symlinks, serves only manifest-published outputs, and never
-exposes raw server paths as download instructions.
+rejects traversal, symlinks, and multi-link files, serves only
+manifest-published outputs, and never exposes raw server paths as download
+instructions. File responses stream from the already-authorized no-follow file
+descriptor rather than reopening a validated pathname.
 
 ## Local Scripts
 

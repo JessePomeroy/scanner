@@ -6,19 +6,22 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import os
 import shutil
+from typing import BinaryIO, Iterator
+from urllib.parse import quote
 import uuid
 import zipfile
 from time import perf_counter
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.artifacts import (
     ArtifactUnavailableError,
     UnsafeArtifactPathError,
     list_downloadable_artifacts,
+    open_downloadable_artifact,
     rebase_output_paths,
-    resolve_downloadable_artifact,
 )
 from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
@@ -181,10 +184,10 @@ def list_scan_artifacts(scan_id: str) -> list[ScanArtifact]:
 
 
 @app.get("/scans/{scan_id}/files/{relative_path:path}")
-def download_scan_file(scan_id: str, relative_path: str) -> FileResponse:
+def download_scan_file(scan_id: str, relative_path: str) -> StreamingResponse:
     record = get_scan_status(scan_id)
     try:
-        target = resolve_downloadable_artifact(
+        opened = open_downloadable_artifact(
             record.outputs,
             relative_path,
             allowed_package_roots=(COMPLETED_DIR, FAILED_DIR),
@@ -194,7 +197,29 @@ def download_scan_file(scan_id: str, relative_path: str) -> FileResponse:
     except UnsafeArtifactPathError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    return FileResponse(target)
+    encoded_filename = quote(opened.descriptor.filename, safe="")
+    try:
+        return StreamingResponse(
+            _stream_artifact(opened.file),
+            media_type=opened.descriptor.media_type,
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename*=UTF-8''" + encoded_filename
+                )
+            },
+            background=BackgroundTask(opened.file.close),
+        )
+    except BaseException:
+        opened.file.close()
+        raise
+
+
+def _stream_artifact(file: BinaryIO, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    try:
+        while chunk := file.read(chunk_size):
+            yield chunk
+    finally:
+        file.close()
 
 
 def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs: bool) -> None:

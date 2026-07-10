@@ -243,10 +243,18 @@ curl -O "http://localhost:8000/scans/<scan_id>/files/<relative_path>"
 
 The manifest omits directories, missing/stale declarations, duplicate files,
 symlinks, and paths outside `scans/completed/` or `scans/failed/`. Download
-requests independently repeat containment, symlink, and manifest-membership
-validation. Reconstruction output paths are rebased when their workspace moves
-from processing to completed storage so future terminal jobs do not retain stale
-processing paths.
+requests independently repeat containment and manifest-membership validation,
+walk every path component through POSIX no-follow directory descriptors, reject
+multi-link files, and stream the already-opened inode. This prevents a pathname
+swap between authorization and response streaming. Run the Windows backend
+inside the documented WSL2 environment because secure artifact serving depends
+on POSIX descriptor semantics.
+
+Reconstruction output paths are rebased when their workspace moves from
+processing to completed storage so future terminal jobs do not retain stale
+processing paths. If the backend restarts after that move but before the final
+job update, recovery rediscovers the known scan report, dense-or-sparse COLMAP
+point cloud, and textured OBJ before restoring a `complete` job.
 
 The iOS app's `Jobs` tab consumes this list through a persisted, editable
 backend URL. Pull to refresh or use the refresh button. The initial URL is

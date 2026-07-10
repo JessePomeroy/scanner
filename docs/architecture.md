@@ -23,7 +23,10 @@ paths and downloadable results. It rebases declared outputs when a processing
 workspace moves to completed storage, discovers only existing regular files,
 and validates both persisted and requested paths against the configured
 completed/failed roots. The FastAPI layer maps those outcomes to a typed
-artifact manifest and file responses without duplicating containment logic.
+artifact manifest and streams an already-opened descriptor without duplicating
+containment logic. POSIX no-follow directory descriptors close the validation-
+to-open race, and multi-link files are excluded because path containment alone
+cannot prove ownership of a hard-linked inode.
 
 The iOS processing-history view depends on a small job-loading interface. A
 URLSession adapter reads the owned FastAPI status contract in production, while
