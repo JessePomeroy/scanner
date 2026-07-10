@@ -75,10 +75,21 @@ async def upload_scan(
             run_dense,
             run_openmvs,
         )
-        return jobs.update(scan_id, status="processing", message="Scan queued for processing.")
+        return jobs.update(
+            scan_id,
+            status="processing",
+            stage="queued",
+            message="Scan queued for processing.",
+        )
 
     processing_dir: Path | None = None
     try:
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="validating",
+            message="Validating scan package.",
+        )
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
@@ -131,11 +142,23 @@ def download_scan_file(scan_id: str, relative_path: str) -> FileResponse:
 def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs: bool) -> None:
     processing_dir: Path | None = None
     try:
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="validating",
+            message="Validating scan package.",
+        )
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
         report = package.validation
 
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="reconstructing",
+            message="Running COLMAP reconstruction.",
+        )
         started_at = perf_counter()
         colmap_output = run_colmap_pipeline(
             scan_root,
@@ -158,6 +181,12 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         }
 
         if run_openmvs:
+            jobs.update(
+                scan_id,
+                status="processing",
+                stage="meshing",
+                message="Running OpenMVS mesh reconstruction.",
+            )
             started_at = perf_counter()
             textured_mesh = run_openmvs_pipeline(scan_root)
             package.record_processing_step(
@@ -169,6 +198,12 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
             )
             outputs["textured_mesh"] = str(textured_mesh)
 
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="exporting",
+            message="Preparing Blender-friendly outputs.",
+        )
         export_blender_formats(scan_root)
         package = validate_and_report_scan(scan_root)
         completed_dir = move_to_completed(scan_id, processing_dir)

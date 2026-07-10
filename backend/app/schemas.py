@@ -42,12 +42,26 @@ except ModuleNotFoundError:
 
 
 JobStatus = Literal["received", "processing", "validated", "complete", "failed"]
+JobStage = Literal[
+    "received",
+    "queued",
+    "validating",
+    "reconstructing",
+    "meshing",
+    "exporting",
+    "finished",
+]
 
 
 class JobRecord(BaseModel):
     scan_id: str
     status: JobStatus
+    stage: JobStage | None = None
     message: str | None = None
     image_count: int | None = None
     frame_count: int | None = None
     outputs: dict[str, str] = Field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None

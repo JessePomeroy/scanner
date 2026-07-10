@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import sys
@@ -22,7 +24,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
-from app.jobs import JobStore  # noqa: E402
+from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
     build_neural_backend_plan,
@@ -572,21 +574,19 @@ class BackendTests(unittest.TestCase):
 
     def test_job_store_lists_recent_jobs_newest_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = JobStore(Path(tmp))
+            timestamps = iter(
+                [
+                    datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc),
+                    datetime(2026, 7, 9, 12, 1, tzinfo=timezone.utc),
+                    datetime(2026, 7, 9, 12, 2, tzinfo=timezone.utc),
+                    datetime(2026, 7, 9, 12, 3, tzinfo=timezone.utc),
+                ]
+            )
+            store = JobStore(Path(tmp), clock=lambda: next(timestamps))
             store.create("old")
             store.create("new")
-            store.update("old", status="validated", message="older")
-            store.update("new", status="complete", message="newer")
-
-            old_path = Path(tmp) / "old.json"
-            new_path = Path(tmp) / "new.json"
-            old_time = 1000
-            new_time = 2000
-            old_path.touch()
-            new_path.touch()
-
-            os.utime(old_path, (old_time, old_time))
-            os.utime(new_path, (new_time, new_time))
+            store.update("old", status="processing", stage="validating", message="older")
+            store.update("new", status="processing", stage="validating", message="newer")
 
             jobs = store.list()
 
@@ -605,6 +605,97 @@ class BackendTests(unittest.TestCase):
             jobs = store.list(limit=1)
 
         self.assertEqual([job.scan_id for job in jobs], ["valid"])
+
+    def test_job_store_records_lifecycle_timestamps_and_stages(self) -> None:
+        start = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
+        timestamps = iter([start, start + timedelta(seconds=2), start + timedelta(seconds=8)])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp), clock=lambda: next(timestamps))
+            received = store.create("scan-1")
+            processing = store.update(
+                "scan-1",
+                status="processing",
+                stage="validating",
+                message="Validating scan package.",
+            )
+            finished = store.update(
+                "scan-1",
+                status="complete",
+                message="Reconstruction completed.",
+            )
+
+        self.assertEqual(received.stage, "received")
+        self.assertEqual(received.created_at, "2026-07-09T12:00:00+00:00")
+        self.assertEqual(received.updated_at, received.created_at)
+        self.assertIsNone(received.started_at)
+        self.assertIsNone(received.finished_at)
+        self.assertEqual(processing.stage, "validating")
+        self.assertEqual(processing.started_at, "2026-07-09T12:00:02+00:00")
+        self.assertEqual(finished.stage, "finished")
+        self.assertEqual(finished.started_at, processing.started_at)
+        self.assertEqual(finished.finished_at, "2026-07-09T12:00:08+00:00")
+
+    def test_job_store_rejects_restart_after_terminal_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="validated")
+
+            with self.assertRaises(JobTransitionError):
+                store.update("scan-1", status="processing", stage="validating")
+
+    def test_job_store_failed_write_preserves_last_valid_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            original = store.create("scan-1")
+
+            with patch("app.jobs.os.replace", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    store.update(
+                        "scan-1",
+                        status="processing",
+                        stage="validating",
+                        message="working",
+                    )
+
+            persisted = store.read("scan-1")
+            temporary_files = list(Path(tmp).glob("*.tmp"))
+
+        self.assertEqual(persisted.status, original.status)
+        self.assertEqual(persisted.updated_at, original.updated_at)
+        self.assertEqual(temporary_files, [])
+
+    def test_job_store_requires_stage_when_processing_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("scan-1")
+
+            with self.assertRaises(ValueError):
+                store.update("scan-1", status="processing")
+
+    def test_job_store_rejects_unsafe_scan_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+
+            with self.assertRaises(ValueError):
+                store.create("../outside")
+
+    def test_job_store_reads_legacy_record_without_lifecycle_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_dir = Path(tmp)
+            (jobs_dir / "legacy.json").write_text(
+                json.dumps({"scan_id": "legacy", "status": "validated"})
+            )
+            store = JobStore(jobs_dir)
+
+            record = store.read("legacy")
+
+        self.assertEqual(record.status, "validated")
+        self.assertIsNone(record.stage)
+        self.assertIsNone(record.created_at)
+        self.assertIsNone(record.finished_at)
 
     def test_validate_scan_package_accepts_object_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

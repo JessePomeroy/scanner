@@ -87,6 +87,13 @@ Check job status:
 curl "http://localhost:8000/scans/<scan_id>"
 ```
 
+Job responses include the lifecycle `stage`, a human-readable `message`, and
+UTC `created_at`, `updated_at`, `started_at`, and `finished_at` timestamps.
+Active reconstruction jobs move through `queued`, `validating`,
+`reconstructing`, optional `meshing`, and `exporting` stages before finishing.
+Job records are replaced atomically so a failed status update leaves the last
+valid JSON record readable.
+
 List recent jobs:
 
 ```bash
