@@ -10,6 +10,9 @@ from app.scan_validator import find_scan_root, validate_scan_package
 from app.schemas import JobRecord, JobStatus
 
 
+_INTERRUPTED_WORKSPACE_OUTPUT = "interrupted_workspace"
+
+
 def reconcile_interrupted_jobs(
     jobs: JobStore,
     *,
@@ -25,24 +28,31 @@ def reconcile_interrupted_jobs(
 
         if completed_path.is_dir():
             if processing_path.exists():
-                _move_interrupted_workspace(
+                record, _ = _preserve_processing_workspace(
+                    jobs,
+                    record,
                     processing_path,
                     failed_dir,
-                    record.scan_id,
                 )
             reconciled.append(_recover_completed_job(jobs, record, completed_path))
             continue
 
-        failed_path = failed_dir / record.scan_id
+        failed_path = _recorded_interrupted_workspace(record, failed_dir)
         if processing_path.exists():
-            failed_path = _move_interrupted_workspace(
+            record, failed_path = _preserve_processing_workspace(
+                jobs,
+                record,
                 processing_path,
                 failed_dir,
-                record.scan_id,
             )
+        elif failed_path is None:
+            existing_failed_path = failed_dir / record.scan_id
+            if existing_failed_path.is_dir():
+                failed_path = existing_failed_path
 
         outputs = dict(record.outputs)
-        if failed_path.is_dir():
+        outputs.pop(_INTERRUPTED_WORKSPACE_OUTPUT, None)
+        if failed_path is not None and failed_path.is_dir():
             outputs["package_dir"] = str(failed_path)
         reconciled.append(
             jobs.update(
@@ -107,16 +117,54 @@ def _recover_completed_job(
     )
 
 
-def _move_interrupted_workspace(
+def _preserve_processing_workspace(
+    jobs: JobStore,
+    record: JobRecord,
     processing_path: Path,
     failed_dir: Path,
-    scan_id: str,
-) -> Path:
+) -> tuple[JobRecord, Path]:
     failed_dir.mkdir(parents=True, exist_ok=True)
+    destination = _recorded_interrupted_workspace(record, failed_dir)
+    if destination is None or destination.exists():
+        destination = _available_failed_destination(failed_dir, record.scan_id)
+
+    outputs = dict(record.outputs)
+    outputs[_INTERRUPTED_WORKSPACE_OUTPUT] = str(destination)
+    record = jobs.update(
+        record.scan_id,
+        status=record.status,
+        message="Backend restart is preserving an interrupted processing workspace.",
+        outputs=outputs,
+    )
+    shutil.move(str(processing_path), str(destination))
+    return record, destination
+
+
+def _recorded_interrupted_workspace(
+    record: JobRecord,
+    failed_dir: Path,
+) -> Path | None:
+    raw_path = record.outputs.get(_INTERRUPTED_WORKSPACE_OUTPUT)
+    if raw_path is None:
+        return None
+
+    candidate = Path(raw_path)
+    expected_prefix = f"{record.scan_id}-interrupted-"
+    if (
+        candidate.parent.resolve() != failed_dir.resolve()
+        or (
+            candidate.name != record.scan_id
+            and not candidate.name.startswith(expected_prefix)
+        )
+    ):
+        return None
+    return candidate
+
+
+def _available_failed_destination(failed_dir: Path, scan_id: str) -> Path:
     destination = failed_dir / scan_id
     suffix = 1
     while destination.exists():
         destination = failed_dir / f"{scan_id}-interrupted-{suffix}"
         suffix += 1
-    shutil.move(str(processing_path), str(destination))
     return destination

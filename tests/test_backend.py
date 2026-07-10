@@ -853,6 +853,69 @@ class BackendTests(unittest.TestCase):
                 str(completed_dir / "complete"),
             )
 
+    def test_job_recovery_retries_collision_after_terminal_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs_dir = root / "jobs"
+            processing_dir = root / "processing"
+            completed_dir = root / "completed"
+            failed_dir = root / "failed"
+            for directory in [jobs_dir, processing_dir, completed_dir, failed_dir]:
+                directory.mkdir(parents=True)
+
+            store = JobStore(jobs_dir)
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            processing_path = processing_dir / "scan-1"
+            processing_path.mkdir()
+            (processing_path / "current-partial.txt").write_text("current")
+            earlier_failed_path = failed_dir / "scan-1"
+            earlier_failed_path.mkdir()
+            (earlier_failed_path / "earlier-partial.txt").write_text("earlier")
+
+            original_update = store.update
+            terminal_write_failed = False
+
+            def fail_first_terminal_update(scan_id: str, **values):
+                nonlocal terminal_write_failed
+                if values["status"] == "failed" and not terminal_write_failed:
+                    terminal_write_failed = True
+                    raise OSError("injected status write failure")
+                return original_update(scan_id, **values)
+
+            store.update = fail_first_terminal_update
+            with self.assertRaises(OSError):
+                reconcile_interrupted_jobs(
+                    store,
+                    processing_dir=processing_dir,
+                    completed_dir=completed_dir,
+                    failed_dir=failed_dir,
+                )
+
+            interrupted = store.read("scan-1")
+            interrupted_path = failed_dir / "scan-1-interrupted-1"
+            self.assertEqual(interrupted.status, "processing")
+            self.assertEqual(
+                interrupted.outputs["interrupted_workspace"],
+                str(interrupted_path),
+            )
+            self.assertTrue((interrupted_path / "current-partial.txt").is_file())
+            self.assertTrue((earlier_failed_path / "earlier-partial.txt").is_file())
+
+            store.update = original_update
+            reconcile_interrupted_jobs(
+                store,
+                processing_dir=processing_dir,
+                completed_dir=completed_dir,
+                failed_dir=failed_dir,
+            )
+            recovered = store.read("scan-1")
+
+            self.assertEqual(recovered.status, "failed")
+            self.assertEqual(recovered.outputs["package_dir"], str(interrupted_path))
+            self.assertNotIn("interrupted_workspace", recovered.outputs)
+            self.assertTrue((interrupted_path / "current-partial.txt").is_file())
+
     def test_job_store_rejects_unsafe_scan_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = JobStore(Path(tmp))
