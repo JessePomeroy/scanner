@@ -5,12 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 
+from app.artifacts import discover_standard_output_paths
 from app.jobs import JobStore
 from app.scan_validator import find_scan_root, validate_scan_package
 from app.schemas import JobRecord, JobStatus
 
 
 _INTERRUPTED_WORKSPACE_OUTPUT = "interrupted_workspace"
+_STANDARD_RESULT_OUTPUTS = {"colmap_output", "scan_report", "textured_mesh"}
 
 
 def reconcile_interrupted_jobs(
@@ -75,6 +77,8 @@ def _recover_completed_job(
     completed_path: Path,
 ) -> JobRecord:
     outputs = dict(record.outputs)
+    for name in _STANDARD_RESULT_OUTPUTS:
+        outputs.pop(name, None)
     outputs["package_dir"] = str(completed_path)
 
     try:
@@ -88,24 +92,32 @@ def _recover_completed_job(
             outputs=outputs,
         )
 
-    report_path = scan_root / "metadata" / "scan_report.json"
-    if report_path.is_file():
-        outputs["scan_report"] = str(report_path)
-
+    recovered_outputs = discover_standard_output_paths(scan_root)
     terminal_status: JobStatus
     message: str
     if record.stage == "validating":
         terminal_status = "validated"
         message = "Recovered validated scan after backend restart."
-    elif record.stage == "exporting":
+    elif record.stage == "exporting" and "colmap_output" in recovered_outputs:
         terminal_status = "complete"
         message = "Recovered completed reconstruction after backend restart."
+    elif record.stage == "exporting":
+        terminal_status = "failed"
+        message = (
+            "Completed scan files were preserved, but no safe dense or sparse "
+            "COLMAP result was found after backend restart."
+        )
     else:
         terminal_status = "failed"
         message = (
             "Completed scan files were preserved, but the saved lifecycle stage "
             f"{record.stage!r} cannot prove processing finished."
         )
+
+    if terminal_status == "complete":
+        outputs.update(recovered_outputs)
+    elif "scan_report" in recovered_outputs:
+        outputs["scan_report"] = recovered_outputs["scan_report"]
 
     return jobs.update(
         record.scan_id,

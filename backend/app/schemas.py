@@ -65,3 +65,11 @@ class JobRecord(BaseModel):
     updated_at: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+
+
+class ScanArtifact(BaseModel):
+    name: str
+    relative_path: str
+    filename: str
+    byte_count: int
+    media_type: str

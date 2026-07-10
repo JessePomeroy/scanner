@@ -22,6 +22,13 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 BLENDER_SCRIPT = ROOT / "scripts" / "blender" / "prepare_scan_asset.py"
 
+from app.artifacts import (  # noqa: E402
+    ArtifactUnavailableError,
+    UnsafeArtifactPathError,
+    list_downloadable_artifacts,
+    open_downloadable_artifact,
+    rebase_output_paths,
+)
 from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
     build_colmap_dense_commands,
@@ -130,6 +137,239 @@ def load_blender_script_module():
 
 
 class BackendTests(unittest.TestCase):
+    def test_list_downloadable_artifacts_exposes_only_owned_regular_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            report = package / "metadata" / "scan_report.json"
+            mesh = package / "dense" / "scene.obj"
+            report.parent.mkdir(parents=True)
+            mesh.parent.mkdir()
+            failed.mkdir()
+            report.write_text("{}")
+            mesh.write_bytes(b"mesh")
+            external = root / "outside.ply"
+            external.write_bytes(b"outside")
+            (package / "metadata" / "report-link.json").symlink_to(report)
+            hardlink = package / "dense" / "hardlinked.ply"
+            os.link(external, hardlink)
+
+            artifacts = list_downloadable_artifacts(
+                {
+                    "package_dir": str(package),
+                    "scan_report": str(report),
+                    "textured_mesh": "dense/scene.obj",
+                    "duplicate_mesh": str(mesh),
+                    "output_directory": str(mesh.parent),
+                    "external": str(external),
+                    "missing": str(package / "missing.ply"),
+                    "symlink": str(package / "metadata" / "report-link.json"),
+                    "hardlink": str(hardlink),
+                },
+                allowed_package_roots=(completed, failed),
+            )
+
+        self.assertEqual(
+            [(item.name, item.relative_path) for item in artifacts],
+            [
+                ("duplicate_mesh", "dense/scene.obj"),
+                ("scan_report", "metadata/scan_report.json"),
+            ],
+        )
+        self.assertEqual(artifacts[0].byte_count, 4)
+        self.assertEqual(artifacts[0].filename, "scene.obj")
+        self.assertTrue(artifacts[0].media_type)
+
+    def test_resolve_downloadable_artifact_rejects_unsafe_or_missing_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            report = package / "metadata" / "scan_report.json"
+            report.parent.mkdir(parents=True)
+            failed.mkdir()
+            report.write_text("{}")
+            undeclared = package / "images" / "frame.jpg"
+            undeclared.parent.mkdir()
+            undeclared.write_bytes(b"image")
+            (package / "metadata" / "report-link.json").symlink_to(report)
+            outputs = {
+                "package_dir": str(package),
+                "scan_report": str(report),
+            }
+
+            opened = open_downloadable_artifact(
+                outputs,
+                "metadata/scan_report.json",
+                allowed_package_roots=(completed, failed),
+            )
+            try:
+                self.assertEqual(opened.file.read(), b"{}")
+                self.assertEqual(opened.descriptor.relative_path, "metadata/scan_report.json")
+            finally:
+                opened.file.close()
+
+            for unsafe_path in [
+                "",
+                "/etc/passwd",
+                "..\\outside.ply",
+                "../outside.ply",
+                "metadata/../metadata/scan_report.json",
+                "metadata/report-link.json",
+            ]:
+                with self.subTest(path=unsafe_path), self.assertRaises(
+                    UnsafeArtifactPathError
+                ):
+                    open_downloadable_artifact(
+                        outputs,
+                        unsafe_path,
+                        allowed_package_roots=(completed, failed),
+                    )
+
+            with self.assertRaises(ArtifactUnavailableError):
+                open_downloadable_artifact(
+                    outputs,
+                    "metadata/missing.json",
+                    allowed_package_roots=(completed, failed),
+                )
+            with self.assertRaises(ArtifactUnavailableError):
+                open_downloadable_artifact(
+                    outputs,
+                    "images/frame.jpg",
+                    allowed_package_roots=(completed, failed),
+                )
+
+    def test_open_downloadable_artifact_holds_authorized_inode_across_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            artifact_path = package / "dense" / "mesh.ply"
+            artifact_path.parent.mkdir(parents=True)
+            failed.mkdir()
+            artifact_path.write_bytes(b"authorized mesh")
+            external = root / "secret.txt"
+            external.write_bytes(b"external secret")
+            outputs = {
+                "package_dir": str(package),
+                "colmap_output": str(artifact_path),
+            }
+
+            opened = open_downloadable_artifact(
+                outputs,
+                "dense/mesh.ply",
+                allowed_package_roots=(completed, failed),
+            )
+            artifact_path.unlink()
+            artifact_path.symlink_to(external)
+            try:
+                self.assertEqual(opened.file.read(), b"authorized mesh")
+            finally:
+                opened.file.close()
+
+    def test_hardlinked_output_is_not_published_or_downloadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            package = completed / "job-1"
+            artifact_path = package / "dense" / "mesh.ply"
+            artifact_path.parent.mkdir(parents=True)
+            failed.mkdir()
+            external = root / "external.ply"
+            external.write_bytes(b"external")
+            os.link(external, artifact_path)
+            outputs = {
+                "package_dir": str(package),
+                "colmap_output": str(artifact_path),
+            }
+
+            self.assertEqual(
+                list_downloadable_artifacts(
+                    outputs,
+                    allowed_package_roots=(completed, failed),
+                ),
+                [],
+            )
+            with self.assertRaises(ArtifactUnavailableError):
+                open_downloadable_artifact(
+                    outputs,
+                    "dense/mesh.ply",
+                    allowed_package_roots=(completed, failed),
+                )
+
+    def test_artifact_package_directory_must_belong_to_scanner_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = root / "completed"
+            failed = root / "failed"
+            completed.mkdir()
+            failed.mkdir()
+            external = root / "external"
+            external.mkdir()
+
+            with self.assertRaises(UnsafeArtifactPathError):
+                list_downloadable_artifacts(
+                    {"package_dir": str(external)},
+                    allowed_package_roots=(completed, failed),
+                )
+            with self.assertRaises(ArtifactUnavailableError):
+                list_downloadable_artifacts(
+                    {},
+                    allowed_package_roots=(completed, failed),
+                )
+
+    def test_rebase_output_paths_preserves_owned_relative_locations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            processing = root / "processing" / "job-1"
+            completed = root / "completed" / "job-1"
+            output = processing / "dense" / "scene.obj"
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b"mesh")
+
+            rebased = rebase_output_paths(
+                {
+                    "textured_mesh": str(output),
+                    "relative_mesh": "dense/scene.obj",
+                },
+                old_root=processing,
+                new_root=completed,
+            )
+            self.assertEqual(
+                rebased,
+                {
+                    "textured_mesh": str(completed / "dense" / "scene.obj"),
+                    "relative_mesh": str(completed / "dense" / "scene.obj"),
+                },
+            )
+
+            previous_directory = Path.cwd()
+            os.chdir(root)
+            try:
+                relative_rebased = rebase_output_paths(
+                    {"relative_mesh": "dense/scene.obj"},
+                    old_root=Path("processing/job-1"),
+                    new_root=Path("completed/job-1"),
+                )
+            finally:
+                os.chdir(previous_directory)
+            self.assertEqual(
+                relative_rebased,
+                {"relative_mesh": "completed/job-1/dense/scene.obj"},
+            )
+
+            with self.assertRaises(UnsafeArtifactPathError):
+                rebase_output_paths(
+                    {"outside": str(root / "outside.ply")},
+                    old_root=processing,
+                    new_root=completed,
+                )
+
     def test_validate_scan_package_accepts_valid_minimal_scan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
@@ -1461,8 +1701,56 @@ class BackendTests(unittest.TestCase):
             store.create("complete")
             store.update("complete", status="processing", stage="validating")
             store.update("complete", status="processing", stage="reconstructing")
-            store.update("complete", status="processing", stage="exporting")
-            self._write_scan(completed_dir / "complete")
+            store.update(
+                "complete",
+                status="processing",
+                stage="exporting",
+                outputs={
+                    "colmap_output": str(
+                        processing_dir
+                        / "complete"
+                        / "scan_test"
+                        / "dense"
+                        / "fused.ply"
+                    ),
+                    "textured_mesh": str(
+                        processing_dir
+                        / "complete"
+                        / "scan_test"
+                        / "dense"
+                        / "scene_textured.obj"
+                    ),
+                },
+            )
+            complete_scan = self._write_scan(completed_dir / "complete")
+            complete_dense = complete_scan / "dense"
+            complete_dense.mkdir()
+            (complete_dense / "fused.ply").write_bytes(b"dense cloud")
+            (complete_dense / "scene_textured.obj").write_bytes(b"textured mesh")
+            (complete_scan / "metadata" / "scan_report.json").write_text("{}")
+
+            for scan_id in ["missing-output", "directory-output"]:
+                store.create(scan_id)
+                store.update(scan_id, status="processing", stage="validating")
+                store.update(scan_id, status="processing", stage="reconstructing")
+                store.update(
+                    scan_id,
+                    status="processing",
+                    stage="exporting",
+                    outputs={
+                        "colmap_output": str(
+                            processing_dir
+                            / scan_id
+                            / "scan_test"
+                            / "dense"
+                            / "fused.ply"
+                        )
+                    },
+                )
+                incomplete_scan = self._write_scan(completed_dir / scan_id)
+                (incomplete_scan / "metadata" / "scan_report.json").write_text("{}")
+                if scan_id == "directory-output":
+                    (incomplete_scan / "dense" / "fused.ply").mkdir(parents=True)
 
             reconciled = reconcile_interrupted_jobs(
                 store,
@@ -1474,10 +1762,18 @@ class BackendTests(unittest.TestCase):
             partial = store.read("partial")
             validated = store.read("validated")
             complete = store.read("complete")
+            missing_output = store.read("missing-output")
+            directory_output = store.read("directory-output")
 
             self.assertEqual(
                 {record.scan_id for record in reconciled},
-                {"partial", "validated", "complete"},
+                {
+                    "partial",
+                    "validated",
+                    "complete",
+                    "missing-output",
+                    "directory-output",
+                },
             )
             self.assertEqual(partial.status, "failed")
             self.assertTrue((existing_failed_path / "earlier-failure.txt").is_file())
@@ -1495,6 +1791,23 @@ class BackendTests(unittest.TestCase):
                 complete.outputs["package_dir"],
                 str(completed_dir / "complete"),
             )
+            self.assertEqual(
+                complete.outputs["colmap_output"],
+                str((complete_scan / "dense" / "fused.ply").resolve()),
+            )
+            self.assertEqual(
+                complete.outputs["textured_mesh"],
+                str((complete_scan / "dense" / "scene_textured.obj").resolve()),
+            )
+            self.assertEqual(
+                complete.outputs["scan_report"],
+                str((complete_scan / "metadata" / "scan_report.json").resolve()),
+            )
+            for recovered in [missing_output, directory_output]:
+                self.assertEqual(recovered.status, "failed")
+                self.assertIn("no safe dense or sparse COLMAP result", recovered.message)
+                self.assertNotIn("colmap_output", recovered.outputs)
+                self.assertTrue(Path(recovered.outputs["package_dir"]).is_dir())
 
     def test_job_recovery_retries_collision_after_terminal_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
