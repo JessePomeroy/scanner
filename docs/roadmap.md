@@ -91,7 +91,8 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
 8. Stream backend upload persistence. Status: implemented.
    - Copy FastAPI's spooled upload to disk in bounded chunks instead of loading
      the full ZIP into process memory.
-   - Publish the incoming ZIP through a temporary sibling and atomic replace.
+   - Run sink I/O off-loop and publish through a temporary sibling, atomic
+     replace, and POSIX directory sync.
    - Remove partial files and mark the job failed after read, write, or request
      cancellation errors.
 

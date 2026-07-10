@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -54,6 +55,7 @@ from app.storage import (  # noqa: E402
     safe_extract_zip,
     store_upload_atomically,
 )
+from app.upload_lifecycle import store_job_upload  # noqa: E402
 
 
 class RecordingAsyncReader:
@@ -81,6 +83,18 @@ class RecordingAsyncReader:
         chunk = self.payload[self.offset:end]
         self.offset += len(chunk)
         return chunk
+
+
+class RecordingUploadJobStore:
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.failure = failure
+        self.updates: list[tuple[str, str, str]] = []
+
+    def update(self, scan_id: str, *, status: str, message: str) -> object:
+        self.updates.append((scan_id, status, message))
+        if self.failure is not None:
+            raise self.failure
+        return object()
 
 
 def load_blender_script_module():
@@ -853,7 +867,6 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             destination = tmp_path / "scan.zip"
-            destination.write_bytes(b"previous complete upload")
             source = RecordingAsyncReader(b"0123456789")
 
             byte_count = asyncio.run(
@@ -865,17 +878,16 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(source.read_sizes, [3, 3, 3, 3, 3])
             self.assertEqual(list(tmp_path.glob(".scan.zip.*.part")), [])
 
-    def test_store_upload_atomically_preserves_destination_on_read_failure(self) -> None:
+    def test_store_upload_atomically_removes_partial_file_on_read_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             destination = tmp_path / "scan.zip"
-            destination.write_bytes(b"previous complete upload")
             source = RecordingAsyncReader(b"replacement", fail_on_call=2)
 
             with self.assertRaisesRegex(OSError, "simulated upload read failure"):
                 asyncio.run(store_upload_atomically(source, destination, chunk_size=4))
 
-            self.assertEqual(destination.read_bytes(), b"previous complete upload")
+            self.assertFalse(destination.exists())
             self.assertEqual(list(tmp_path.glob(".scan.zip.*.part")), [])
 
     def test_store_upload_atomically_cleans_up_after_cancellation(self) -> None:
@@ -894,7 +906,7 @@ class BackendTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             self.assertEqual(list(tmp_path.glob(".scan.zip.*.part")), [])
 
-    def test_store_upload_atomically_replaces_destination_symlink_without_following_it(self) -> None:
+    def test_store_upload_atomically_rejects_existing_destination_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             external = tmp_path / "external.zip"
@@ -903,11 +915,155 @@ class BackendTests(unittest.TestCase):
             destination.symlink_to(external)
             source = RecordingAsyncReader(b"new upload")
 
-            asyncio.run(store_upload_atomically(source, destination, chunk_size=4))
+            with self.assertRaises(FileExistsError):
+                asyncio.run(store_upload_atomically(source, destination, chunk_size=4))
 
-            self.assertFalse(destination.is_symlink())
-            self.assertEqual(destination.read_bytes(), b"new upload")
+            self.assertTrue(destination.is_symlink())
             self.assertEqual(external.read_bytes(), b"external sentinel")
+
+    def test_store_upload_atomically_keeps_event_loop_responsive_during_slow_fsync(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "scan.zip"
+            source = RecordingAsyncReader(b"upload")
+            fsync_started = threading.Event()
+            original_fsync = os.fsync
+
+            def slow_fsync(descriptor: int) -> None:
+                fsync_started.set()
+                time.sleep(0.25)
+                original_fsync(descriptor)
+
+            async def exercise() -> float:
+                with patch("app.storage.os.fsync", side_effect=slow_fsync):
+                    task = asyncio.create_task(store_upload_atomically(source, destination))
+                    while not fsync_started.is_set():
+                        await asyncio.sleep(0.001)
+                    started_at = time.perf_counter()
+                    await asyncio.sleep(0.02)
+                    responsiveness = time.perf_counter() - started_at
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    return responsiveness
+
+            responsiveness = asyncio.run(exercise())
+
+            self.assertLess(responsiveness, 0.1)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(Path(tmp).glob(".scan.zip.*.part")), [])
+
+    def test_store_upload_atomically_orders_file_sync_replace_and_directory_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "scan.zip"
+            source = RecordingAsyncReader(b"upload")
+            events: list[str] = []
+            original_replace = os.replace
+
+            def sync_and_close(file) -> None:
+                events.append("file_sync")
+                file.flush()
+                file.close()
+
+            def replace(source_path: Path, destination_path: Path) -> None:
+                events.append("replace")
+                original_replace(source_path, destination_path)
+
+            def sync_directory(_: Path) -> None:
+                events.append("directory_sync")
+
+            with (
+                patch("app.storage._sync_and_close", side_effect=sync_and_close),
+                patch("app.storage.os.replace", side_effect=replace),
+                patch("app.storage._sync_directory", side_effect=sync_directory),
+            ):
+                asyncio.run(store_upload_atomically(source, destination))
+
+            self.assertEqual(events, ["file_sync", "replace", "directory_sync"])
+            self.assertEqual(destination.read_bytes(), b"upload")
+
+    def test_store_upload_atomically_rolls_back_cancellation_during_directory_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            destination = tmp_path / "scan.zip"
+            source = RecordingAsyncReader(b"upload")
+            directory_sync_started = threading.Event()
+            sync_calls = 0
+
+            def slow_first_directory_sync(_: Path) -> None:
+                nonlocal sync_calls
+                sync_calls += 1
+                if sync_calls == 1:
+                    directory_sync_started.set()
+                    time.sleep(0.2)
+
+            async def exercise() -> None:
+                with patch(
+                    "app.storage._sync_directory",
+                    side_effect=slow_first_directory_sync,
+                ):
+                    task = asyncio.create_task(store_upload_atomically(source, destination))
+                    while not directory_sync_started.is_set():
+                        await asyncio.sleep(0.001)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+
+            asyncio.run(exercise())
+
+            self.assertGreaterEqual(sync_calls, 2)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(tmp_path.glob(".scan.zip.*.part")), [])
+
+    def test_store_upload_atomically_removes_published_file_after_directory_sync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            destination = tmp_path / "scan.zip"
+            source = RecordingAsyncReader(b"upload")
+
+            with (
+                patch("app.storage._sync_directory", side_effect=OSError("directory sync failed")),
+                self.assertRaisesRegex(OSError, "directory sync failed"),
+            ):
+                asyncio.run(store_upload_atomically(source, destination))
+
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(tmp_path.glob(".scan.zip.*.part")), [])
+
+    def test_store_job_upload_preserves_primary_errors_when_job_failure_recording_fails(self) -> None:
+        scenarios = (
+            (
+                OSError("upload read failure"),
+                OSError,
+                "upload read failure",
+            ),
+            (
+                asyncio.CancelledError(),
+                asyncio.CancelledError,
+                None,
+            ),
+        )
+        for primary_error, expected_type, message in scenarios:
+            with self.subTest(error=expected_type.__name__), tempfile.TemporaryDirectory() as tmp:
+                source = RecordingAsyncReader(
+                    b"upload",
+                    fail_on_call=1,
+                    failure=primary_error,
+                )
+                jobs = RecordingUploadJobStore(failure=OSError("job write failure"))
+
+                with self.assertRaises(expected_type) as raised:
+                    asyncio.run(
+                        store_job_upload(
+                            source,
+                            Path(tmp) / "scan.zip",
+                            scan_id="scan-1",
+                            jobs=jobs,
+                        )
+                    )
+
+                if message is not None:
+                    self.assertIn(message, str(raised.exception))
+                self.assertEqual(len(jobs.updates), 1)
 
     def test_store_upload_atomically_rejects_invalid_chunk_size(self) -> None:
         for chunk_size in (0, -1, True):

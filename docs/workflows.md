@@ -164,15 +164,21 @@ memory lower for packages that include `video/scan.mov` or many keyframes.
 The `/scans` endpoint does not call an unbounded `read()` on the uploaded ZIP.
 It requests 1 MiB chunks from FastAPI's spooled `UploadFile` and writes them to
 a uniquely named `.part` sibling under `scans/incoming/`. After the final chunk,
-the backend flushes and fsyncs the temporary file, then atomically replaces the
-job's incoming `.zip` path.
+the backend flushes and fsyncs the temporary file, atomically replaces the
+job's unique incoming `.zip` path, and fsyncs the containing directory before
+reporting success. Native Windows lacks a portable directory-fsync API in
+Python; the documented RTX workflow runs under WSL, where the POSIX durability
+path is active.
 
-If reading, writing, or request handling is interrupted before replacement,
-the temporary sibling is removed and an existing complete destination remains
-unchanged. Ordinary storage failures move the job from `received` to `failed`
-and return a generic HTTP 500 response. Request cancellation also marks the job
-failed before propagating cancellation. The source upload remains owned by
-FastAPI; the storage helper owns only its temporary and destination paths.
+Writes, flushes, closes, replacement, and directory sync run in worker threads
+so slow storage does not block other event-loop work. Cancellation waits for an
+active sink operation to finish safely, then removes the temporary or newly
+published file before propagating. Pre-existing destinations are rejected
+rather than overwritten. Ordinary storage failures move the job from
+`received` to `failed` and return a generic HTTP 500 response. Failure-state
+recording is best-effort: a job-record write failure cannot mask the original
+storage error or cancellation. The source upload remains owned by FastAPI; the
+storage helper owns only its temporary and destination paths.
 
 ## Backend Job Status
 
