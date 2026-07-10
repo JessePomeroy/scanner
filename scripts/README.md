@@ -22,6 +22,9 @@ Current entry points:
   source to round-trip the custom ZIP writer through Python `zipfile`.
 - `verify_reconstruction_job_client.swift`: exercise the iOS job client through
   mock HTTP and in-memory adapters.
+- `verify_scan_upload_client.swift`: verify multipart ZIP construction, shared
+  backend URL policy, upload response handling, cancellation cleanup, and UI
+  store notices without a live backend.
 
 Run the ZIP writer verifier from the repo root:
 
@@ -42,4 +45,16 @@ xcrun swiftc \
   scripts/verify_reconstruction_job_client.swift \
   -o /tmp/verify_reconstruction_job_client
 /tmp/verify_reconstruction_job_client
+```
+
+Run the scan upload client verifier from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors \
+  ios/ScannerApp/ReconstructionJobClient.swift \
+  ios/ScannerApp/ScanUploadClient.swift \
+  ios/ScannerApp/ScanUploadStore.swift \
+  scripts/verify_scan_upload_client.swift \
+  -o /tmp/verify_scan_upload_client
+/tmp/verify_scan_upload_client
 ```

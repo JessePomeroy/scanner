@@ -156,6 +156,20 @@ Swipe a scan row or use `Edit` to delete a package. Deleting from the gallery
 removes both the exported `.zip` and the matching extracted scan folder from the
 device.
 
+Tap the cloud-upload button on a row to send that existing ZIP to the backend
+URL configured in the `Jobs` tab. The initial handoff is validation-only: it
+uses `POST /scans` without reconstruction query flags, then decodes the returned
+job. A validated or failed result is shown immediately, and the `Jobs` tab is
+the ongoing status/history surface. Only one gallery upload runs at a time, and
+the uploading ZIP cannot be deleted until the request finishes.
+
+The iOS client constructs multipart form data in a temporary file by copying
+the ZIP in 1 MiB chunks on a background task. URLSession uploads from that file;
+the multipart copy is removed after success, HTTP/decoding failure, or
+cancellation. This requires temporary free space roughly equal to the ZIP plus
+the small multipart envelope, but avoids holding a video-heavy archive in
+memory. The original exported ZIP remains untouched.
+
 Scan package ZIP creation streams file contents to disk. This keeps export
 memory lower for packages that include `video/scan.mov` or many keyframes.
 
