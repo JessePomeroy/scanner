@@ -82,15 +82,22 @@ high-quality keyframe images and, later, high-resolution still capture.
 Desktop validation parses `frames.json`, `session.json`, and optional
 `video.json` into typed records before reconstruction planning. Each frame must
 have a unique non-negative ID, a finite timestamp, a positive two-dimensional
-resolution, and one unique file reference inside `images/`. Frame timestamps
-must increase in metadata order, and every supported image file must have a
-matching frame entry.
+resolution, and one unique direct file reference inside the flat `images/`
+directory. Frame timestamps must increase in metadata order, and every
+supported image file must have a matching frame entry.
 
 When `video.json` is present, each entry must reference one unique supported
-file inside `video/`. Capture time must include a UTC offset; optional duration,
-frame rate, resolution, and codec fields are validated when present. The audio
-flag is required. If `session.json` declares `image_count` or `video_count`, the
-declared value must match the package files.
+direct file inside the flat `video/` directory. Capture time must include a UTC
+offset; optional duration, frame rate, resolution, and codec fields are
+validated when present. The audio flag is required. If `session.json` declares
+`image_count` or `video_count`, the declared value must match the package files.
+
+The package root owns `images/`, `metadata/`, and optional `video/`, `depth/`,
+`arkit/`, and `preview/` directories. Those directories, metadata files read or
+written by the pipeline, and referenced capture files cannot be symbolic links.
+The flat image/video capture directories also cannot contain nested
+directories. This keeps validation, manifests, reports, and downstream planners
+on the same files inside the scan package.
 
 Legacy packages with video files but no `video.json` are accepted so old user
 data remains inspectable. Their `scan_report.json` includes

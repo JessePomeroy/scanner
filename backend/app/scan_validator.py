@@ -19,6 +19,16 @@ class ScanValidationError(ValueError):
 
 SUPPORTED_VIDEO_SUFFIXES = {".mov", ".mp4", ".m4v"}
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".heic", ".png"}
+OPTIONAL_CAPTURE_DIRECTORIES = ("video", "depth", "arkit", "preview")
+OWNED_METADATA_FILES = (
+    "frames.json",
+    "session.json",
+    "video.json",
+    "manifest.json",
+    "processing.json",
+    "imu.json",
+    "scan_report.json",
+)
 
 
 @dataclass(frozen=True)
@@ -73,19 +83,23 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         formatted = ", ".join(str(path) for path in missing)
         raise ScanValidationError(f"Missing required scan package paths: {formatted}")
 
-    if not images_dir.is_dir():
-        raise ScanValidationError("images must be a directory")
+    _validate_owned_directory(scan_dir, images_dir, label="images")
+    _validate_owned_directory(scan_dir, metadata_dir, label="metadata")
+    for name in OWNED_METADATA_FILES:
+        metadata_path = metadata_dir / name
+        if metadata_path.exists() or metadata_path.is_symlink():
+            _validate_owned_metadata_file(metadata_dir, metadata_path)
+    for name in OPTIONAL_CAPTURE_DIRECTORIES:
+        capture_path = scan_dir / name
+        if capture_path.exists() or capture_path.is_symlink():
+            _validate_owned_directory(scan_dir, capture_path, label=name)
 
     try:
         metadata = load_scan_metadata(metadata_dir)
     except ScanMetadataError as error:
         raise ScanValidationError(str(error)) from error
 
-    images = sorted(
-        path
-        for path in images_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
-    )
+    images = _flat_supported_files(images_dir, SUPPORTED_IMAGE_SUFFIXES, label="images")
     video_files = _video_files(scan_dir)
 
     if not images:
@@ -200,11 +214,7 @@ def _video_files(scan_dir: Path) -> list[Path]:
     if not video_dir.is_dir():
         return []
 
-    return sorted(
-        path
-        for path in video_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_SUFFIXES
-    )
+    return _flat_supported_files(video_dir, SUPPORTED_VIDEO_SUFFIXES, label="video")
 
 
 def _validate_package_file_reference(
@@ -220,7 +230,15 @@ def _validate_package_file_reference(
     if "\\" in relative_path:
         raise ScanValidationError(f"{label} must use forward slashes")
 
-    file_path = (scan_dir / relative_path).resolve()
+    relative = Path(relative_path)
+    if relative.parent != Path(directory):
+        raise ScanValidationError(f"{label} must be a direct child of the {directory} directory")
+
+    package_path = scan_dir / relative_path
+    if package_path.is_symlink():
+        raise ScanValidationError(f"{label} must not be a symbolic link")
+
+    file_path = package_path.resolve()
     expected_dir = (scan_dir / directory).resolve()
     if expected_dir not in file_path.parents:
         raise ScanValidationError(f"{label} escapes the {directory} directory")
@@ -231,6 +249,41 @@ def _validate_package_file_reference(
     if file_path.suffix.lower() not in suffixes:
         raise ScanValidationError(f"Referenced file has unsupported type: {relative_path}")
     return file_path
+
+
+def _validate_owned_directory(scan_dir: Path, path: Path, *, label: str) -> None:
+    if path.is_symlink():
+        raise ScanValidationError(f"{label} must not be a symbolic link")
+    if not path.is_dir():
+        raise ScanValidationError(f"{label} must be a directory")
+
+    resolved = path.resolve()
+    if scan_dir not in resolved.parents:
+        raise ScanValidationError(f"{label} directory escapes the scan directory")
+
+
+def _validate_owned_metadata_file(metadata_dir: Path, path: Path) -> None:
+    if path.is_symlink():
+        raise ScanValidationError(f"{path.name} must not be a symbolic link")
+    if not path.is_file():
+        raise ScanValidationError(f"{path.name} must be a file")
+
+    resolved = path.resolve()
+    metadata_root = metadata_dir.resolve()
+    if metadata_root not in resolved.parents:
+        raise ScanValidationError(f"{path.name} escapes the metadata directory")
+
+
+def _flat_supported_files(directory: Path, suffixes: set[str], *, label: str) -> list[Path]:
+    files: list[Path] = []
+    for path in directory.iterdir():
+        if path.is_symlink():
+            raise ScanValidationError(f"{label} must not contain symbolic links: {path.name}")
+        if path.is_dir():
+            raise ScanValidationError(f"{label} must not contain nested directories: {path.name}")
+        if path.is_file() and path.suffix.lower() in suffixes:
+            files.append(path)
+    return sorted(files)
 
 
 def _validate_session_counts(

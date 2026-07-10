@@ -146,6 +146,71 @@ class BackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ScanValidationError, "inside the images directory"):
                 validate_scan_package(scan_dir)
 
+    def test_validate_scan_package_rejects_symlinked_owned_directories(self) -> None:
+        for directory_name in ("images", "metadata", "video"):
+            with self.subTest(directory=directory_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scan_dir = self._write_scan(root)
+                owned_path = scan_dir / directory_name
+                external_path = root / f"external_{directory_name}"
+
+                if directory_name == "video":
+                    external_path.mkdir()
+                    (external_path / "legacy.mov").write_bytes(b"fake mov")
+                else:
+                    owned_path.rename(external_path)
+
+                owned_path.symlink_to(external_path, target_is_directory=True)
+
+                with self.assertRaisesRegex(ScanValidationError, "must not be a symbolic link"):
+                    if directory_name == "metadata":
+                        validate_and_report_scan(scan_dir)
+                    else:
+                        validate_scan_package(scan_dir)
+
+                if directory_name == "metadata":
+                    self.assertFalse((external_path / "manifest.json").exists())
+                    self.assertFalse((external_path / "scan_report.json").exists())
+
+    def test_validate_scan_package_rejects_symlinked_metadata_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_dir = self._write_scan(root)
+            frames_path = scan_dir / "metadata" / "frames.json"
+            external_frames = root / "external_frames.json"
+            frames_path.rename(external_frames)
+            frames_path.symlink_to(external_frames)
+
+            with self.assertRaisesRegex(ScanValidationError, "frames.json must not be a symbolic link"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_symlinked_metadata_read_write_targets(self) -> None:
+        for name in ("manifest.json", "processing.json", "imu.json", "scan_report.json"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scan_dir = self._write_scan(root)
+                external_target = root / f"external_{name}"
+                external_target.write_text("{}")
+                (scan_dir / "metadata" / name).symlink_to(external_target)
+
+                with self.assertRaisesRegex(ScanValidationError, f"{name} must not be a symbolic link"):
+                    validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_nested_image_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            nested_dir = scan_dir / "images" / "nested"
+            nested_dir.mkdir()
+            image_path = scan_dir / "images" / "frame_000001.jpg"
+            image_path.rename(nested_dir / image_path.name)
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image"] = "images/nested/frame_000001.jpg"
+            frame_path.write_text(json.dumps(frames))
+
+            with self.assertRaisesRegex(ScanValidationError, "must not contain nested directories"):
+                validate_scan_package(scan_dir)
+
     def test_validate_scan_package_rejects_duplicate_frame_ids_and_image_references(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
