@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 import os
 import shutil
@@ -14,7 +15,8 @@ from fastapi.responses import FileResponse
 
 from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
-from app.jobs import JobStore
+from app.job_recovery import reconcile_interrupted_jobs
+from app.jobs import InvalidScanIDError, JobStore
 from app.openmvs_runner import run_openmvs_pipeline
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
@@ -25,7 +27,18 @@ from app.schemas import JobRecord
 from app.storage import UnsafeArchiveError, safe_extract_zip
 
 
-app = FastAPI(title="3D Scan Reconstruction Backend")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    reconcile_interrupted_jobs(
+        jobs,
+        processing_dir=PROCESSING_DIR,
+        completed_dir=COMPLETED_DIR,
+        failed_dir=FAILED_DIR,
+    )
+    yield
+
+
+app = FastAPI(title="3D Scan Reconstruction Backend", lifespan=lifespan)
 
 BASE_DIR = Path(os.environ.get("SCANNER_SCANS_DIR", "scans"))
 INCOMING_DIR = BASE_DIR / "incoming"
@@ -75,10 +88,21 @@ async def upload_scan(
             run_dense,
             run_openmvs,
         )
-        return jobs.update(scan_id, status="processing", message="Scan queued for processing.")
+        return jobs.update(
+            scan_id,
+            status="processing",
+            stage="queued",
+            message="Scan queued for processing.",
+        )
 
     processing_dir: Path | None = None
     try:
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="validating",
+            message="Validating scan package.",
+        )
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
@@ -107,6 +131,8 @@ async def upload_scan(
 def get_scan_status(scan_id: str) -> JobRecord:
     try:
         return jobs.read(scan_id)
+    except InvalidScanIDError as error:
+        raise HTTPException(status_code=400, detail="Invalid scan id") from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Unknown scan id") from error
 
@@ -131,11 +157,23 @@ def download_scan_file(scan_id: str, relative_path: str) -> FileResponse:
 def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs: bool) -> None:
     processing_dir: Path | None = None
     try:
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="validating",
+            message="Validating scan package.",
+        )
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
         report = package.validation
 
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="reconstructing",
+            message="Running COLMAP reconstruction.",
+        )
         started_at = perf_counter()
         colmap_output = run_colmap_pipeline(
             scan_root,
@@ -158,6 +196,12 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
         }
 
         if run_openmvs:
+            jobs.update(
+                scan_id,
+                status="processing",
+                stage="meshing",
+                message="Running OpenMVS mesh reconstruction.",
+            )
             started_at = perf_counter()
             textured_mesh = run_openmvs_pipeline(scan_root)
             package.record_processing_step(
@@ -169,6 +213,12 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
             )
             outputs["textured_mesh"] = str(textured_mesh)
 
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="exporting",
+            message="Preparing Blender-friendly outputs.",
+        )
         export_blender_formats(scan_root)
         package = validate_and_report_scan(scan_root)
         completed_dir = move_to_completed(scan_id, processing_dir)

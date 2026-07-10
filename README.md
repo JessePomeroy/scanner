@@ -87,6 +87,21 @@ Check job status:
 curl "http://localhost:8000/scans/<scan_id>"
 ```
 
+Job responses include the lifecycle `stage`, a human-readable `message`, and
+UTC `created_at`, `updated_at`, `started_at`, and `finished_at` timestamps.
+Active reconstruction jobs move through `queued`, `validating`,
+`reconstructing`, optional `meshing`, and `exporting` stages before finishing.
+Job records are replaced atomically so a failed status update leaves the last
+valid JSON record readable.
+
+The local backend uses in-process background tasks and should run as one process
+per scans directory. After a backend restart, unfinished records are marked
+failed and partial workspaces are preserved under `scans/failed/` rather than
+silently appearing active or attempting an unsafe automatic resume. If a valid
+workspace had already reached `scans/completed/`, its terminal record and
+download path are restored. Uploaded ZIP files also remain available for
+inspection.
+
 List recent jobs:
 
 ```bash

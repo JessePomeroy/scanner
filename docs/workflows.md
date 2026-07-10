@@ -139,6 +139,34 @@ Or list recent jobs, newest first:
 curl "http://localhost:8000/scans?limit=20"
 ```
 
+Each job record includes:
+
+- `status`: the coarse lifecycle (`received`, `processing`, `validated`,
+  `complete`, or `failed`).
+- `stage`: the current processing activity (`queued`, `validating`,
+  `reconstructing`, `meshing`, `exporting`, or `finished`).
+- `message`: a human-readable description suitable for a local status UI.
+- `created_at`, `updated_at`, `started_at`, and `finished_at`: UTC timestamps;
+  older records created before lifecycle tracking may return `null` values.
+- `image_count`, `frame_count`, and `outputs`: final capture counts and output
+  paths when available.
+
+The backend rejects attempts to restart terminal jobs and writes each job JSON
+record through a temporary sibling file followed by an atomic replacement.
+Concurrent status reads therefore see either the previous complete record or
+the new complete record, not partially written JSON.
+
+Reconstruction currently runs as an in-process FastAPI background task. Run a
+single backend process for each `SCANNER_SCANS_DIR`; the job store serializes
+threads within that process but is not a multi-process queue. On startup, any
+job left in `received` or `processing` is marked `failed` with an interruption
+message. Partial processing directories move to `scans/failed/` without
+overwriting an existing failed directory. If processing had already moved a
+valid package to `scans/completed/`, startup restores the matching `validated`
+or `complete` record and its download path. Processing does not resume
+automatically, and the uploaded ZIP remains in `scans/incoming/` so it can be
+inspected before the scan is submitted again.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:

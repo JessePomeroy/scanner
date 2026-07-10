@@ -210,6 +210,9 @@ should not block the production COLMAP/OpenMVS path.
 ## Later Product Features
 
 - Scan gallery. Status: implemented initial local ZIP gallery.
+- Backend job lifecycle/status API. Status: implemented initial pass.
+  - Persist lifecycle stages and UTC timestamps for processing history clients.
+  - Replace job records atomically and prevent terminal jobs from restarting.
 - Job status UI.
 - Upload to local workstation or cloud worker.
 - Result download/share UI.
