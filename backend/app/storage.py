@@ -6,7 +6,6 @@ import asyncio
 import os
 from pathlib import Path
 import tempfile
-from threading import Event
 from typing import Protocol
 import zipfile
 
@@ -27,7 +26,7 @@ async def store_upload_atomically(
     *,
     chunk_size: int = 1024 * 1024,
 ) -> int:
-    """Stream an upload to a sibling temporary file, then replace atomically.
+    """Stream an upload to a sibling temporary file, then publish atomically.
 
     The caller owns the source lifetime, and the job-specific destination must
     not already exist. Any read/write/publication/cancellation failure removes
@@ -43,7 +42,7 @@ async def store_upload_atomically(
 
     temporary_path: Path | None = None
     temporary_file = None
-    published = Event()
+    upload_identity: tuple[int, int] | None = None
     total_bytes = 0
 
     try:
@@ -55,6 +54,8 @@ async def store_upload_atomically(
             delete=False,
         )
         temporary_path = Path(temporary_file.name)
+        temporary_stat = os.fstat(temporary_file.fileno())
+        upload_identity = (temporary_stat.st_dev, temporary_stat.st_ino)
         while True:
             chunk = await source.read(chunk_size)
             if not isinstance(chunk, bytes):
@@ -67,10 +68,13 @@ async def store_upload_atomically(
         await _run_blocking_cancellation_safe(_sync_and_close, temporary_file)
         temporary_file = None
         await _run_blocking_cancellation_safe(
-            _publish_and_sync_directory,
+            _publish_without_clobber,
             temporary_path,
             destination,
-            published,
+        )
+        await _run_blocking_cancellation_safe(
+            _remove_temporary_name,
+            temporary_path,
         )
         return total_bytes
     except BaseException:
@@ -80,7 +84,7 @@ async def store_upload_atomically(
                 temporary_file,
                 temporary_path,
                 destination,
-                published.is_set(),
+                upload_identity,
             )
         except BaseException:
             # Cleanup is best-effort; never replace the primary storage error
@@ -124,21 +128,24 @@ def _write_chunk(file, chunk: bytes) -> None:
         remaining = remaining[written:]
 
 
-def _publish_and_sync_directory(
+def _publish_without_clobber(
     temporary_path: Path,
     destination: Path,
-    published: Event,
 ) -> None:
-    os.replace(temporary_path, destination)
-    published.set()
+    os.link(temporary_path, destination)
     _sync_directory(destination.parent)
+
+
+def _remove_temporary_name(temporary_path: Path) -> None:
+    temporary_path.unlink()
+    _sync_directory(temporary_path.parent)
 
 
 def _cleanup_failed_upload(
     temporary_file,
     temporary_path: Path | None,
     destination: Path,
-    published: bool,
+    upload_identity: tuple[int, int] | None,
 ) -> None:
     if temporary_file is not None:
         try:
@@ -147,9 +154,17 @@ def _cleanup_failed_upload(
             pass
     if temporary_path is not None:
         temporary_path.unlink(missing_ok=True)
-    if published:
+    if upload_identity is not None and _path_identity(destination) == upload_identity:
         destination.unlink(missing_ok=True)
         _sync_directory(destination.parent)
+
+
+def _path_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        value = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (value.st_dev, value.st_ino)
 
 
 def _sync_directory(path: Path) -> None:

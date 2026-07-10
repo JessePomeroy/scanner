@@ -92,7 +92,7 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Copy FastAPI's spooled upload to disk in bounded chunks instead of loading
      the full ZIP into process memory.
    - Run sink I/O off-loop and publish through a temporary sibling, atomic
-     replace, and POSIX directory sync.
+     no-clobber hard link, and POSIX directory sync.
    - Remove partial files and mark the job failed after read, write, or request
      cancellation errors.
 

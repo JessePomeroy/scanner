@@ -14,7 +14,7 @@ reconstruction planners.
 Incoming upload persistence depends on a minimal async binary-reader contract.
 FastAPI's `UploadFile` is the production source, while focused fake readers
 exercise chunking, failure, and cancellation. The storage module owns temporary
-files, off-loop sink workers, file/directory sync, atomic publication, and
+files, off-loop sink workers, file/directory sync, no-clobber publication, and
 cleanup. The upload-lifecycle module owns best-effort terminal job recording,
 and the API endpoint owns HTTP error mapping.
 

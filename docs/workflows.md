@@ -164,17 +164,21 @@ memory lower for packages that include `video/scan.mov` or many keyframes.
 The `/scans` endpoint does not call an unbounded `read()` on the uploaded ZIP.
 It requests 1 MiB chunks from FastAPI's spooled `UploadFile` and writes them to
 a uniquely named `.part` sibling under `scans/incoming/`. After the final chunk,
-the backend flushes and fsyncs the temporary file, atomically replaces the
-job's unique incoming `.zip` path, and fsyncs the containing directory before
-reporting success. Native Windows lacks a portable directory-fsync API in
-Python; the documented RTX workflow runs under WSL, where the POSIX durability
-path is active.
+the backend flushes and fsyncs the temporary file, atomically creates the job's
+unique incoming `.zip` as a hard link without clobbering an existing path, and
+fsyncs the containing directory. It then removes the temporary name and syncs
+the directory again before reporting success. Standard macOS, Linux, WSL, and
+NTFS storage support hard links. Native Windows lacks a portable
+directory-fsync API in Python; the documented RTX workflow runs under WSL,
+where the POSIX durability path is active.
 
 Writes, flushes, closes, replacement, and directory sync run in worker threads
 so slow storage does not block other event-loop work. Cancellation waits for an
 active sink operation to finish safely, then removes the temporary or newly
-published file before propagating. Pre-existing destinations are rejected
-rather than overwritten. Ordinary storage failures move the job from
+published file before propagating. Late and concurrent destinations are
+rejected atomically rather than overwritten, and rollback only removes a final
+path that still has the uploaded temporary file's device/inode identity.
+Ordinary storage failures move the job from
 `received` to `failed` and return a generic HTTP 500 response. Failure-state
 recording is best-effort: a job-record write failure cannot mask the original
 storage error or cancellation. The source upload remains owned by FastAPI; the
