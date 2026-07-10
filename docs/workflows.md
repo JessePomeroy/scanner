@@ -150,7 +150,7 @@ against what the phone showed.
 
 The iPhone app has a `Scans` tab that lists exported `.zip` packages from the
 local `Scans/` documents folder. Pull to refresh or use the refresh button after
-exporting, then tap a package to reopen the share sheet.
+exporting, then tap the share icon on a package row to open the share sheet.
 
 Swipe a scan row or use `Edit` to delete a package. Deleting from the gallery
 removes both the exported `.zip` and the matching extracted scan folder from the
@@ -166,9 +166,10 @@ the uploading ZIP cannot be deleted until the request finishes.
 The iOS client constructs multipart form data in a temporary file by copying
 the ZIP in 1 MiB chunks on a background task. URLSession uploads from that file;
 the multipart copy is removed after success, HTTP/decoding failure, or
-cancellation. This requires temporary free space roughly equal to the ZIP plus
-the small multipart envelope, but avoids holding a video-heavy archive in
-memory. The original exported ZIP remains untouched.
+cancellation. Any body left by a crash or system termination is removed when
+the upload client next starts. This requires temporary free space roughly equal
+to the ZIP plus the small multipart envelope, but avoids holding a video-heavy
+archive in memory. The original exported ZIP remains untouched.
 
 Scan package ZIP creation streams file contents to disk. This keeps export
 memory lower for packages that include `video/scan.mov` or many keyframes.

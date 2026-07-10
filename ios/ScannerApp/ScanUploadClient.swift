@@ -49,10 +49,35 @@ struct URLSessionScanUploadTransport: ScanUploadTransport {
     }
 }
 
+private enum ScanUploadHousekeeping {
+    private static let removeAbandonedBodiesOnce: Void = {
+        let fileManager = FileManager.default
+        let candidates = try? fileManager.contentsOfDirectory(
+            at: fileManager.temporaryDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+        )
+        for candidate in candidates ?? []
+        where candidate.lastPathComponent.hasPrefix("scanner-upload-")
+            && candidate.pathExtension == "multipart" {
+            guard let values = try? candidate.resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+            ), values.isRegularFile == true || values.isSymbolicLink == true else {
+                continue
+            }
+            try? fileManager.removeItem(at: candidate)
+        }
+    }()
+
+    static func removeAbandonedBodies() {
+        _ = removeAbandonedBodiesOnce
+    }
+}
+
 struct HTTPScanUploadClient: ScanUploading {
     private let transport: ScanUploadTransport
 
     init(transport: ScanUploadTransport = URLSessionScanUploadTransport()) {
+        ScanUploadHousekeeping.removeAbandonedBodies()
         self.transport = transport
     }
 

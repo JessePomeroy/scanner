@@ -80,7 +80,14 @@ struct VerifyScanUploadClient {
             )!
             return (successPayload, response)
         }
+        let abandonedBodyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scanner-upload-\(UUID().uuidString).multipart")
+        try Data("abandoned-body".utf8).write(to: abandonedBodyURL)
         let client = HTTPScanUploadClient(transport: successTransport)
+        try require(
+            !FileManager.default.fileExists(atPath: abandonedBodyURL.path),
+            "Expected abandoned multipart cleanup when the first client starts"
+        )
         let job = try await client.uploadScan(
             archiveURL: archiveURL,
             baseURL: URL(string: "http://127.0.0.1:8000/api")!

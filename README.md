@@ -53,8 +53,9 @@ backend URL configured in the `Jobs` tab for validation-only processing. The
 client streams the ZIP into a temporary multipart body off the main UI thread,
 then URLSession uploads that file without loading the archive into one `Data`
 value. The temporary body is removed after success, failure, or cancellation;
-the original gallery ZIP is never modified. Upload results link the user back
-to the `Jobs` tab for lifecycle details.
+an abandoned body from a terminated process is removed when the upload client
+next starts. The original gallery ZIP is never modified. Upload results link
+the user back to the `Jobs` tab for lifecycle details.
 
 The `Jobs` tab reads recent reconstruction jobs from a configurable backend URL
 and shows status, lifecycle stage, message, capture counts, and update time. The
