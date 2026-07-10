@@ -159,6 +159,21 @@ device.
 Scan package ZIP creation streams file contents to disk. This keeps export
 memory lower for packages that include `video/scan.mov` or many keyframes.
 
+## Backend Upload Persistence
+
+The `/scans` endpoint does not call an unbounded `read()` on the uploaded ZIP.
+It requests 1 MiB chunks from FastAPI's spooled `UploadFile` and writes them to
+a uniquely named `.part` sibling under `scans/incoming/`. After the final chunk,
+the backend flushes and fsyncs the temporary file, then atomically replaces the
+job's incoming `.zip` path.
+
+If reading, writing, or request handling is interrupted before replacement,
+the temporary sibling is removed and an existing complete destination remains
+unchanged. Ordinary storage failures move the job from `received` to `failed`
+and return a generic HTTP 500 response. Request cancellation also marks the job
+failed before propagating cancellation. The source upload remains owned by
+FastAPI; the storage helper owns only its temporary and destination paths.
+
 ## Backend Job Status
 
 The local FastAPI backend stores job records under `scans/jobs/`. Query a single

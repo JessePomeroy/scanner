@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 import os
@@ -24,7 +25,7 @@ from app.scan_validator import (
     find_scan_root,
 )
 from app.schemas import JobRecord
-from app.storage import UnsafeArchiveError, safe_extract_zip
+from app.storage import UnsafeArchiveError, safe_extract_zip, store_upload_atomically
 
 
 @asynccontextmanager
@@ -75,10 +76,28 @@ async def upload_scan(
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
     scan_id = str(uuid.uuid4())
-    record = jobs.create(scan_id)
+    jobs.create(scan_id)
     incoming_zip = INCOMING_DIR / f"{scan_id}.zip"
 
-    incoming_zip.write_bytes(await file.read())
+    try:
+        await store_upload_atomically(file, incoming_zip)
+    except asyncio.CancelledError:
+        jobs.update(
+            scan_id,
+            status="failed",
+            message="Upload was interrupted before the scan package was stored.",
+        )
+        raise
+    except Exception as error:
+        jobs.update(
+            scan_id,
+            status="failed",
+            message=f"Unable to store uploaded scan package: {error}",
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to store uploaded scan package",
+        ) from error
 
     if run_reconstruction:
         background_tasks.add_task(

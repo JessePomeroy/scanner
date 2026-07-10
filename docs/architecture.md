@@ -11,6 +11,12 @@ integrity and exposes the existing `validate_scan_package` interface to backend
 and script callers. This keeps metadata-shape compatibility rules out of
 reconstruction planners.
 
+Incoming upload persistence depends on a minimal async binary-reader contract.
+FastAPI's `UploadFile` is the production source, while focused fake readers
+exercise chunking, failure, and cancellation. The storage module owns temporary
+files, fsync, atomic replacement, and cleanup; the API endpoint owns job-state
+transitions and HTTP errors.
+
 The iOS processing-history view depends on a small job-loading interface. A
 URLSession adapter reads the owned FastAPI status contract in production, while
 an in-memory adapter and mock-HTTP verifier exercise the same interface without
