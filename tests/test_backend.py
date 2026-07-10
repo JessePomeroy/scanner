@@ -181,20 +181,45 @@ class BackendTests(unittest.TestCase):
             frames_path.rename(external_frames)
             frames_path.symlink_to(external_frames)
 
-            with self.assertRaisesRegex(ScanValidationError, "frames.json must not be a symbolic link"):
+            with self.assertRaisesRegex(ScanValidationError, "symbolic links: frames.json"):
                 validate_scan_package(scan_dir)
 
     def test_validate_scan_package_rejects_symlinked_metadata_read_write_targets(self) -> None:
-        for name in ("manifest.json", "processing.json", "imu.json", "scan_report.json"):
+        for name in (
+            "manifest.json",
+            "processing.json",
+            "imu.json",
+            "scan_report.json",
+            "colmap_openmvs_plan.json",
+            "mast3r_slam_neural_plan.json",
+        ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 scan_dir = self._write_scan(root)
                 external_target = root / f"external_{name}"
-                external_target.write_text("{}")
+                external_target.write_text("external sentinel")
                 (scan_dir / "metadata" / name).symlink_to(external_target)
 
-                with self.assertRaisesRegex(ScanValidationError, f"{name} must not be a symbolic link"):
-                    validate_scan_package(scan_dir)
+                with self.assertRaisesRegex(ScanValidationError, f"symbolic links: {name}"):
+                    validate_and_report_scan(scan_dir)
+
+                self.assertEqual(external_target.read_text(), "external sentinel")
+
+    def test_validate_scan_package_rejects_symlinked_optional_capture_files(self) -> None:
+        for directory_name in ("depth", "arkit", "preview"):
+            with self.subTest(directory=directory_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                scan_dir = self._write_scan(root)
+                capture_dir = scan_dir / directory_name
+                capture_dir.mkdir()
+                external_file = root / f"external_{directory_name}.bin"
+                external_file.write_bytes(b"external sentinel")
+                (capture_dir / "frame.bin").symlink_to(external_file)
+
+                with self.assertRaisesRegex(ScanValidationError, "symbolic links: frame.bin"):
+                    validate_and_report_scan(scan_dir)
+
+                self.assertEqual(external_file.read_bytes(), b"external sentinel")
 
     def test_validate_scan_package_rejects_nested_image_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
