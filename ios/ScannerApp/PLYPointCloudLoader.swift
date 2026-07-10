@@ -127,13 +127,19 @@ struct PLYPointCloudLoader: Sendable {
               header.vertexCount <= Header.maximumVertexCount else {
             throw PLYPointCloudError.invalidVertexCount
         }
+        if header.format == .ascii {
+            guard header.vertexCount <= Header.maximumASCIIVertexCount,
+                  data.count <= Header.maximumASCIIFileByteCount else {
+                throw PLYPointCloudError.fileTooLarge
+            }
+        }
 
-        let stride = max(
-            1,
-            ((header.vertexCount - 1) / maximumPreviewPoints) + 1
+        let samplePlan = SamplePlan(
+            sourceCount: header.vertexCount,
+            maximumSampleCount: maximumPreviewPoints
         )
         var accumulator = VertexAccumulator(
-            capacity: min(maximumPreviewPoints, header.vertexCount),
+            capacity: samplePlan.sampleCount,
             hasVertexColors: header.hasVertexColors
         )
 
@@ -142,14 +148,14 @@ struct PLYPointCloudLoader: Sendable {
             try parseASCII(
                 data: data,
                 header: header,
-                samplingStride: stride,
+                samplePlan: samplePlan,
                 accumulator: &accumulator
             )
         case .binaryLittleEndian, .binaryBigEndian:
             try parseBinary(
                 data: data,
                 header: header,
-                samplingStride: stride,
+                samplePlan: samplePlan,
                 accumulator: &accumulator
             )
         }
@@ -176,21 +182,29 @@ struct PLYPointCloudLoader: Sendable {
     private func parseASCII(
         data: Data,
         header: Header,
-        samplingStride: Int,
+        samplePlan: SamplePlan,
         accumulator: inout VertexAccumulator
     ) throws {
         var cursor = header.payloadOffset
+        var sampleNumber = 0
+        var nextSampleIndex = samplePlan.sourceIndex(forSampleNumber: sampleNumber)
+        var nextCancellationOffset = cursor + 65_536
         for vertexIndex in 0..<header.vertexCount {
-            if vertexIndex.isMultiple(of: 4_096) {
-                try Task.checkCancellation()
-            }
-            guard let line = try Self.nextLine(
+            guard let lineRange = try Self.nextLineRange(
                 in: data,
                 cursor: &cursor,
                 maximumByteCount: 1_048_576
             ) else {
                 throw PLYPointCloudError.truncatedPayload
             }
+            if cursor >= nextCancellationOffset {
+                try Task.checkCancellation()
+                nextCancellationOffset = cursor + 65_536
+            }
+            guard vertexIndex == nextSampleIndex else { continue }
+
+            try Task.checkCancellation()
+            let line = String(decoding: data[lineRange], as: UTF8.self)
             let values = line.split(whereSeparator: \Character.isWhitespace)
             guard values.count == header.properties.count else {
                 throw PLYPointCloudError.invalidVertexData
@@ -207,16 +221,19 @@ struct PLYPointCloudLoader: Sendable {
             }
             try accumulator.include(
                 components,
-                header: header,
-                shouldSample: vertexIndex.isMultiple(of: samplingStride)
+                header: header
             )
+            sampleNumber += 1
+            if sampleNumber < samplePlan.sampleCount {
+                nextSampleIndex = samplePlan.sourceIndex(forSampleNumber: sampleNumber)
+            }
         }
     }
 
     private func parseBinary(
         data: Data,
         header: Header,
-        samplingStride: Int,
+        samplePlan: SamplePlan,
         accumulator: inout VertexAccumulator
     ) throws {
         let recordByteCount = header.properties.reduce(0) { $0 + $1.type.byteCount }
@@ -231,43 +248,46 @@ struct PLYPointCloudLoader: Sendable {
             throw PLYPointCloudError.truncatedPayload
         }
 
+        let decodedProperties = header.properties.filter { $0.semantic != .ignored }
         try data.withUnsafeBytes { bytes in
-            var cursor = header.payloadOffset
-            for vertexIndex in 0..<header.vertexCount {
-                if vertexIndex.isMultiple(of: 4_096) {
-                    try Task.checkCancellation()
-                }
+            for sampleNumber in 0..<samplePlan.sampleCount {
+                try Task.checkCancellation()
+                let vertexIndex = samplePlan.sourceIndex(forSampleNumber: sampleNumber)
+                let recordOffset = header.payloadOffset + (vertexIndex * recordByteCount)
                 var components = VertexComponents()
-                for property in header.properties {
+                for property in decodedProperties {
                     let value = try property.type.decode(
                         bytes: bytes,
-                        offset: cursor,
+                        offset: recordOffset + property.byteOffset,
                         format: header.format
                     )
                     guard value.isFinite else {
                         throw PLYPointCloudError.invalidVertexData
                     }
                     components.assign(value, semantic: property.semantic)
-                    cursor += property.type.byteCount
                 }
                 try accumulator.include(
                     components,
-                    header: header,
-                    shouldSample: vertexIndex.isMultiple(of: samplingStride)
+                    header: header
                 )
             }
         }
     }
 
-    private static func nextLine(
+    private static func nextLineRange(
         in data: Data,
         cursor: inout Int,
         maximumByteCount: Int
-    ) throws -> String? {
+    ) throws -> Range<Int>? {
         guard cursor < data.count else { return nil }
         let start = cursor
+        var nextCancellationOffset = start + 65_536
         while cursor < data.count, data[cursor] != 0x0A {
             cursor += 1
+            if cursor >= nextCancellationOffset {
+                try Task.checkCancellation()
+                nextCancellationOffset += 65_536
+            }
             guard cursor - start <= maximumByteCount else {
                 throw PLYPointCloudError.invalidVertexData
             }
@@ -280,7 +300,20 @@ struct PLYPointCloudLoader: Sendable {
         if end > start, data[end - 1] == 0x0D {
             end -= 1
         }
-        return String(decoding: data[start..<end], as: UTF8.self)
+        return start..<end
+    }
+
+    private static func nextLine(
+        in data: Data,
+        cursor: inout Int,
+        maximumByteCount: Int
+    ) throws -> String? {
+        guard let range = try nextLineRange(
+            in: data,
+            cursor: &cursor,
+            maximumByteCount: maximumByteCount
+        ) else { return nil }
+        return String(decoding: data[range], as: UTF8.self)
     }
 }
 
@@ -471,11 +504,14 @@ private extension PLYPointCloudLoader {
     struct Property: Equatable {
         let type: ScalarType
         let semantic: PropertySemantic
+        let byteOffset: Int
     }
 
     struct Header: Equatable {
         static let maximumHeaderByteCount = 65_536
         static let maximumVertexCount = 100_000_000
+        static let maximumASCIIVertexCount = 5_000_000
+        static let maximumASCIIFileByteCount = 512 * 1_024 * 1_024
 
         let format: Format
         let vertexCount: Int
@@ -502,6 +538,7 @@ private extension PLYPointCloudLoader {
             var format: Format?
             var vertexCount: Int?
             var properties: [Property] = []
+            var vertexRecordByteCount = 0
             var colorTypes: [PropertySemantic: ScalarType] = [:]
             var currentElement: String?
             var dataElementPrecedesVertices = false
@@ -567,7 +604,14 @@ private extension PLYPointCloudLoader {
                         }
                         colorTypes[semantic] = scalarType
                     }
-                    properties.append(Property(type: scalarType, semantic: semantic))
+                    properties.append(
+                        Property(
+                            type: scalarType,
+                            semantic: semantic,
+                            byteOffset: vertexRecordByteCount
+                        )
+                    )
+                    vertexRecordByteCount += scalarType.byteCount
                 case "end_header":
                     guard tokens.count == 1 else {
                         throw PLYPointCloudError.invalidHeader
@@ -627,6 +671,21 @@ private extension PLYPointCloudLoader {
         }
     }
 
+    struct SamplePlan {
+        let sourceCount: Int
+        let sampleCount: Int
+
+        init(sourceCount: Int, maximumSampleCount: Int) {
+            self.sourceCount = sourceCount
+            sampleCount = min(sourceCount, maximumSampleCount)
+        }
+
+        func sourceIndex(forSampleNumber sampleNumber: Int) -> Int {
+            guard sampleCount > 1 else { return 0 }
+            return (sampleNumber * (sourceCount - 1)) / (sampleCount - 1)
+        }
+    }
+
     struct VertexAccumulator {
         private(set) var vertices: [PointCloudPreviewVertex]
         private(set) var bounds: PointCloudBounds?
@@ -640,8 +699,7 @@ private extension PLYPointCloudLoader {
 
         mutating func include(
             _ components: VertexComponents,
-            header: Header,
-            shouldSample: Bool
+            header: Header
         ) throws {
             guard let x = components.x,
                   let y = components.y,
@@ -700,9 +758,7 @@ private extension PLYPointCloudLoader {
             } else {
                 color = SIMD4(0.30, 0.72, 1.0, 1.0)
             }
-            if shouldSample {
-                vertices.append(PointCloudPreviewVertex(position: position, color: color))
-            }
+            vertices.append(PointCloudPreviewVertex(position: position, color: color))
         }
     }
 }

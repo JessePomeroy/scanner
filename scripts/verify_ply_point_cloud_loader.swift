@@ -36,14 +36,14 @@ struct VerifyPLYPointCloudLoader {
         try require(sampled.isDownsampled, "Expected downsampled marker")
         try require(sampled.hasVertexColors, "Expected RGB detection")
         try require(
-            sampled.vertices.map(\.position) == [SIMD3(-1, 0, 1), SIMD3(2, 3, 4)],
+            sampled.vertices.map(\.position) == [SIMD3(-1, 0, 1), SIMD3(5, 6, 7)],
             "Expected evenly strided source vertices"
         )
-        try require(sampled.bounds.minimum == SIMD3(-1, -2, -3), "Expected full-cloud minimum")
-        try require(sampled.bounds.maximum == SIMD3(5, 6, 7), "Expected full-cloud maximum")
+        try require(sampled.bounds.minimum == SIMD3(-1, 0, 1), "Expected sampled minimum")
+        try require(sampled.bounds.maximum == SIMD3(5, 6, 7), "Expected sampled maximum")
         try require(
-            approximately(sampled.vertices[1].color.x, 128.0 / 255.0),
-            "Expected normalized red channel"
+            sampled.vertices[1].color == SIMD4(1, 1, 1, 1),
+            "Expected normalized sampled color"
         )
 
         let binaryData = makeBinaryLittleEndianFixture()
@@ -59,6 +59,12 @@ struct VerifyPLYPointCloudLoader {
         try require(
             bigEndian.vertices.single?.position == SIMD3(9.0, 8.0, 7.0),
             "Expected big-endian scalar decoding"
+        )
+        let boundedBinary = try PLYPointCloudLoader(maximumPreviewPoints: 2)
+            .parse(data: makeBinarySamplingFixture())
+        try require(
+            boundedBinary.vertices.map(\.position) == [SIMD3(0, 0, 0), SIMD3(2, 2, 2)],
+            "Expected binary loader to seek directly to its bounded sample"
         )
 
         let temporaryURL = FileManager.default.temporaryDirectory
@@ -106,6 +112,20 @@ struct VerifyPLYPointCloudLoader {
                 property list uchar float weights
                 end_header
                 0 0 0 0
+                """.utf8
+            )
+        )
+        try expect(
+            .fileTooLarge,
+            data: Data(
+                """
+                ply
+                format ascii 1.0
+                element vertex 5000001
+                property float x
+                property float y
+                property float z
+                end_header
                 """.utf8
             )
         )
@@ -229,6 +249,29 @@ struct VerifyPLYPointCloudLoader {
         return data
     }
 
+    private static func makeBinarySamplingFixture() -> Data {
+        let header = """
+            ply
+            format binary_little_endian 1.0
+            element vertex 3
+            property float x
+            property float y
+            property float z
+            end_header
+            """ + "\n"
+        var data = Data(header.utf8)
+        for value: Float in [0, 0, 0] {
+            appendFloat(value, endianness: .little, to: &data)
+        }
+        for value: Float in [.nan, .nan, .nan] {
+            appendFloat(value, endianness: .little, to: &data)
+        }
+        for value: Float in [2, 2, 2] {
+            appendFloat(value, endianness: .little, to: &data)
+        }
+        return data
+    }
+
     private enum Endianness {
         case little
         case big
@@ -268,10 +311,6 @@ struct VerifyPLYPointCloudLoader {
         } catch let actual as PLYPointCloudError {
             try require(actual == error, "Expected \(error), received \(actual)")
         }
-    }
-
-    private static func approximately(_ lhs: Float, _ rhs: Float) -> Bool {
-        abs(lhs - rhs) < 0.000_1
     }
 
     private static func require(

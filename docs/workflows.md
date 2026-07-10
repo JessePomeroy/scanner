@@ -289,11 +289,14 @@ supports PLY 1.0 ASCII, binary little-endian, and binary big-endian scalar verte
 records with the standard 8/16/32-bit integer and 32/64-bit floating-point
 types. Vertex data must be the first non-empty element, contain scalar `x`, `y`,
 and `z` properties, and may include complete RGB plus optional alpha channels;
-list-valued vertex properties are rejected. Files over 2 GiB or declarations
-over 100 million vertices are rejected. Up to 120,000 evenly strided points are
-retained for SceneKit while bounds are calculated across every vertex. The UI
+list-valued vertex properties are rejected. Binary files over 2 GiB or
+declarations over 100 million vertices are rejected; ASCII files have a tighter
+512 MiB and 5-million-vertex work budget because their lines must be scanned.
+Up to 120,000 evenly distributed points, including both endpoints, are decoded
+for SceneKit and sampled bounds. Binary input seeks directly to those records;
+ASCII input scans with cancellation checks every 64 KiB and decodes only the
+retained records. The UI
 preserves vertex color when available and provides orbit, zoom, pan, and point-
-size controls. Closing the preview cancels parsing and removes the owned
 temporary download; it never edits the reconstruction result.
 
 The backend rejects attempts to restart terminal jobs and writes each job JSON

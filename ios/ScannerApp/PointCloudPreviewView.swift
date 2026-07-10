@@ -169,8 +169,8 @@ private struct PointCloudSceneView: UIViewRepresentable {
         Coordinator()
     }
 
-    func makeUIView(context: Context) -> SCNView {
-        let view = SCNView(frame: .zero)
+    func makeUIView(context: Context) -> FittedPointCloudSCNView {
+        let view = FittedPointCloudSCNView(frame: .zero)
         view.backgroundColor = .black
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = false
@@ -180,22 +180,22 @@ private struct PointCloudSceneView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ view: SCNView, context: Context) {
+    func updateUIView(_ view: FittedPointCloudSCNView, context: Context) {
         if context.coordinator.previewID != preview.id {
             configure(view, coordinator: context.coordinator)
         }
         context.coordinator.pointElement?.pointSize = CGFloat(pointSize)
     }
 
-    private func configure(_ view: SCNView, coordinator: Coordinator) {
+    private func configure(_ view: FittedPointCloudSCNView, coordinator: Coordinator) {
         let scene = SCNScene()
-        let geometry = makeGeometry()
-        let pointsNode = SCNNode(geometry: geometry.geometry)
+        let rendered = makeGeometry()
+        let pointsNode = SCNNode(geometry: rendered.geometry)
         scene.rootNode.addChildNode(pointsNode)
 
         let cameraNode = SCNNode()
         let camera = SCNCamera()
-        camera.fieldOfView = 52
+        camera.usesOrthographicProjection = true
         camera.zNear = 0.01
         camera.zFar = 100
         cameraNode.camera = camera
@@ -204,12 +204,19 @@ private struct PointCloudSceneView: UIViewRepresentable {
 
         view.scene = scene
         view.pointOfView = cameraNode
+        view.fittedCamera = camera
+        view.contentHalfExtents = rendered.halfExtents
+        view.setNeedsLayout()
         coordinator.previewID = preview.id
-        coordinator.pointElement = geometry.element
-        geometry.element.pointSize = CGFloat(pointSize)
+        coordinator.pointElement = rendered.element
+        rendered.element.pointSize = CGFloat(pointSize)
     }
 
-    private func makeGeometry() -> (geometry: SCNGeometry, element: SCNGeometryElement) {
+    private func makeGeometry() -> (
+        geometry: SCNGeometry,
+        element: SCNGeometryElement,
+        halfExtents: SIMD3<Float>
+    ) {
         let center = preview.bounds.center
         let extent = preview.bounds.largestExtent
         let scale: Float = extent > 0.000_001 ? 2 / extent : 1
@@ -258,11 +265,30 @@ private struct PointCloudSceneView: UIViewRepresentable {
         material.lightingModel = .constant
         material.diffuse.contents = UIColor.white
         geometry.materials = [material]
-        return (geometry, element)
+        let sourceExtents = preview.bounds.maximum - preview.bounds.minimum
+        return (geometry, element, (sourceExtents * scale) / 2)
     }
 
     final class Coordinator {
         var previewID: UUID?
         weak var pointElement: SCNGeometryElement?
+    }
+}
+
+private final class FittedPointCloudSCNView: SCNView {
+    weak var fittedCamera: SCNCamera?
+    var contentHalfExtents = SIMD3<Float>(repeating: 1)
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let aspectRatio = Float(bounds.width / bounds.height)
+        let boundingRadius = sqrt(
+            (contentHalfExtents.x * contentHalfExtents.x)
+                + (contentHalfExtents.y * contentHalfExtents.y)
+                + (contentHalfExtents.z * contentHalfExtents.z)
+        )
+        let verticalHalfExtent = boundingRadius / min(max(aspectRatio, 0.01), 1)
+        fittedCamera?.orthographicScale = Double(max(verticalHalfExtent * 1.15, 0.05))
     }
 }
