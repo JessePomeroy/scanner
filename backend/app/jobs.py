@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from threading import RLock
 
 from app.schemas import JobRecord, JobStage, JobStatus
 
@@ -23,10 +24,30 @@ _ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     "complete": {"complete"},
     "failed": {"failed"},
 }
+_ACTIVE_STAGES: set[JobStage] = {
+    "queued",
+    "validating",
+    "reconstructing",
+    "meshing",
+    "exporting",
+}
+_ALLOWED_STAGE_TRANSITIONS: dict[JobStage, set[JobStage]] = {
+    "received": {"queued", "validating"},
+    "queued": {"queued", "validating"},
+    "validating": {"validating", "reconstructing"},
+    "reconstructing": {"reconstructing", "meshing", "exporting"},
+    "meshing": {"meshing", "exporting"},
+    "exporting": {"exporting"},
+    "finished": set(),
+}
 
 
 class JobTransitionError(ValueError):
     """Raised when a job is moved backward or restarted after completion."""
+
+
+class InvalidScanIDError(ValueError):
+    """Raised when a scan id cannot safely name a job record."""
 
 
 class JobStore:
@@ -35,19 +56,21 @@ class JobStore:
     def __init__(self, jobs_dir: Path, *, clock: Clock | None = None) -> None:
         self.jobs_dir = jobs_dir
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self._lock = RLock()
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
 
     def create(self, scan_id: str) -> JobRecord:
-        timestamp = self._now()
-        record = JobRecord(
-            scan_id=scan_id,
-            status="received",
-            stage="received",
-            created_at=timestamp,
-            updated_at=timestamp,
-        )
-        self._write(record)
-        return record
+        with self._lock:
+            timestamp = self._now()
+            record = JobRecord(
+                scan_id=scan_id,
+                status="received",
+                stage="received",
+                created_at=timestamp,
+                updated_at=timestamp,
+            )
+            self._write(record)
+            return record
 
     def update(
         self,
@@ -60,68 +83,81 @@ class JobStore:
         frame_count: int | None = None,
         outputs: dict[str, str] | None = None,
     ) -> JobRecord:
-        current = self.read(scan_id)
-        if status not in _ALLOWED_TRANSITIONS[current.status]:
-            raise JobTransitionError(
-                f"Cannot move job {scan_id} from {current.status} to {status}"
+        with self._lock:
+            current = self.read(scan_id)
+            if status not in _ALLOWED_TRANSITIONS[current.status]:
+                raise JobTransitionError(
+                    f"Cannot move job {scan_id} from {current.status} to {status}"
+                )
+
+            next_stage = self._next_stage(current, status=status, stage=stage)
+            timestamp = self._now()
+            values = _dump_model(current)
+            values.update(
+                {
+                    "status": status,
+                    "stage": next_stage,
+                    "message": message,
+                    "image_count": (
+                        image_count if image_count is not None else current.image_count
+                    ),
+                    "frame_count": (
+                        frame_count if frame_count is not None else current.frame_count
+                    ),
+                    "outputs": outputs if outputs is not None else current.outputs,
+                    "created_at": current.created_at or timestamp,
+                    "updated_at": timestamp,
+                    "started_at": (
+                        current.started_at or timestamp
+                        if status == "processing"
+                        else current.started_at
+                    ),
+                    "finished_at": (
+                        current.finished_at or timestamp
+                        if status in _TERMINAL_STATUSES
+                        else None
+                    ),
+                }
             )
-
-        next_stage = stage
-        if status == "processing":
-            if next_stage is None and current.status == "processing":
-                next_stage = current.stage
-            if next_stage not in {
-                "queued",
-                "validating",
-                "reconstructing",
-                "meshing",
-                "exporting",
-            }:
-                raise ValueError("Processing jobs require an active lifecycle stage")
-
-        timestamp = self._now()
-        values = _dump_model(current)
-        values.update(
-            {
-                "status": status,
-                "stage": (
-                    "finished"
-                    if status in _TERMINAL_STATUSES
-                    else next_stage or current.stage
-                ),
-                "message": message,
-                "image_count": image_count if image_count is not None else current.image_count,
-                "frame_count": frame_count if frame_count is not None else current.frame_count,
-                "outputs": outputs if outputs is not None else current.outputs,
-                "created_at": current.created_at or timestamp,
-                "updated_at": timestamp,
-                "started_at": (
-                    current.started_at or timestamp
-                    if status == "processing"
-                    else current.started_at
-                ),
-                "finished_at": (
-                    current.finished_at or timestamp
-                    if status in _TERMINAL_STATUSES
-                    else None
-                ),
-            }
-        )
-        record = JobRecord(**values)
-        self._write(record)
-        return record
+            record = JobRecord(**values)
+            self._write(record)
+            return record
 
     def read(self, scan_id: str) -> JobRecord:
-        path = self._record_path(scan_id)
-        if not path.exists():
-            raise KeyError(scan_id)
+        with self._lock:
+            path = self._record_path(scan_id)
+            if not path.exists():
+                raise KeyError(scan_id)
 
-        raw = path.read_text(encoding="utf-8")
-        if hasattr(JobRecord, "model_validate_json"):
-            return JobRecord.model_validate_json(raw)
-        return JobRecord.parse_raw(raw)
+            raw = path.read_text(encoding="utf-8")
+            if hasattr(JobRecord, "model_validate_json"):
+                return JobRecord.model_validate_json(raw)
+            return JobRecord.parse_raw(raw)
 
     def list(self, *, limit: int = 50) -> list[JobRecord]:
+        with self._lock:
+            return self._list_records(limit=limit)
+
+    def reconcile_interrupted(self) -> list[JobRecord]:
+        """Fail jobs that cannot resume after the previous backend process exited."""
+        with self._lock:
+            reconciled: list[JobRecord] = []
+            for record in self._list_records(limit=None):
+                if record.status not in {"received", "processing"}:
+                    continue
+                reconciled.append(
+                    self.update(
+                        record.scan_id,
+                        status="failed",
+                        message=(
+                            "Backend restarted before the job finished. "
+                            "Submit the scan again to retry."
+                        ),
+                    )
+                )
+            return reconciled
+
+    def _list_records(self, *, limit: int | None) -> list[JobRecord]:
         records: list[tuple[float, JobRecord]] = []
         for path in self.jobs_dir.glob("*.json"):
             try:
@@ -132,7 +168,8 @@ class JobStore:
                 continue
 
         records.sort(key=lambda item: item[0], reverse=True)
-        return [record for _, record in records[:limit]]
+        ordered = [record for _, record in records]
+        return ordered if limit is None else ordered[:limit]
 
     def _write(self, record: JobRecord) -> None:
         path = self._record_path(record.scan_id)
@@ -164,8 +201,45 @@ class JobStore:
 
     def _record_path(self, scan_id: str) -> Path:
         if not _SCAN_ID_PATTERN.fullmatch(scan_id):
-            raise ValueError(f"Invalid scan id: {scan_id!r}")
+            raise InvalidScanIDError(f"Invalid scan id: {scan_id!r}")
         return self.jobs_dir / f"{scan_id}.json"
+
+    def _next_stage(
+        self,
+        current: JobRecord,
+        *,
+        status: JobStatus,
+        stage: JobStage | None,
+    ) -> JobStage | None:
+        if status in _TERMINAL_STATUSES:
+            if status == "validated" and current.stage not in {"validating", None}:
+                raise JobTransitionError(
+                    f"Cannot validate job {current.scan_id} from stage {current.stage}"
+                )
+            if status == "complete" and current.stage not in {"exporting", None}:
+                raise JobTransitionError(
+                    f"Cannot complete job {current.scan_id} from stage {current.stage}"
+                )
+            return "finished"
+
+        if status != "processing":
+            return current.stage
+
+        next_stage = stage
+        if next_stage is None and current.status == "processing":
+            next_stage = current.stage
+        if next_stage not in _ACTIVE_STAGES:
+            raise JobTransitionError("Processing jobs require an active lifecycle stage")
+
+        current_stage = current.stage
+        if current.status == "processing" and current_stage is None:
+            return next_stage
+        if current_stage is None or next_stage not in _ALLOWED_STAGE_TRANSITIONS[current_stage]:
+            raise JobTransitionError(
+                f"Cannot move job {current.scan_id} from stage {current_stage} "
+                f"to {next_stage}"
+            )
+        return next_stage
 
     def _now(self) -> str:
         value = self.clock()

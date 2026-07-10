@@ -156,6 +156,13 @@ record through a temporary sibling file followed by an atomic replacement.
 Concurrent status reads therefore see either the previous complete record or
 the new complete record, not partially written JSON.
 
+Reconstruction currently runs as an in-process FastAPI background task. Run a
+single backend process for each `SCANNER_SCANS_DIR`; the job store serializes
+threads within that process but is not a multi-process queue. On startup, any
+job left in `received` or `processing` is marked `failed` with an interruption
+message. Processing does not resume automatically, but the uploaded ZIP remains
+in `scans/incoming/` so it can be inspected before the scan is submitted again.
+
 ## Windows GPU Workflow
 
 Use the Windows RTX 3070 machine for final reconstruction and Blender work:

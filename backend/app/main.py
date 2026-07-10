@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 import os
 import shutil
@@ -14,7 +15,7 @@ from fastapi.responses import FileResponse
 
 from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
-from app.jobs import JobStore
+from app.jobs import InvalidScanIDError, JobStore
 from app.openmvs_runner import run_openmvs_pipeline
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
@@ -25,7 +26,13 @@ from app.schemas import JobRecord
 from app.storage import UnsafeArchiveError, safe_extract_zip
 
 
-app = FastAPI(title="3D Scan Reconstruction Backend")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    jobs.reconcile_interrupted()
+    yield
+
+
+app = FastAPI(title="3D Scan Reconstruction Backend", lifespan=lifespan)
 
 BASE_DIR = Path(os.environ.get("SCANNER_SCANS_DIR", "scans"))
 INCOMING_DIR = BASE_DIR / "incoming"
@@ -118,6 +125,8 @@ async def upload_scan(
 def get_scan_status(scan_id: str) -> JobRecord:
     try:
         return jobs.read(scan_id)
+    except InvalidScanIDError as error:
+        raise HTTPException(status_code=400, detail="Invalid scan id") from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Unknown scan id") from error
 

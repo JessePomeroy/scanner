@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -608,7 +609,15 @@ class BackendTests(unittest.TestCase):
 
     def test_job_store_records_lifecycle_timestamps_and_stages(self) -> None:
         start = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
-        timestamps = iter([start, start + timedelta(seconds=2), start + timedelta(seconds=8)])
+        timestamps = iter(
+            [
+                start,
+                start + timedelta(seconds=2),
+                start + timedelta(seconds=4),
+                start + timedelta(seconds=6),
+                start + timedelta(seconds=8),
+            ]
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             store = JobStore(Path(tmp), clock=lambda: next(timestamps))
@@ -619,6 +628,8 @@ class BackendTests(unittest.TestCase):
                 stage="validating",
                 message="Validating scan package.",
             )
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update("scan-1", status="processing", stage="exporting")
             finished = store.update(
                 "scan-1",
                 status="complete",
@@ -645,6 +656,30 @@ class BackendTests(unittest.TestCase):
 
             with self.assertRaises(JobTransitionError):
                 store.update("scan-1", status="processing", stage="validating")
+
+    def test_job_store_rejects_backward_stage_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("scan-1")
+
+            with self.assertRaises(JobTransitionError):
+                store.update("scan-1", status="processing", stage="reconstructing")
+
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update("scan-1", status="processing", stage="exporting")
+
+            with self.assertRaises(JobTransitionError):
+                store.update("scan-1", status="processing", stage="queued")
+
+    def test_job_store_requires_terminal_status_to_follow_matching_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+
+            with self.assertRaises(JobTransitionError):
+                store.update("scan-1", status="complete")
 
     def test_job_store_failed_write_preserves_last_valid_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -675,6 +710,88 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.update("scan-1", status="processing")
 
+    def test_job_store_serializes_concurrent_terminal_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update("scan-1", status="processing", stage="exporting")
+
+            stale_write_started = threading.Event()
+            release_stale_write = threading.Event()
+            terminal_started = threading.Event()
+            terminal_finished = threading.Event()
+            errors: list[Exception] = []
+            original_write = store._write
+
+            def blocking_write(record) -> None:
+                if threading.current_thread().name == "stale-update":
+                    stale_write_started.set()
+                    if not release_stale_write.wait(timeout=2):
+                        raise TimeoutError("Timed out waiting to release stale update")
+                original_write(record)
+
+            store._write = blocking_write
+
+            def update_processing() -> None:
+                try:
+                    store.update("scan-1", status="processing", stage="exporting")
+                except Exception as error:
+                    errors.append(error)
+
+            def update_terminal() -> None:
+                terminal_started.set()
+                try:
+                    store.update("scan-1", status="complete")
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    terminal_finished.set()
+
+            stale_thread = threading.Thread(target=update_processing, name="stale-update")
+            terminal_thread = threading.Thread(target=update_terminal, name="terminal-update")
+            stale_thread.start()
+            self.assertTrue(stale_write_started.wait(timeout=2))
+            terminal_thread.start()
+            self.assertTrue(terminal_started.wait(timeout=2))
+            self.assertFalse(terminal_finished.wait(timeout=0.2))
+            release_stale_write.set()
+            stale_thread.join(timeout=2)
+            terminal_thread.join(timeout=2)
+
+            final_record = store.read("scan-1")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(final_record.status, "complete")
+        self.assertEqual(final_record.stage, "finished")
+
+    def test_job_store_reconciles_interrupted_jobs_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_dir = Path(tmp)
+            store = JobStore(jobs_dir)
+            store.create("received")
+            store.create("processing")
+            store.update("processing", status="processing", stage="validating")
+            store.create("complete")
+            store.update("complete", status="processing", stage="validating")
+            store.update("complete", status="processing", stage="reconstructing")
+            store.update("complete", status="processing", stage="exporting")
+            store.update("complete", status="complete")
+
+            restarted_store = JobStore(jobs_dir)
+            reconciled = restarted_store.reconcile_interrupted()
+
+            received = restarted_store.read("received")
+            processing = restarted_store.read("processing")
+            complete = restarted_store.read("complete")
+
+        self.assertEqual({record.scan_id for record in reconciled}, {"received", "processing"})
+        self.assertEqual(received.status, "failed")
+        self.assertEqual(processing.status, "failed")
+        self.assertIn("restarted", processing.message)
+        self.assertEqual(complete.status, "complete")
+
     def test_job_store_rejects_unsafe_scan_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = JobStore(Path(tmp))
@@ -696,6 +813,20 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(record.stage)
         self.assertIsNone(record.created_at)
         self.assertIsNone(record.finished_at)
+
+    def test_get_scan_status_rejects_malformed_scan_id(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+        from fastapi import HTTPException
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(backend_main, "jobs", JobStore(Path(tmp))):
+                with self.assertRaises(HTTPException) as raised:
+                    backend_main.get_scan_status("bad!")
+
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_validate_scan_package_accepts_object_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
