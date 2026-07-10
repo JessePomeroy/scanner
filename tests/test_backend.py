@@ -1729,6 +1729,29 @@ class BackendTests(unittest.TestCase):
             (complete_dense / "scene_textured.obj").write_bytes(b"textured mesh")
             (complete_scan / "metadata" / "scan_report.json").write_text("{}")
 
+            for scan_id in ["missing-output", "directory-output"]:
+                store.create(scan_id)
+                store.update(scan_id, status="processing", stage="validating")
+                store.update(scan_id, status="processing", stage="reconstructing")
+                store.update(
+                    scan_id,
+                    status="processing",
+                    stage="exporting",
+                    outputs={
+                        "colmap_output": str(
+                            processing_dir
+                            / scan_id
+                            / "scan_test"
+                            / "dense"
+                            / "fused.ply"
+                        )
+                    },
+                )
+                incomplete_scan = self._write_scan(completed_dir / scan_id)
+                (incomplete_scan / "metadata" / "scan_report.json").write_text("{}")
+                if scan_id == "directory-output":
+                    (incomplete_scan / "dense" / "fused.ply").mkdir(parents=True)
+
             reconciled = reconcile_interrupted_jobs(
                 store,
                 processing_dir=processing_dir,
@@ -1739,10 +1762,18 @@ class BackendTests(unittest.TestCase):
             partial = store.read("partial")
             validated = store.read("validated")
             complete = store.read("complete")
+            missing_output = store.read("missing-output")
+            directory_output = store.read("directory-output")
 
             self.assertEqual(
                 {record.scan_id for record in reconciled},
-                {"partial", "validated", "complete"},
+                {
+                    "partial",
+                    "validated",
+                    "complete",
+                    "missing-output",
+                    "directory-output",
+                },
             )
             self.assertEqual(partial.status, "failed")
             self.assertTrue((existing_failed_path / "earlier-failure.txt").is_file())
@@ -1772,6 +1803,11 @@ class BackendTests(unittest.TestCase):
                 complete.outputs["scan_report"],
                 str((complete_scan / "metadata" / "scan_report.json").resolve()),
             )
+            for recovered in [missing_output, directory_output]:
+                self.assertEqual(recovered.status, "failed")
+                self.assertIn("no safe dense or sparse COLMAP result", recovered.message)
+                self.assertNotIn("colmap_output", recovered.outputs)
+                self.assertTrue(Path(recovered.outputs["package_dir"]).is_dir())
 
     def test_job_recovery_retries_collision_after_terminal_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

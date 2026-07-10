@@ -92,14 +92,21 @@ def _recover_completed_job(
             outputs=outputs,
         )
 
+    recovered_outputs = discover_standard_output_paths(scan_root)
     terminal_status: JobStatus
     message: str
     if record.stage == "validating":
         terminal_status = "validated"
         message = "Recovered validated scan after backend restart."
-    elif record.stage == "exporting":
+    elif record.stage == "exporting" and "colmap_output" in recovered_outputs:
         terminal_status = "complete"
         message = "Recovered completed reconstruction after backend restart."
+    elif record.stage == "exporting":
+        terminal_status = "failed"
+        message = (
+            "Completed scan files were preserved, but no safe dense or sparse "
+            "COLMAP result was found after backend restart."
+        )
     else:
         terminal_status = "failed"
         message = (
@@ -107,7 +114,6 @@ def _recover_completed_job(
             f"{record.stage!r} cannot prove processing finished."
         )
 
-    recovered_outputs = discover_standard_output_paths(scan_root)
     if terminal_status == "complete":
         outputs.update(recovered_outputs)
     elif "scan_report" in recovered_outputs:

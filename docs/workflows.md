@@ -254,7 +254,9 @@ Reconstruction output paths are rebased when their workspace moves from
 processing to completed storage so future terminal jobs do not retain stale
 processing paths. If the backend restarts after that move but before the final
 job update, recovery rediscovers the known scan report, dense-or-sparse COLMAP
-point cloud, and textured OBJ before restoring a `complete` job.
+point cloud, and textured OBJ before restoring a `complete` job. An exporting-
+stage job with no safe dense or sparse COLMAP result is marked failed with an
+explicit message while its package directory remains preserved.
 
 The iOS app's `Jobs` tab consumes this list through a persisted, editable
 backend URL. Pull to refresh or use the refresh button. The initial URL is
