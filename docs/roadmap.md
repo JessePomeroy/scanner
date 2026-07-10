@@ -236,5 +236,6 @@ should not block the production COLMAP/OpenMVS path.
   validation-only local-workstation upload from the iOS scan gallery.
 - Result download/share UI. Status: implemented initial typed single-file
   download and share flow for published job artifacts.
-- Basic point cloud preview.
+- Basic point cloud preview. Status: implemented initial bounded PLY preview
+  with vertex colors, orbit/zoom/pan controls, and adjustable point size.
 - Blender helper scripts for import, cleanup, decimation, and export variants.

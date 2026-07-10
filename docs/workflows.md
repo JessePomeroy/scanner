@@ -283,6 +283,19 @@ byte count before it is moved into an app-owned temporary directory and offered
 to the iOS share sheet. Dismissing the sheet, navigating away, cancelling, or a
 later app launch removes the owned temporary copy.
 
+PLY manifest entries also show a `Preview` action. The same safe artifact client
+downloads and verifies the file before the preview loader opens it. The loader
+supports PLY 1.0 ASCII, binary little-endian, and binary big-endian scalar vertex
+records with the standard 8/16/32-bit integer and 32/64-bit floating-point
+types. Vertex data must be the first non-empty element, contain scalar `x`, `y`,
+and `z` properties, and may include complete RGB plus optional alpha channels;
+list-valued vertex properties are rejected. Files over 2 GiB or declarations
+over 100 million vertices are rejected. Up to 120,000 evenly strided points are
+retained for SceneKit while bounds are calculated across every vertex. The UI
+preserves vertex color when available and provides orbit, zoom, pan, and point-
+size controls. Closing the preview cancels parsing and removes the owned
+temporary download; it never edits the reconstruction result.
+
 The backend rejects attempts to restart terminal jobs and writes each job JSON
 record through a temporary sibling file followed by an atomic replacement.
 Concurrent status reads therefore see either the previous complete record or

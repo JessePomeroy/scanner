@@ -175,6 +175,8 @@ private struct ReconstructionArtifactListView: View {
                 )
             }
             .onDisappear {
+                guard store.sharedDownload == nil,
+                      store.previewedDownload == nil else { return }
                 downloadTask?.cancel()
                 downloadTask = nil
                 Task {
@@ -184,7 +186,10 @@ private struct ReconstructionArtifactListView: View {
             .sheet(isPresented: sharePresented) {
                 shareSheet
             }
-            .alert("Unable to Load Result", isPresented: errorPresented) {
+            .fullScreenCover(isPresented: previewPresented) {
+                pointCloudPreview
+            }
+            .alert("Unable to Open Result", isPresented: errorPresented) {
                 Button("OK", role: .cancel) {
                     store.clearError()
                 }
@@ -204,7 +209,7 @@ private struct ReconstructionArtifactListView: View {
             } header: {
                 Text("Downloadable Results")
             } footer: {
-                Text("Downloaded results are temporary and removed after the share sheet closes.")
+                Text("PLY results can be previewed in the app. Temporary downloads are removed when preview or sharing closes.")
             }
         }
     }
@@ -227,37 +232,71 @@ private struct ReconstructionArtifactListView: View {
             .padding(.vertical, 12)
         } else {
             ForEach(store.artifacts) { artifact in
-                artifactButton(artifact)
+                artifactControls(artifact)
             }
         }
     }
 
-    private func artifactButton(_ artifact: ReconstructionArtifact) -> some View {
-        Button {
-            guard downloadTask == nil else { return }
-            downloadTask = Task {
-                await store.download(
-                    artifact,
-                    scanID: job.scanID,
-                    baseURLString: baseURLString
-                )
-                downloadTask = nil
-            }
-        } label: {
+    private func artifactControls(_ artifact: ReconstructionArtifact) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             ReconstructionArtifactRow(
                 artifact: artifact,
                 isDownloading: store.isDownloading(artifact)
             )
+
+            if !store.isDownloading(artifact) {
+                HStack(spacing: 10) {
+                    Spacer()
+                    if artifact.supportsPointCloudPreview {
+                        Button {
+                            startDownload(artifact, destination: .pointCloudPreview)
+                        } label: {
+                            Label("Preview", systemImage: "eye")
+                        }
+                    }
+                    Button {
+                        startDownload(artifact, destination: .share)
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.downloadingArtifactID != nil)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(store.downloadingArtifactID != nil)
-        .accessibilityLabel("Download and share \(artifact.displayName)")
+        .padding(.vertical, 3)
+    }
+
+    private func startDownload(
+        _ artifact: ReconstructionArtifact,
+        destination: ReconstructionArtifactDownloadDestination
+    ) {
+        guard downloadTask == nil else { return }
+        downloadTask = Task {
+            await store.download(
+                artifact,
+                scanID: job.scanID,
+                baseURLString: baseURLString,
+                destination: destination
+            )
+            downloadTask = nil
+        }
     }
 
     @ViewBuilder
     private var shareSheet: some View {
         if let download = store.sharedDownload {
             ShareSheet(items: [download.fileURL])
+        }
+    }
+
+    @ViewBuilder
+    private var pointCloudPreview: some View {
+        if let download = store.previewedDownload {
+            PointCloudPreviewView(download: download) {
+                store.dismissPreviewedDownload()
+            }
         }
     }
 
@@ -284,6 +323,17 @@ private struct ReconstructionArtifactListView: View {
             set: { isPresented in
                 if !isPresented {
                     store.clearError()
+                }
+            }
+        )
+    }
+
+    private var previewPresented: Binding<Bool> {
+        Binding(
+            get: { store.previewedDownload != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.dismissPreviewedDownload()
                 }
             }
         )
@@ -328,12 +378,8 @@ private struct ReconstructionArtifactRow: View {
             if isDownloading {
                 ProgressView()
                     .controlSize(.small)
-            } else {
-                Image(systemName: "square.and.arrow.up")
-                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 3)
     }
 
     private var systemImage: String {
