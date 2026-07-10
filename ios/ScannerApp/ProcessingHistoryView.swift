@@ -272,9 +272,7 @@ private struct ReconstructionArtifactListView: View {
             get: { store.sharedDownload != nil },
             set: { isPresented in
                 if !isPresented {
-                    Task {
-                        await store.clearSharedDownload()
-                    }
+                    store.dismissSharedDownload()
                 }
             }
         )

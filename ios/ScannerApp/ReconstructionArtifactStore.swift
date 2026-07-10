@@ -92,10 +92,13 @@ final class ReconstructionArtifactStore: ObservableObject {
             }
             sharedDownload = download
         } catch is CancellationError {
+            guard sequence == downloadSequence else { return }
             errorMessage = "Result download was cancelled."
         } catch let error as URLError where error.code == .cancelled {
+            guard sequence == downloadSequence else { return }
             errorMessage = "Result download was cancelled."
         } catch {
+            guard sequence == downloadSequence else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -106,9 +109,18 @@ final class ReconstructionArtifactStore: ObservableObject {
         await client.discardDownloadedArtifact(download)
     }
 
+    func dismissSharedDownload() {
+        guard let download = sharedDownload else { return }
+        sharedDownload = nil
+        Task {
+            await client.discardDownloadedArtifact(download)
+        }
+    }
+
     func deactivate() async {
         downloadSequence += 1
         downloadingArtifactID = nil
+        errorMessage = nil
         await clearSharedDownload()
     }
 

@@ -314,6 +314,24 @@ struct VerifyReconstructionArtifactClient {
             "Expected store-owned discard"
         )
 
+        try artifactBytes.write(to: storeFile)
+        await store.download(
+            artifacts[0],
+            scanID: "scan-1",
+            baseURLString: "https://example.com"
+        )
+        store.dismissSharedDownload()
+        try require(
+            store.sharedDownload == nil,
+            "Expected sheet dismissal to clear presentation state synchronously"
+        )
+        try await Task.sleep(nanoseconds: 25_000_000)
+        let dismissalDiscardedURLs = await discardCapture.snapshot()
+        try require(
+            dismissalDiscardedURLs == [storeFile, storeFile],
+            "Expected sheet dismissal to remove its released file asynchronously"
+        )
+
         let lateFile = fileManager.temporaryDirectory
             .appendingPathComponent("artifact-late-\(UUID().uuidString).ply")
         try artifactBytes.write(to: lateFile)
@@ -351,6 +369,31 @@ struct VerifyReconstructionArtifactClient {
         try require(
             lateDiscardedURLs == [lateFile],
             "Expected a result finishing after deactivation to be discarded"
+        )
+
+        let lateErrorClient = InMemoryReconstructionArtifactClient(
+            listHandler: { _, _ in artifacts },
+            downloadHandler: { _, _, _ in
+                try await Task.sleep(nanoseconds: 500_000_000)
+                throw ArtifactVerificationError.unexpectedRequest
+            },
+            discardHandler: { _ in }
+        )
+        let lateErrorStore = ReconstructionArtifactStore(client: lateErrorClient)
+        let lateErrorTask = Task {
+            await lateErrorStore.download(
+                artifacts[0],
+                scanID: "scan-1",
+                baseURLString: "https://example.com"
+            )
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        lateErrorTask.cancel()
+        await lateErrorStore.deactivate()
+        await lateErrorTask.value
+        try require(
+            lateErrorStore.errorMessage == nil,
+            "Expected deactivation to suppress a late cancellation alert"
         )
 
         print("Verified reconstruction artifact client contract")
