@@ -19,7 +19,7 @@ The first working target is:
 - `tests`: Backend unit tests.
 
 See [docs/workflows.md](docs/workflows.md) for the current Mac capture workflow
-and the planned Windows GPU reconstruction workflow. See
+and the planned native Linux RTX 3070 reconstruction workflow. See
 [docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
 
 ## iOS App
@@ -108,7 +108,7 @@ Incoming uploads are copied from FastAPI's spooled upload in bounded 1 MiB
 chunks. Blocking writes and syncs run off the event loop. The backend fsyncs a
 temporary sibling file, atomically publishes the final incoming ZIP without
 clobbering late or concurrent paths, and syncs the containing directory on
-macOS/Linux/WSL. Read failures and request
+macOS/Linux. Read failures and request
 cancellation remove partial or newly published files and mark the job failed
 instead of leaving a truncated package that looks complete. Job-state failure
 recording is best-effort and never replaces the original storage error or
@@ -120,14 +120,21 @@ Run reconstruction mode when COLMAP is installed:
 curl -F "file=@scan.zip" "http://localhost:8000/scans?run_reconstruction=true"
 ```
 
-For the Windows/WSL2 GPU workstation path:
+For the dual-boot RTX 3070 PC, boot into native Linux before reconstruction.
+Keep active workspaces on the Linux filesystem rather than an NTFS/shared
+Windows partition:
 
 ```bash
 scripts/wsl/setup_gpu_reconstruction.sh
 python3 scripts/wsl/check_reconstruction_env.py --strict
-python3 scripts/reconstruct_gpu.py scan.zip --output-root /mnt/c/Users/YOU/ScannerOutputs --dry-run
-python3 scripts/reconstruct_gpu.py scan.zip --output-root /mnt/c/Users/YOU/ScannerOutputs
+python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs --dry-run
+python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
 ```
+
+The helper directory retains its historical `scripts/wsl/` name for
+compatibility, but native Ubuntu/Linux is now the primary target. When the PC
+is booted into Windows, the future cloud worker is offline and jobs remain
+safely queued until Linux starts again.
 
 Check job status:
 

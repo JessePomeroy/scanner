@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the GPU reconstruction workflow for WSL2/Windows workstations."""
+"""Run the GPU reconstruction workflow on a native Linux RTX workstation."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def main() -> None:
         "--output-root",
         type=Path,
         default=Path("ScannerOutputs"),
-        help="Output folder, preferably under /mnt/c/... for Windows Blender access.",
+        help="Output folder on a Linux-native filesystem.",
     )
     parser.add_argument("--matcher", default="exhaustive_matcher")
     parser.add_argument("--skip-dense", action="store_true")
@@ -126,8 +126,8 @@ def main() -> None:
         "commands": commands,
         "outputs": {key: str(path) for key, path in outputs.items()},
         "notes": [
-            "Use this runner inside WSL2 with a CUDA-enabled COLMAP build.",
-            "Open output paths through Windows if output-root is under /mnt/c.",
+            "Use this runner on native Linux with a CUDA-enabled COLMAP build.",
+            "Keep active reconstruction workspaces on a Linux-native filesystem.",
         ],
     }
 

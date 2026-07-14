@@ -11,10 +11,14 @@ Current entry points:
 - `inspect_scan.py`: validate typed package metadata and file-reference
   integrity, then print capture counts and compatibility warnings.
 - `reconstruct_local.py`: validate and optionally run local COLMAP/OpenMVS.
-- `reconstruct_gpu.py`: WSL2/RTX workstation command runner.
+- `reconstruct_gpu.py`: native Linux/RTX workstation command runner. The
+  compatibility setup/check helpers still live under the historical
+  `scripts/wsl/` path.
 - `plan_neural_backend.py`: dry-run command planner for MASt3R-SLAM, Depth
   Anything, Lingbot-style viewer experiments, and Nerfstudio Gaussian
-  splatting.
+  splatting. Gaussian plans prefer full-session image keyframes over the
+  30-second support video, preserve an editable PLY master, and default to SOG
+  plus a standalone HTML viewer.
 - `plan_object_crop.py`: inspect object-scan tap/radius metadata and print the
   next manual crop command.
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.

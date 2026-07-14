@@ -1,7 +1,8 @@
 # Roadmap
 
 This roadmap is ordered around the current goal: produce useful Blender assets
-from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
+from iPhone scans, with Mac validation and native Linux GPU reconstruction on a
+dual-boot RTX 3070 PC.
 
 ## Current Baseline
 
@@ -13,8 +14,8 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
 - Mac sparse COLMAP reconstruction works.
 - Latest object scan test registered `97 / 98` frames and produced a sparse
   point cloud with `58,385` points.
-- Dense reconstruction and textured mesh generation are planned for the Windows
-  RTX 3070 / WSL2 workstation.
+- Dense reconstruction and textured mesh generation are planned for the RTX
+  3070 PC while it is booted into native Linux.
 
 ## Immediate Local Improvements
 
@@ -122,11 +123,14 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Export `sparse/sparse_points.ply`.
    - Refresh `scan_report.json`.
 
-2. Windows/WSL2 GPU path.
+2. Native Linux RTX 3070 path.
    - Verify CUDA-enabled COLMAP.
    - Run dense COLMAP.
    - Run OpenMVS mesh reconstruction, refinement, and texturing.
-   - Save outputs into a Windows-accessible Blender folder.
+   - Keep active databases, images, and reconstruction intermediates on a
+     Linux-native filesystem.
+   - Copy only finished artifacts to a shared partition when needed, or publish
+     them through R2.
 
 3. Output formats.
    - Keep OBJ first for Blender.
@@ -138,7 +142,7 @@ from iPhone scans, with Mac validation and Windows/WSL2 GPU reconstruction.
    - Add import scripts for OBJ/PLY/GLB outputs.
    - Add optional cleanup, origin placement, decimation, scale markers, and
      material relinking.
-   - Save a ready-to-open `.blend` file in the Windows output folder.
+   - Save a ready-to-open `.blend` file in the Linux output folder.
 
 ## Backend Tracks
 
@@ -150,8 +154,8 @@ one physical scan has produced a textured OBJ that opens cleanly in Blender.
 1. COLMAP/OpenMVS. Status: primary path.
    - Traditional image matching, sparse reconstruction, dense stereo, meshing,
      and texturing.
-   - First milestone: real iPhone scan to textured OBJ on the Windows RTX 3070
-     workstation.
+   - First milestone: real iPhone scan to textured OBJ on the native Linux RTX
+     3070 workstation.
 
 2. Meshroom/AliceVision. Status: candidate alternate path.
    - Evaluate after COLMAP/OpenMVS is working.
@@ -172,7 +176,7 @@ should not block the production COLMAP/OpenMVS path.
 
 1. MASt3R-SLAM.
    - Strong first neural experiment because it accepts videos or image folders
-     and documents WSL usage.
+     and supports the Linux/CUDA environment selected for the workstation.
    - Test on the RTX 3070 with reduced frame counts/resolution if needed.
 
 2. MASt3R and DUSt3R.
@@ -215,7 +219,7 @@ should not block the production COLMAP/OpenMVS path.
   to evaluate against Open3D for cleanup, simplification, registration, and
   inspection.
 - `rmurai0610/MASt3R-SLAM`: experimental video/image-folder neural SLAM path
-  to test on WSL2.
+  to test on the native Linux RTX workstation.
 - `naver/mast3r` and `naver/dust3r`: experimental learned matching/geometry
   references with non-commercial licenses.
 - `LiheYoung/Depth-Anything`: monocular depth reference for future depth

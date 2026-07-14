@@ -22,7 +22,7 @@ def build_alicevision_plan(scan_dir: Path, config: AliceVisionConfig | None = No
     """Build an experimental direct AliceVision photogrammetry command chain.
 
     Meshroom is the safer production entry point. This planner exists so the
-    Windows workstation can dry-run and tune a direct AliceVision path after the
+    Linux RTX workstation can dry-run and tune a direct AliceVision path after the
     exact installed binary version is known.
     """
     config = config or AliceVisionConfig()
@@ -157,7 +157,7 @@ def build_alicevision_plan(scan_dir: Path, config: AliceVisionConfig | None = No
         },
         notes=[
             "Experimental direct AliceVision plan; prefer Meshroom until the installed binary version is verified.",
-            "Command names and options may need adjustment for the exact AliceVision release installed on Windows/WSL2.",
+            "Command names and options may need adjustment for the exact AliceVision release installed on Linux.",
             "A CUDA-capable NVIDIA GPU is recommended for full dense reconstruction.",
         ],
     )

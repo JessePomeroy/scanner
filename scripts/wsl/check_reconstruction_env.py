@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check whether the WSL2 reconstruction workstation is ready."""
+"""Check whether the native Linux reconstruction workstation is ready."""
 
 from __future__ import annotations
 

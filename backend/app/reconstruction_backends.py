@@ -84,7 +84,7 @@ def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> Comm
         outputs=outputs,
         notes=[
             "Primary production reconstruction path.",
-            "Run dense COLMAP and OpenMVS inside WSL2 with CUDA-capable tools.",
+            "Run dense COLMAP and OpenMVS on native Linux with CUDA-capable tools.",
         ],
     )
 

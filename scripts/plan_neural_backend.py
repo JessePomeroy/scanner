@@ -12,8 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.neural_backend_planner import (  # noqa: E402
+    DEFAULT_SPLAT_DELIVERY_FORMATS,
     NeuralBackendConfig,
     SUPPORTED_NEURAL_BACKENDS,
+    SUPPORTED_SPLAT_DELIVERY_FORMATS,
     build_neural_backend_plan,
     write_neural_backend_report,
 )
@@ -35,6 +37,16 @@ def main() -> None:
     parser.add_argument("--depth-anything-encoder", default="vits")
     parser.add_argument("--splat-method", default="splatfacto")
     parser.add_argument("--splat-matching-method", default="sequential")
+    parser.add_argument(
+        "--splat-delivery-format",
+        action="append",
+        choices=SUPPORTED_SPLAT_DELIVERY_FORMATS,
+        dest="splat_delivery_formats",
+        help=(
+            "Repeat to select post-export formats. Defaults to SOG and standalone HTML. "
+            "gaussian-glb is a KHR_gaussian_splatting asset, not a mesh."
+        ),
+    )
     args = parser.parse_args()
 
     scan_id = scan_id_from_path(args.scan)
@@ -60,6 +72,9 @@ def main() -> None:
             depth_anything_encoder=args.depth_anything_encoder,
             splat_method=args.splat_method,
             splat_matching_method=args.splat_matching_method,
+            splat_delivery_formats=tuple(
+                args.splat_delivery_formats or DEFAULT_SPLAT_DELIVERY_FORMATS
+            ),
         ),
     )
 

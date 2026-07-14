@@ -42,7 +42,7 @@ python3 scripts/plan_reconstruction_backend.py scan.zip \
 ```
 
 The Meshroom planner uses `meshroom_batch`, which is the preferred AliceVision
-entry point until the exact Windows/WSL2 install is verified. The direct
+entry point until the exact native Linux install is verified. The direct
 AliceVision planner is experimental and may need command option tuning for the
 installed AliceVision release.
 
@@ -121,6 +121,11 @@ python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
 python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
 ```
 
+For Gaussian scene training, the planner deliberately chooses exported image
+keyframes before the optional video. The iPhone video is capped at 30 seconds,
+but keyframes cover the full scan. The default Gaussian delivery plan preserves
+an editable PLY master and produces SOG plus a standalone HTML viewer.
+
 See `docs/neural_backends.md` for backend-specific notes and license cautions.
 
 ## High-Resolution Photo Scaffold
@@ -142,7 +147,7 @@ average and minimum blur scores, maximum movement speed, capture duration, and
 object subject/radius status when available.
 
 Use this summary as the quick on-device sanity check before sharing the ZIP to
-the Mac or Windows workstation. The same values are also written into
+the Mac or Linux RTX workstation. The same values are also written into
 `metadata/session.json` so desktop validation can compare the exported package
 against what the phone showed.
 
@@ -182,10 +187,10 @@ a uniquely named `.part` sibling under `scans/incoming/`. After the final chunk,
 the backend flushes and fsyncs the temporary file, atomically creates the job's
 unique incoming `.zip` as a hard link without clobbering an existing path, and
 fsyncs the containing directory. It then removes the temporary name and syncs
-the directory again before reporting success. Standard macOS, Linux, WSL, and
-NTFS storage support hard links. Native Windows lacks a portable
-directory-fsync API in Python; the documented RTX workflow runs under WSL,
-where the POSIX durability path is active.
+the directory again before reporting success. Standard macOS and Linux
+filesystems support the required hard-link and directory-sync path. Native
+Windows lacks a portable directory-fsync API in Python; the documented RTX
+workflow runs on native Linux, where the POSIX durability path is active.
 
 Writes, flushes, closes, replacement, and directory sync run in worker threads
 so slow storage does not block other event-loop work. Cancellation waits for an
@@ -246,9 +251,9 @@ symlinks, and paths outside `scans/completed/` or `scans/failed/`. Download
 requests independently repeat containment and manifest-membership validation,
 walk every path component through POSIX no-follow directory descriptors, reject
 multi-link files, and stream the already-opened inode. This prevents a pathname
-swap between authorization and response streaming. Run the Windows backend
-inside the documented WSL2 environment because secure artifact serving depends
-on POSIX descriptor semantics.
+swap between authorization and response streaming. Run the reconstruction
+backend on native Linux because secure artifact serving depends on POSIX
+descriptor semantics.
 
 Reconstruction output paths are rebased when their workspace moves from
 processing to completed storage so future terminal jobs do not retain stale
@@ -315,45 +320,61 @@ or `complete` record and its download path. Processing does not resume
 automatically, and the uploaded ZIP remains in `scans/incoming/` so it can be
 inspected before the scan is submitted again.
 
-## Windows GPU Workflow
+## Native Linux RTX 3070 Workflow
 
-Use the Windows RTX 3070 machine for final reconstruction and Blender work:
+Use the dual-boot RTX 3070 PC while it is booted into native Linux for final
+reconstruction and Blender work:
 
-1. Set up WSL2 Ubuntu with NVIDIA GPU support.
-2. Clone or copy this repo into WSL2.
-3. Run the environment checker:
+1. Install a supported Linux distribution and the native NVIDIA driver. The
+   examples assume Ubuntu Linux.
+2. Verify `nvidia-smi` sees the RTX 3070 after rebooting into Linux.
+3. Clone this repo onto a Linux-native filesystem. Do not place active COLMAP
+   databases or reconstruction workspaces on NTFS.
+4. Run the environment checker:
 
 ```bash
 scripts/wsl/setup_gpu_reconstruction.sh
 python3 scripts/wsl/check_reconstruction_env.py --strict
 ```
 
-4. Dry-run the command plan:
+The helper directory retains its historical `scripts/wsl/` name so existing
+commands keep working; the scripts now treat native Linux as the primary target.
+
+5. Create Linux-native workspace folders and dry-run the command plan:
 
 ```bash
+mkdir -p ~/ScannerOutputs ~/ScannerPlans
 python3 scripts/reconstruct_gpu.py scan.zip \
-  --output-root /mnt/c/Users/YOU/ScannerOutputs \
+  --output-root ~/ScannerOutputs \
   --dry-run
 ```
 
-5. Run COLMAP dense reconstruction and OpenMVS from WSL2:
+6. Run COLMAP dense reconstruction and OpenMVS:
 
 ```bash
-python3 scripts/reconstruct_gpu.py scan.zip --output-root /mnt/c/Users/YOU/ScannerOutputs
+python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
 ```
 
-6. Open OBJ/PLY outputs directly in Blender on Windows.
+7. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
+   GLB, `.blend`, reports, or logs to a shared partition if they are also needed
+   from Windows.
+
+Dual boot changes worker availability: while the PC is booted into Windows, the
+Linux reconstruction agent is offline. Local manual work waits until the next
+Linux boot; future Convex jobs remain queued and show **Waiting for
+reconstruction computer**. Starting Linux should launch the agent through
+`systemd` once that automation is implemented.
 
 To compare backend command plans on the workstation before a long run:
 
 ```bash
 python3 scripts/plan_reconstruction_backend.py scan.zip \
   --backend colmap_openmvs \
-  --work-dir /mnt/c/Users/YOU/ScannerPlans/colmap
+  --work-dir ~/ScannerPlans/colmap
 
 python3 scripts/plan_reconstruction_backend.py scan.zip \
   --backend meshroom \
-  --work-dir /mnt/c/Users/YOU/ScannerPlans/meshroom
+  --work-dir ~/ScannerPlans/meshroom
 ```
 
 The expected output layout is:
@@ -373,8 +394,8 @@ To create a `.blend` file from an output asset:
 
 ```bash
 blender --background --python scripts/blender/prepare_scan_asset.py -- \
-  /mnt/c/Users/YOU/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
-  /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.blend
+  ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
+  ~/ScannerOutputs/scan_id/blender/scan_id.blend
 ```
 
 The Blender helper accepts OBJ, PLY, GLB, and GLTF. It can also apply a scale,
@@ -382,13 +403,13 @@ set origins, relink textures, decimate meshes, and export a GLB:
 
 ```bash
 blender --background --python scripts/blender/prepare_scan_asset.py -- \
-  /mnt/c/Users/YOU/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
-  /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.blend \
-  --texture-dir /mnt/c/Users/YOU/ScannerOutputs/scan_id/source/scan_id/dense \
+  ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
+  ~/ScannerOutputs/scan_id/blender/scan_id.blend \
+  --texture-dir ~/ScannerOutputs/scan_id/source/scan_id/dense \
   --scale 1.0 \
   --origin geometry \
   --decimate-ratio 0.5 \
-  --export-glb /mnt/c/Users/YOU/ScannerOutputs/scan_id/blender/scan_id.glb
+  --export-glb ~/ScannerOutputs/scan_id/blender/scan_id.glb
 ```
 
 The helper supports Blender 4.x native OBJ/PLY import operators and falls back

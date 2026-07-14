@@ -38,6 +38,7 @@ from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
+    SUPPORTED_SPLAT_DELIVERY_FORMATS,
     build_neural_backend_plan,
     write_neural_backend_report,
 )
@@ -2107,10 +2108,80 @@ class BackendTests(unittest.TestCase):
         self.assertIn("--matching-method", plan.commands[0])
         self.assertEqual(plan.commands[1][0:2], ["ns-train", "splatfacto"])
         self.assertEqual(plan.commands[2][0:2], ["ns-export", "gaussian-splat"])
+        self.assertEqual(plan.inputs["delivery_formats"], ["sog", "html"])
+        self.assertTrue(str(plan.outputs["splat_ply"]).endswith("exports/splat/splat.ply"))
+        self.assertTrue(str(plan.outputs["splat_sog"]).endswith("delivery/scene.sog"))
+        self.assertTrue(
+            str(plan.outputs["splat_html_viewer"]).endswith("delivery/scene.html")
+        )
+        self.assertEqual(plan.commands[3][0:2], ["splat-transform", "--overwrite"])
+        self.assertIn("--filter-nan", plan.commands[3])
+        self.assertTrue(plan.commands[3][-1].endswith("scene.sog"))
+        self.assertTrue(plan.commands[4][-1].endswith("scene.html"))
 
-    def test_neural_backend_plan_prefers_video_for_gaussian_splatting(self) -> None:
+    def test_neural_backend_plan_supports_selected_splat_delivery_formats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(
+                    backend="gaussian_splatting",
+                    splat_delivery_formats=(
+                        "compressed-ply",
+                        "spz",
+                        "gaussian-glb",
+                        "spz",
+                    ),
+                ),
+            )
+
+        self.assertEqual(
+            plan.inputs["delivery_formats"],
+            ["compressed-ply", "spz", "gaussian-glb"],
+        )
+        self.assertEqual(len(plan.commands), 6)
+        self.assertTrue(plan.commands[3][-1].endswith("scene.compressed.ply"))
+        self.assertTrue(plan.commands[4][-1].endswith("scene.spz"))
+        self.assertTrue(plan.commands[5][-1].endswith("scene.gaussian.glb"))
+        self.assertIn("splat_gaussian_glb", plan.outputs)
+
+    def test_neural_backend_plan_rejects_unknown_splat_delivery_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            with self.assertRaisesRegex(ValueError, "Unsupported splat delivery format"):
+                build_neural_backend_plan(
+                    scan_dir,
+                    NeuralBackendConfig(
+                        backend="gaussian_splatting",
+                        splat_delivery_formats=("made-up",),
+                    ),
+                )
+
+        self.assertIn("sog", SUPPORTED_SPLAT_DELIVERY_FORMATS)
+
+    def test_neural_backend_plan_prefers_images_over_video_for_gaussian_splatting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            video_dir = scan_dir / "video"
+            video_dir.mkdir()
+            (video_dir / "scan.mov").write_bytes(b"fake mov")
+            (scan_dir / "metadata" / "video.json").write_text(
+                json.dumps([self._video_metadata()])
+            )
+
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(backend="gaussian_splatting"),
+            )
+
+        self.assertEqual(plan.inputs["preferred_source_type"], "images")
+        self.assertEqual(plan.commands[0][0:2], ["ns-process-data", "images"])
+        self.assertFalse(any("video/scan.mov" in part for part in plan.commands[0]))
+
+    def test_neural_backend_plan_uses_video_when_images_are_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "images" / "frame_000001.jpg").unlink()
             video_dir = scan_dir / "video"
             video_dir.mkdir()
             (video_dir / "scan.mov").write_bytes(b"fake mov")
@@ -2234,6 +2305,8 @@ class BackendTests(unittest.TestCase):
                     "splatfacto-big",
                     "--splat-matching-method",
                     "exhaustive",
+                    "--splat-delivery-format",
+                    "spz",
                 ],
                 check=True,
                 capture_output=True,
@@ -2252,6 +2325,9 @@ class BackendTests(unittest.TestCase):
         self.assertIn("splatfacto-big", payload["commands"][1])
         self.assertIn("exhaustive", payload["commands"][0])
         self.assertEqual(payload["inputs"]["preferred_source_type"], "images")
+        self.assertEqual(payload["inputs"]["delivery_formats"], ["spz"])
+        self.assertTrue(payload["commands"][3][-1].endswith("scene.spz"))
+        self.assertIn("splat_spz", payload["outputs"])
 
     def test_neural_backend_cli_does_not_delete_extracted_scan_when_work_dir_matches_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

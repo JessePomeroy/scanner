@@ -16,6 +16,23 @@ SUPPORTED_NEURAL_BACKENDS = (
     "gaussian_splatting",
 )
 
+SUPPORTED_SPLAT_DELIVERY_FORMATS = (
+    "sog",
+    "html",
+    "compressed-ply",
+    "spz",
+    "gaussian-glb",
+)
+DEFAULT_SPLAT_DELIVERY_FORMATS = ("sog", "html")
+
+_SPLAT_DELIVERY_TARGETS = {
+    "sog": ("splat_sog", "scene.sog"),
+    "html": ("splat_html_viewer", "scene.html"),
+    "compressed-ply": ("splat_compressed_ply", "scene.compressed.ply"),
+    "spz": ("splat_spz", "scene.spz"),
+    "gaussian-glb": ("splat_gaussian_glb", "scene.gaussian.glb"),
+}
+
 
 @dataclass(frozen=True)
 class NeuralBackendConfig:
@@ -24,6 +41,7 @@ class NeuralBackendConfig:
     depth_anything_encoder: str = "vits"
     splat_method: str = "splatfacto"
     splat_matching_method: str = "sequential"
+    splat_delivery_formats: tuple[str, ...] = DEFAULT_SPLAT_DELIVERY_FORMATS
 
 
 @dataclass(frozen=True)
@@ -117,9 +135,12 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
         )
 
     if config.backend == "gaussian_splatting":
+        delivery_formats = _validated_splat_delivery_formats(config.splat_delivery_formats)
         workspace = scan_root / "neural" / "gaussian_splatting"
         nerfstudio_data = workspace / "nerfstudio"
         export_dir = workspace / "exports" / "splat"
+        splat_ply = export_dir / "splat.ply"
+        delivery_dir = workspace / "delivery"
         config_path = (
             workspace
             / "outputs"
@@ -128,8 +149,14 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
             / "<timestamp>"
             / "config.yml"
         )
-        process_source_type = "video" if video_paths else "images"
-        process_source = video_paths[0] if video_paths else image_dir
+        if inputs["image_count"]:
+            process_source_type = "images"
+            process_source = image_dir
+        elif video_paths:
+            process_source_type = "video"
+            process_source = video_paths[0]
+        else:
+            raise ValueError("Gaussian splatting requires scan images or video input")
 
         commands = [
             [
@@ -160,6 +187,43 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
             ],
         ]
 
+        outputs = {
+            "workspace": workspace,
+            "nerfstudio_data": nerfstudio_data,
+            "train_outputs": workspace / "outputs",
+            "splat_export": export_dir,
+            "splat_ply": splat_ply,
+        }
+        for delivery_format in delivery_formats:
+            output_name, filename = _SPLAT_DELIVERY_TARGETS[delivery_format]
+            target = delivery_dir / filename
+            commands.append(
+                [
+                    "splat-transform",
+                    "--overwrite",
+                    str(splat_ply),
+                    "--filter-nan",
+                    str(target),
+                ]
+            )
+            outputs[output_name] = target
+
+        if config.splat_method == "splatfacto":
+            hardware_note = (
+                "Nerfstudio documents standard splatfacto at about 6 GB VRAM, "
+                "which is the intended RTX 3070 8 GB profile."
+            )
+        elif config.splat_method == "splatfacto-big":
+            hardware_note = (
+                "Nerfstudio documents splatfacto-big at about 12 GB VRAM; it is "
+                "not expected to fit reliably on an RTX 3070 8 GB."
+            )
+        else:
+            hardware_note = (
+                f"The '{config.splat_method}' method has no scanner-tested RTX 3070 "
+                "memory profile."
+            )
+
         return NeuralBackendPlan(
             backend=config.backend,
             scan_root=scan_root,
@@ -168,17 +232,19 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 **inputs,
                 "preferred_source": str(process_source),
                 "preferred_source_type": process_source_type,
+                "delivery_formats": list(delivery_formats),
             },
-            outputs={
-                "workspace": workspace,
-                "nerfstudio_data": nerfstudio_data,
-                "train_outputs": workspace / "outputs",
-                "splat_export": export_dir,
-            },
+            outputs=outputs,
             notes=[
                 "Viewer-focused Gaussian splat path; this does not produce an editable textured mesh.",
-                "Run inside a CUDA-enabled Nerfstudio environment on the Windows RTX workstation.",
+                "Run inside a CUDA-enabled Nerfstudio environment on the native Linux RTX workstation.",
                 "The export command needs the real config.yml path printed by ns-train.",
+                hardware_note,
+                "Prefer the exported image keyframes for complete-scene training; the iPhone support video is capped at 30 seconds.",
+                "The Nerfstudio export is the editable source splat.ply; preserve it as the master artifact.",
+                "PlayCanvas splat-transform creates compact web/share artifacts and requires Node.js 22 or newer.",
+                "SOG is the preferred R2/browser delivery format; HTML is a self-contained local viewer.",
+                "A gaussian-glb uses KHR_gaussian_splatting and is not a conventional Blender-ready mesh GLB.",
                 "Start with scene scans or object scans with strong multi-angle coverage and static lighting.",
             ],
         )
@@ -252,3 +318,13 @@ def _image_count(image_dir: Path) -> int:
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".heic", ".png"}
         ]
     )
+
+
+def _validated_splat_delivery_formats(formats: tuple[str, ...]) -> tuple[str, ...]:
+    unique_formats = tuple(dict.fromkeys(formats))
+    unsupported = [item for item in unique_formats if item not in SUPPORTED_SPLAT_DELIVERY_FORMATS]
+    if unsupported:
+        supported = ", ".join(SUPPORTED_SPLAT_DELIVERY_FORMATS)
+        invalid = ", ".join(unsupported)
+        raise ValueError(f"Unsupported splat delivery format(s): {invalid}. Supported: {supported}")
+    return unique_formats

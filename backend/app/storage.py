@@ -168,10 +168,10 @@ def _path_identity(path: Path) -> tuple[int, int] | None:
 
 
 def _sync_directory(path: Path) -> None:
-    """Durably commit directory changes on POSIX, including macOS and WSL."""
+    """Durably commit directory changes on POSIX, including macOS and Linux."""
     if os.name == "nt":
         # Native Windows does not expose portable directory fsync through
-        # Python. The scanner's documented Windows backend runs under WSL.
+        # Python. The scanner's documented reconstruction backend runs on Linux.
         return
 
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
