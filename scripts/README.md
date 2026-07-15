@@ -19,6 +19,10 @@ Current entry points:
   splatting. Gaussian plans prefer full-session image keyframes over the
   30-second support video, preserve an editable PLY master, and default to SOG
   plus a standalone HTML viewer.
+- `benchmark_evidence.py`: verify the frozen input hash, record scanner and
+  evidence-tool commits, probe tool versions, wrap named stages with logs,
+  elapsed time and peak VRAM sampling, classify daytime/overnight estimates,
+  and hash final artifacts for the paired mesh/splat benchmark.
 - `plan_object_crop.py`: inspect object-scan tap/radius metadata and print the
   next manual crop command.
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.
@@ -35,6 +39,20 @@ Current entry points:
 - `verify_ply_point_cloud_loader.swift`: verify bounded ASCII and binary PLY
   parsing, endian/scalar handling, color normalization, sampling, bounds,
   malformed-layout rejection, file mapping, and symlink rejection.
+
+Initialize the official benchmark evidence record before running any Linux
+reconstruction command:
+
+```bash
+python3 scripts/benchmark_evidence.py init \
+  --scan scan_2026_07_15_00_41_09.zip \
+  --expected-sha256 ef9a6e0aefa564facf17357252e7fa2bd2cec55882a107461abad5c6459cb779 \
+  --scanner-baseline-commit d5f19d9 \
+  --report ScannerBenchmarks/run-001/evidence.json
+```
+
+See `docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
+rules, and the Blender comparison record.
 
 Run the ZIP writer verifier from the repo root:
 

@@ -20,7 +20,9 @@ The first working target is:
 
 See [docs/workflows.md](docs/workflows.md) for the current Mac capture workflow
 and the planned native Linux RTX 3070 reconstruction workflow. See
-[docs/roadmap.md](docs/roadmap.md) for the implementation roadmap.
+[docs/roadmap.md](docs/roadmap.md) for the implementation roadmap. The frozen
+paired output experiment is specified in
+[docs/benchmark_runbook.md](docs/benchmark_runbook.md).
 
 ## iOS App
 
@@ -135,6 +137,10 @@ The helper directory retains its historical `scripts/wsl/` name for
 compatibility, but native Ubuntu/Linux is now the primary target. When the PC
 is booted into Windows, the future cloud worker is offline and jobs remain
 safely queued until Linux starts again.
+
+Strict mode covers the complete paired benchmark gate: RTX visibility,
+CUDA-enabled COLMAP, the OpenMVS command suite, Blender, Nerfstudio, Node.js 22
+or newer, and SplatTransform. Open3D remains optional.
 
 Check job status:
 

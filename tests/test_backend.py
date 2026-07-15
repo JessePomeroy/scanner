@@ -29,6 +29,17 @@ from app.artifacts import (  # noqa: E402
     open_downloadable_artifact,
     rebase_output_paths,
 )
+from app.benchmark_evidence import (  # noqa: E402
+    BenchmarkEvidenceError,
+    append_stage,
+    artifact_fact,
+    ensure_report_open,
+    initialize_report,
+    run_stage,
+    runtime_guidance,
+    sha256_file,
+    verified_input,
+)
 from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
     build_colmap_dense_commands,
@@ -2061,6 +2072,195 @@ class BackendTests(unittest.TestCase):
         self.assertNotIn("high_rejected_frame_count", payload["warnings"])
         self.assertNotIn("tracking_loss_during_capture", payload["warnings"])
         self.assertNotIn("many_blurry_rejected_frames", payload["warnings"])
+
+    def test_benchmark_runtime_guidance_matches_agreed_thresholds(self) -> None:
+        self.assertEqual(runtime_guidance(None)["classification"], "uncalibrated")
+        self.assertEqual(runtime_guidance(3 * 60 * 60)["classification"], "daytime")
+        self.assertEqual(
+            runtime_guidance(3 * 60 * 60 + 1)["classification"],
+            "overnight_candidate",
+        )
+        limit = runtime_guidance(12 * 60 * 60)
+        self.assertEqual(limit["classification"], "practical_limit_warning")
+        self.assertTrue(limit["practical_limit_warning"])
+
+    def test_benchmark_input_hash_must_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan = Path(tmp) / "scan.zip"
+            scan.write_bytes(b"benchmark")
+            expected = sha256_file(scan)
+            facts = verified_input(scan, expected)
+            self.assertEqual(facts["sha256"], expected)
+            with self.assertRaisesRegex(BenchmarkEvidenceError, "mismatch"):
+                verified_input(scan, "0" * 64)
+
+    def test_benchmark_report_records_separate_baseline_and_tool_commits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan = Path(tmp) / "scan.zip"
+            scan.write_bytes(b"benchmark")
+            report = initialize_report(
+                scan_path=scan,
+                expected_sha256=sha256_file(scan),
+                scanner_baseline_revision="HEAD",
+                repo_root=ROOT,
+                tool_probes={},
+            )
+
+        self.assertEqual(len(report["provenance"]["scanner_baseline_commit"]), 40)
+        self.assertEqual(report["summary"]["status"], "initialized")
+        self.assertEqual(report["provenance"]["tools"], {})
+
+    def test_benchmark_stage_records_log_time_vram_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            success = run_stage(
+                name="success",
+                command=[sys.executable, "-c", "print('stage output')"],
+                log_path=tmp_path / "success.log",
+                poll_interval_seconds=0.01,
+                gpu_sampler=lambda: 321,
+            )
+            failed = run_stage(
+                name="failure",
+                command=[sys.executable, "-c", "raise SystemExit(7)"],
+                log_path=tmp_path / "failure.log",
+                poll_interval_seconds=0.01,
+                gpu_sampler=lambda: None,
+            )
+
+        self.assertEqual(success["status"], "succeeded")
+        self.assertEqual(success["peak_vram_mib"], 321)
+        self.assertGreater(success["elapsed_seconds"], 0)
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["return_code"], 7)
+
+    def test_benchmark_vram_sampling_failure_does_not_kill_stage(self) -> None:
+        def broken_sampler() -> int | None:
+            raise RuntimeError("nvidia-smi unavailable during sample")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = run_stage(
+                name="sampling_failure",
+                command=[sys.executable, "-c", "print('still runs')"],
+                log_path=Path(tmp) / "sampling_failure.log",
+                poll_interval_seconds=0.01,
+                gpu_sampler=broken_sampler,
+            )
+
+        self.assertEqual(stage["status"], "succeeded")
+        self.assertIsNone(stage["peak_vram_mib"])
+        self.assertGreater(stage["vram_sample_errors"], 0)
+
+    def test_benchmark_stage_names_cannot_overwrite_evidence(self) -> None:
+        report = {
+            "stages": [],
+            "updated_at": None,
+            "summary": {},
+        }
+        stage = {
+            "name": "mesh",
+            "status": "planned",
+            "elapsed_seconds": 0,
+            "peak_vram_mib": None,
+        }
+        append_stage(report, stage)
+        with self.assertRaisesRegex(BenchmarkEvidenceError, "already exists"):
+            append_stage(report, stage)
+
+    def test_benchmark_terminal_reports_cannot_be_mutated(self) -> None:
+        for status in ("complete", "failed"):
+            with self.subTest(status=status):
+                with self.assertRaisesRegex(BenchmarkEvidenceError, "terminal"):
+                    ensure_report_open({"summary": {"status": status}})
+
+        ensure_report_open({"summary": {"status": "in_progress"}})
+
+    def test_benchmark_artifact_fact_hashes_files_and_sizes_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "scene.sog"
+            artifact.write_bytes(b"sog")
+            nested = root / "textures"
+            nested.mkdir()
+            (nested / "texture.jpg").write_bytes(b"image")
+            file_fact = artifact_fact(artifact)
+            directory_fact = artifact_fact(nested)
+
+        self.assertEqual(file_fact["size_bytes"], 3)
+        self.assertEqual(
+            file_fact["sha256"],
+            "3b5d25db043a9eeb5b15c4684208ba1ab433aca45b7886d7bbcf29be4275285b",
+        )
+        self.assertEqual(directory_fact["file_count"], 1)
+        self.assertEqual(directory_fact["size_bytes"], 5)
+
+    def test_benchmark_evidence_cli_round_trips_a_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan = root / "scan.zip"
+            scan.write_bytes(b"benchmark")
+            artifact = root / "scene.sog"
+            artifact.write_bytes(b"sog")
+            report_path = root / "evidence.json"
+            script = ROOT / "scripts" / "benchmark_evidence.py"
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "init",
+                    "--scan",
+                    str(scan),
+                    "--expected-sha256",
+                    sha256_file(scan),
+                    "--scanner-baseline-commit",
+                    "HEAD",
+                    "--report",
+                    str(report_path),
+                    "--skip-tool-probes",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "run",
+                    "--report",
+                    str(report_path),
+                    "--stage",
+                    "mesh_plan",
+                    "--dry-run",
+                    "--",
+                    "colmap",
+                    "feature_extractor",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "finalize",
+                    "--report",
+                    str(report_path),
+                    "--artifact",
+                    f"splat_sog={artifact}",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["summary"]["status"], "complete")
+        self.assertEqual(payload["schedule"]["classification"], "uncalibrated")
+        self.assertEqual(payload["stages"][0]["status"], "planned")
+        self.assertEqual(payload["artifacts"]["splat_sog"]["size_bytes"], 3)
 
     def test_neural_backend_plan_prefers_video_for_mast3r_slam(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

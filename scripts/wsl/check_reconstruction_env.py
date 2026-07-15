@@ -26,12 +26,17 @@ def main() -> None:
     results = [
         check_command("nvidia-smi", ["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"]),
         check_colmap(),
-        check_command("InterfaceCOLMAP", ["InterfaceCOLMAP", "--help"], required=False),
-        check_command("DensifyPointCloud", ["DensifyPointCloud", "--help"], required=False),
-        check_command("ReconstructMesh", ["ReconstructMesh", "--help"], required=False),
-        check_command("RefineMesh", ["RefineMesh", "--help"], required=False),
-        check_command("TextureMesh", ["TextureMesh", "--help"], required=False),
-        check_command("blender", ["blender", "--version"], required=False),
+        check_command("InterfaceCOLMAP", ["InterfaceCOLMAP", "--help"]),
+        check_command("DensifyPointCloud", ["DensifyPointCloud", "--help"]),
+        check_command("ReconstructMesh", ["ReconstructMesh", "--help"]),
+        check_command("RefineMesh", ["RefineMesh", "--help"]),
+        check_command("TextureMesh", ["TextureMesh", "--help"]),
+        check_command("blender", ["blender", "--version"]),
+        check_command("ns-process-data", ["ns-process-data", "--help"]),
+        check_command("ns-train", ["ns-train", "--help"]),
+        check_command("ns-export", ["ns-export", "--help"]),
+        check_node(),
+        check_command("splat-transform", ["splat-transform", "--help"]),
         check_python_package("open3d", required=False),
     ]
 
@@ -47,7 +52,21 @@ def main() -> None:
 
 
 def is_required(name: str) -> bool:
-    return name in {"nvidia-smi", "colmap"}
+    return name in {
+        "nvidia-smi",
+        "colmap",
+        "InterfaceCOLMAP",
+        "DensifyPointCloud",
+        "ReconstructMesh",
+        "RefineMesh",
+        "TextureMesh",
+        "blender",
+        "ns-process-data",
+        "ns-train",
+        "ns-export",
+        "node",
+        "splat-transform",
+    }
 
 
 def check_command(name: str, command: list[str], *, required: bool = True) -> CheckResult:
@@ -94,6 +113,29 @@ def check_colmap() -> CheckResult:
         cuda_detail = "with CUDA"
 
     return CheckResult("colmap", completed.returncode == 0 and "without CUDA" not in output, f"{first_line}; {cuda_detail}")
+
+
+def check_node() -> CheckResult:
+    executable = shutil.which("node")
+    if executable is None:
+        return CheckResult("node", False, "node not found (required; version 22 or newer)")
+
+    completed = subprocess.run(
+        ["node", "--version"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=20,
+    )
+    version = completed.stdout.strip()
+    try:
+        major = int(version.removeprefix("v").split(".", 1)[0])
+    except (ValueError, IndexError):
+        return CheckResult("node", False, version or "unable to parse Node.js version")
+    if completed.returncode != 0 or major < 22:
+        return CheckResult("node", False, f"{version}; version 22 or newer is required")
+    return CheckResult("node", True, version)
 
 
 def check_python_package(name: str, *, required: bool = True) -> CheckResult:
