@@ -122,25 +122,31 @@ Run reconstruction mode when COLMAP is installed:
 curl -F "file=@scan.zip" "http://localhost:8000/scans?run_reconstruction=true"
 ```
 
-For the dual-boot RTX 3070 PC, boot into native Linux before reconstruction.
+For the dual-boot RTX 3070 PC, boot into CachyOS before reconstruction.
 Keep active workspaces on the Linux filesystem rather than an NTFS/shared
 Windows partition:
 
 ```bash
+scripts/wsl/setup_gpu_reconstruction.sh --dry-run
 scripts/wsl/setup_gpu_reconstruction.sh
+python3 scripts/wsl/check_reconstruction_env.py
+# After the pinned COLMAP/OpenMVS and neural environments are installed:
 python3 scripts/wsl/check_reconstruction_env.py --strict
 python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs --dry-run
 python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
 ```
 
 The helper directory retains its historical `scripts/wsl/` name for
-compatibility, but native Ubuntu/Linux is now the primary target. When the PC
+compatibility, but native CachyOS is now the primary target. The setup script
+auto-detects CachyOS/Arch versus Ubuntu/Debian; see
+[`docs/cachyos_setup.md`](docs/cachyos_setup.md) before running it. When the PC
 is booted into Windows, the future cloud worker is offline and jobs remain
 safely queued until Linux starts again.
 
 Strict mode covers the complete paired benchmark gate: RTX visibility,
-CUDA-enabled COLMAP, the OpenMVS command suite, Blender, Nerfstudio, Node.js 22
-or newer, and SplatTransform. Open3D remains optional.
+the CUDA toolkit and CUDA-capable PyTorch, CUDA-enabled COLMAP, the OpenMVS
+command suite, Blender, Nerfstudio, Node.js 22 or newer, Codex, and
+SplatTransform. Open3D remains optional.
 
 Check job status:
 

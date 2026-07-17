@@ -1,6 +1,10 @@
 # Paired Mesh and Gaussian Benchmark Runbook
 
-Status: Mac-side preparation complete; native Linux execution pending.
+Status: Mac-side preparation complete; CachyOS/RTX execution pending.
+
+Prepare the workstation with [`cachyos_setup.md`](cachyos_setup.md). The base
+package script is not the entry gate: the pinned COLMAP/OpenMVS and isolated
+Nerfstudio/gsplat toolchains must also be installed before this run begins.
 
 This runbook uses one frozen iPhone package to produce two intentionally
 different canonical results:
@@ -74,12 +78,14 @@ git -C ~/scanner worktree add --detach ~/scanner-baseline d5f19d9
 Do not begin the paired run until all of these are true:
 
 1. `nvidia-smi` sees the RTX 3070 and reports 8 GB VRAM.
-2. CUDA-enabled COLMAP, OpenMVS, Blender, Nerfstudio/gsplat, Node.js, and
-   SplatTransform pass the strict environment record.
-3. The input ZIP hash matches exactly.
-4. The baseline worktree resolves to `d5f19d9` and is clean.
-5. The evidence-tool checkout is clean and its separate commit is recorded.
-6. There is sufficient Linux-native free space for both paths and logs.
+2. `nvcc` and a real PyTorch CUDA check pass inside the activated neural
+   environment.
+3. CUDA-enabled COLMAP, OpenMVS, Blender, Nerfstudio/gsplat, Node.js, Codex,
+   and SplatTransform pass the strict environment record.
+4. The input ZIP hash matches exactly.
+5. The baseline worktree resolves to `d5f19d9` and is clean.
+6. The evidence-tool checkout is clean and its separate commit is recorded.
+7. There is sufficient Linux-native free space for both paths and logs.
 
 ## Initialize Evidence
 

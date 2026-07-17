@@ -325,22 +325,35 @@ inspected before the scan is submitted again.
 Use the dual-boot RTX 3070 PC while it is booted into native Linux for final
 reconstruction and Blender work:
 
-1. Install a supported Linux distribution and the native NVIDIA driver. The
-   examples assume Ubuntu Linux.
+1. Install CachyOS and let its `chwd` hardware manager configure the native
+   NVIDIA driver. Follow [`cachyos_setup.md`](cachyos_setup.md); do not use
+   NVIDIA's standalone `.run` installer.
 2. Verify `nvidia-smi` sees the RTX 3070 after rebooting into Linux.
 3. Clone this repo onto a Linux-native filesystem. Do not place active COLMAP
    databases or reconstruction workspaces on NTFS.
-4. Run the environment checker:
+4. Preview and install the CachyOS base packages, then inspect the environment:
 
 ```bash
+scripts/wsl/setup_gpu_reconstruction.sh --dry-run
 scripts/wsl/setup_gpu_reconstruction.sh
-python3 scripts/wsl/check_reconstruction_env.py --strict
+python3 scripts/wsl/check_reconstruction_env.py
 ```
 
 The helper directory retains its historical `scripts/wsl/` name so existing
-commands keep working; the scripts now treat native Linux as the primary target.
+commands keep working. The setup script detects CachyOS/Arch and Ubuntu/Debian.
+It does not install neural packages into the rolling system Python or execute
+unreviewed AUR recipes.
 
-5. Create Linux-native workspace folders and dry-run the command plan:
+5. Build the pinned CUDA-enabled COLMAP/OpenMVS tools, activate the isolated
+   Nerfstudio/gsplat environment, and pass the full gate:
+
+```bash
+source /etc/profile.d/cuda.sh
+export PATH="$HOME/.local/bin:$PATH"
+python3 scripts/wsl/check_reconstruction_env.py --strict
+```
+
+6. Create Linux-native workspace folders and dry-run the command plan:
 
 ```bash
 mkdir -p ~/ScannerOutputs ~/ScannerPlans
@@ -349,13 +362,13 @@ python3 scripts/reconstruct_gpu.py scan.zip \
   --dry-run
 ```
 
-6. Run COLMAP dense reconstruction and OpenMVS:
+7. Run COLMAP dense reconstruction and OpenMVS:
 
 ```bash
 python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
 ```
 
-7. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
+8. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
    GLB, `.blend`, reports, or logs to a shared partition if they are also needed
    from Windows.
 

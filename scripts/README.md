@@ -13,7 +13,10 @@ Current entry points:
 - `reconstruct_local.py`: validate and optionally run local COLMAP/OpenMVS.
 - `reconstruct_gpu.py`: native Linux/RTX workstation command runner. The
   compatibility setup/check helpers still live under the historical
-  `scripts/wsl/` path.
+  `scripts/wsl/` path. The setup helper detects CachyOS/Arch and Ubuntu/Debian;
+  its `--dry-run` option previews the package transaction, and it installs the
+  Codex CLI alongside the scanner tools so work can continue from Linux. See
+  `docs/cachyos_setup.md` for the primary workstation path.
 - `plan_neural_backend.py`: dry-run command planner for MASt3R-SLAM, Depth
   Anything, Lingbot-style viewer experiments, and Nerfstudio Gaussian
   splatting. Gaussian plans prefer full-session image keyframes over the
