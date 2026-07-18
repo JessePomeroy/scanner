@@ -111,6 +111,7 @@ def main() -> None:
 
     started_at = perf_counter()
     density_budget = None
+    mask_validation = None
     openmvs_commands = {
         OpenMVSConfig().interface_colmap,
         OpenMVSConfig().densify_point_cloud,
@@ -120,7 +121,7 @@ def main() -> None:
     }
     for command in commands:
         if not args.dry_run and command[0] == openmvs_config.densify_point_cloud:
-            validate_openmvs_config_masks(scan_root, openmvs_config)
+            mask_validation = validate_openmvs_config_masks(scan_root, openmvs_config)
         run_command(
             command,
             command_log=command_log,
@@ -141,6 +142,7 @@ def main() -> None:
             "command_count": len(commands),
             "openmvs_settings": openmvs_config.report_settings() if not args.skip_openmvs else None,
             "density_budget": density_budget.as_dict() if density_budget is not None else None,
+            "mask_validation": mask_validation.as_dict() if mask_validation is not None else None,
         },
     )
 
@@ -165,6 +167,7 @@ def main() -> None:
         "commands": commands,
         "openmvs_settings": openmvs_config.report_settings() if not args.skip_openmvs else None,
         "density_budget": density_budget.as_dict() if density_budget is not None else None,
+        "mask_validation": mask_validation.as_dict() if mask_validation is not None else None,
         "outputs": {key: str(path) for key, path in outputs.items()},
         "notes": [
             "Use this runner on native Linux with a CUDA-enabled COLMAP build.",

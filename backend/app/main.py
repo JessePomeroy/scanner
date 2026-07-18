@@ -32,6 +32,7 @@ from app.openmvs_runner import (
     OpenMVSScopeMode,
     inspect_openmvs_dense_cloud,
     run_openmvs_pipeline,
+    validate_openmvs_config_masks,
 )
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
@@ -294,6 +295,7 @@ def process_scan(
             )
             textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
             density_budget = inspect_openmvs_dense_cloud(scan_root, openmvs_config)
+            mask_validation = validate_openmvs_config_masks(scan_root, openmvs_config)
             package.record_processing_step(
                 "openmvs",
                 {
@@ -301,6 +303,9 @@ def process_scan(
                     "output": str(textured_mesh),
                     "settings": openmvs_config.report_settings(),
                     "density_budget": density_budget.as_dict(),
+                    "mask_validation": (
+                        mask_validation.as_dict() if mask_validation is not None else None
+                    ),
                 },
             )
             outputs["openmvs_dense_point_cloud"] = str(
