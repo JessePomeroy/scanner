@@ -162,7 +162,9 @@ Implement the following as independently reviewable slices:
 
 ### Track B: Propagated per-frame masks
 
-1. Move scene mask authoring to post-capture representative frames.
+1. Move scene mask authoring to post-capture representative frames. Status:
+   shared versioned contract and ordered keep/erase rasterizer implemented;
+   iPhone editor remains.
    - Support multiple keep regions and erase regions.
    - Preserve the current fixed capture polygon as an explicit centered-subject
      mode rather than the scene default.

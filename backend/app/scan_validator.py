@@ -13,6 +13,7 @@ from app.scan_metadata import (
     load_scan_metadata,
 )
 from app.mask_processor import MaskValidationError, validate_capture_mask_png
+from app.mask_authoring import MaskAuthoringError, load_mask_authoring_plan
 
 
 class ScanValidationError(ValueError):
@@ -40,6 +41,7 @@ class ScanValidationReport:
     integrity_warnings: tuple[str, ...]
     reconstruction_scope: dict[str, object] | None
     capture_mask_count: int
+    mask_authoring: dict[str, object] | None
 
 
 def find_scan_root(extracted_dir: Path) -> Path:
@@ -112,6 +114,10 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         )
 
     _validate_frame_image_references(scan_dir, metadata.frames, images)
+    try:
+        mask_authoring_plan = load_mask_authoring_plan(metadata_dir, metadata.frames)
+    except MaskAuthoringError as error:
+        raise ScanValidationError(str(error)) from error
     capture_mask_count = _validate_capture_masks(scan_dir, metadata)
     _validate_session_counts(
         image_count=len(images),
@@ -162,6 +168,9 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
             else None
         ),
         capture_mask_count=capture_mask_count,
+        mask_authoring=(
+            mask_authoring_plan.as_dict() if mask_authoring_plan is not None else None
+        ),
     )
 
 

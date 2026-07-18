@@ -141,6 +141,13 @@ future 3D ROI alignment. It is not sufficient by itself for irregular scenes.
 
 ### Package Contract
 
+The representative-frame authoring intent now has a strict version 1.0
+contract in [`mask_authoring_contract.md`](mask_authoring_contract.md). It
+supports multiple ordered keep/erase polygons, exact frame association, bounded
+normalized coordinates, safe backend validation, and the required five sampled
+review positions. The iPhone post-capture editor and temporal generator will
+consume this contract in the next slices.
+
 The typed `reconstruction_scope` manifest object below is implemented and
 preserved when the backend regenerates its downstream manifest. Capture masks
 under `masks/capture` are checked for safe layout, exact frame association,

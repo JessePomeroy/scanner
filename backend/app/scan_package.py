@@ -129,6 +129,7 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
             "object_radius_meters": validation.object_radius_meters,
         },
         "reconstruction_scope": validation.reconstruction_scope,
+        "mask_authoring": validation.mask_authoring,
         "limitations": [
             "depth frames are optional and absent on non-LiDAR devices",
             "video capture is optional and may be absent from photogrammetry-first scans",
