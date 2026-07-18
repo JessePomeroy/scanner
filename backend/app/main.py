@@ -461,7 +461,8 @@ def process_scan(
             message="Running COLMAP reconstruction.",
         )
         started_at = perf_counter()
-        masks_available = report.reconstruction_scope is not None or use_masks
+        capture_masks_available = report.reconstruction_scope is not None
+        masks_available = capture_masks_available or use_masks
         capture_mask_path = (
             scan_root / "masks" / "capture"
             if report.reconstruction_scope is not None
@@ -505,7 +506,10 @@ def process_scan(
 
         package.record_processing_step(
             "mask_profile",
-            profile.as_dict(masks_available=masks_available),
+            profile.as_dict(
+                capture_masks_available=capture_masks_available,
+                dense_masks_available=masks_available,
+            ),
         )
         colmap_config = ColmapConfig(
             use_gpu=True,
@@ -675,7 +679,8 @@ def resume_scoped_scan(scan_id: str) -> None:
         report = package.validation
 
         profile = mask_stage_profile(checkpoint.mask_profile)
-        masks_available = report.reconstruction_scope is not None or checkpoint.use_masks
+        capture_masks_available = report.reconstruction_scope is not None
+        masks_available = capture_masks_available or checkpoint.use_masks
         dense_mask_path = scan_root / "dense" / "masks" if masks_available else None
         colmap_fusion_mask_path = (
             scan_root / "dense" / "colmap_masks" if masks_available else None
@@ -709,7 +714,10 @@ def resume_scoped_scan(scan_id: str) -> None:
 
         package.record_processing_step(
             "mask_profile",
-            profile.as_dict(masks_available=masks_available),
+            profile.as_dict(
+                capture_masks_available=capture_masks_available,
+                dense_masks_available=masks_available,
+            ),
         )
 
         colmap_config = ColmapConfig(

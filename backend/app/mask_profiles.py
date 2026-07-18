@@ -18,17 +18,23 @@ class MaskStageProfile:
     openmvs_densification: bool
     openmvs_texturing: bool
 
-    def as_dict(self, *, masks_available: bool) -> dict[str, Any]:
+    def as_dict(
+        self,
+        *,
+        capture_masks_available: bool,
+        dense_masks_available: bool,
+    ) -> dict[str, Any]:
         """Return the effective, JSON-safe stage policy for processing reports."""
         return {
             "name": self.name,
             "description": self.description,
-            "masks_available": masks_available,
+            "capture_masks_available": capture_masks_available,
+            "dense_masks_available": dense_masks_available,
             "stages": {
-                "colmap_features": masks_available and self.colmap_features,
-                "colmap_stereo_fusion": masks_available and self.colmap_stereo_fusion,
-                "openmvs_densification": masks_available and self.openmvs_densification,
-                "openmvs_texturing": masks_available and self.openmvs_texturing,
+                "colmap_features": capture_masks_available and self.colmap_features,
+                "colmap_stereo_fusion": dense_masks_available and self.colmap_stereo_fusion,
+                "openmvs_densification": dense_masks_available and self.openmvs_densification,
+                "openmvs_texturing": dense_masks_available and self.openmvs_texturing,
             },
         }
 
