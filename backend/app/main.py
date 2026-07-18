@@ -27,6 +27,8 @@ from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobStore
+from app.mask_undistorter import convert_capture_mask_set
+from app.mask_processor import validate_openmvs_masks
 from app.openmvs_runner import (
     OpenMVSConfig,
     OpenMVSScopeMode,
@@ -288,10 +290,26 @@ def process_scan(
                 stage="meshing",
                 message="Running OpenMVS mesh reconstruction.",
             )
+            auto_masks = report.reconstruction_scope is not None
+            mask_path = scan_root / "dense" / "masks" if (auto_masks or use_masks) else None
+            mask_conversion = None
+            if auto_masks:
+                conversion_started_at = perf_counter()
+                if mask_path.is_dir():
+                    mask_conversion = validate_openmvs_masks(mask_path, scan_root / "dense" / "images")
+                else:
+                    mask_conversion = convert_capture_mask_set(scan_root)
+                package.record_processing_step(
+                    "mask_conversion",
+                    {
+                        "elapsed_seconds": perf_counter() - conversion_started_at,
+                        "result": mask_conversion.as_dict(),
+                    },
+                )
             started_at = perf_counter()
             openmvs_config = OpenMVSConfig(
                 scope_mode=scope_mode,
-                mask_path=scan_root / "dense" / "masks" if use_masks else None,
+                mask_path=mask_path,
             )
             textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
             density_budget = inspect_openmvs_dense_cloud(scan_root, openmvs_config)
@@ -306,6 +324,7 @@ def process_scan(
                     "mask_validation": (
                         mask_validation.as_dict() if mask_validation is not None else None
                     ),
+                    "automatic_mask_conversion": auto_masks,
                 },
             )
             outputs["openmvs_dense_point_cloud"] = str(
