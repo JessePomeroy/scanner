@@ -48,6 +48,27 @@ struct MaskAuthoringPlan: Codable, Equatable, Sendable {
     }
 }
 
+enum MaskAuthoringSampleSelector {
+    static func representativeIndices(frameCount: Int) -> [Int] {
+        guard frameCount > 0 else { return [] }
+        let last = frameCount - 1
+        func roundedQuarter(_ numerator: Int) -> Int {
+            let quotient = numerator / 4
+            let remainder = numerator % 4
+            if remainder < 2 { return quotient }
+            if remainder > 2 { return quotient + 1 }
+            return quotient.isMultiple(of: 2) ? quotient : quotient + 1
+        }
+        return Array(Set([
+            0,
+            roundedQuarter(last),
+            roundedQuarter(last * 2),
+            roundedQuarter(last * 3),
+            last,
+        ])).sorted()
+    }
+}
+
 enum CaptureMaskRasterizerError: Error, Equatable {
     case invalidDimensions
     case invalidRegionSet

@@ -135,6 +135,12 @@ registered-camera JSON, and continuation checkpoint as downloadable artifacts.
 The iPhone uploader enables this flow by default. In Jobs, open the sparse PLY,
 adjust the cyan box, then tap **Save & Continue**.
 
+The paintbrush beside a ZIP in the iPhone Scans tab opens the post-capture scene
+mask draft editor. It supports multiple green Keep and red Erase areas on five
+representative photos and safely rebuilds the ZIP. These selections remain an
+explicit draft until temporal propagation and sampled mask review are complete;
+the backend does not silently treat a draft as an applied mask set.
+
 Store the first reviewed region as revision `1`; later edits must advance by
 exactly one revision:
 

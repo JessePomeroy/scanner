@@ -1,9 +1,9 @@
 # Post-Capture Mask Authoring Contract
 
 Status: version 1.0 contract, backend validation, ordered keep/erase
-rasterization, package persistence, and five-sample selection implemented.
-The representative-frame iPhone editor and temporal generator are the next
-slices.
+rasterization, package persistence, five-sample selection, and representative-
+frame iPhone draft editor implemented. The temporal generator and sampled
+approval gate are the next slices.
 
 `metadata/mask_authoring.json` records what the user means to retain before a
 propagation implementation creates the full `masks/capture` set. Source JPEGs
@@ -62,3 +62,11 @@ Sampled propagation review uses stable first, quartile, middle, three-quarter,
 and last frame indices with duplicates removed for short captures. This is the
 minimum review set, not a substitute for automatically flagging low-confidence
 or abruptly changing masks.
+
+In the iPhone Scans tab, the paintbrush button opens the editable scan folder
+and shows those five photos. Draw green Keep areas or red Erase areas, navigate
+between samples, then choose **Save Draft**. Saving increments the revision,
+atomically replaces `metadata/mask_authoring.json`, and rebuilds the ZIP through
+a temporary archive. If rebuilding fails, the prior authoring file is restored.
+The UI labels this as a draft because reconstruction must not consume it until
+full-frame propagation and review have succeeded.
