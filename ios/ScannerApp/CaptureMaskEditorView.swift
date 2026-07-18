@@ -3,7 +3,7 @@ import SwiftUI
 struct CaptureMaskEditorView: View {
     @Binding var polygon: [NormalizedMaskPoint]
     let onCancel: () -> Void
-    let onConfirm: () -> Void
+    let onConfirm: (CGSize) -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -54,7 +54,9 @@ struct CaptureMaskEditorView: View {
                     Text(isValidPolygon ? "Area selected" : "Drag to draw a closed area")
                         .font(.subheadline)
 
-                    Button(action: onConfirm) {
+                    Button {
+                        onConfirm(geometry.size)
+                    } label: {
                         Label("Use This Area", systemImage: "checkmark.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
@@ -74,12 +76,12 @@ struct CaptureMaskEditorView: View {
     private func appendPoint(_ point: CGPoint, in size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
         let normalized = NormalizedMaskPoint(
-            x: min(max(point.x / size.width, 0), 1),
-            y: min(max(point.y / size.height, 0), 1)
+            x: Double(min(max(point.x / size.width, 0), 1)),
+            y: Double(min(max(point.y / size.height, 0), 1))
         )
         if let previous = polygon.last {
-            let dx = (normalized.x - previous.x) * size.width
-            let dy = (normalized.y - previous.y) * size.height
+            let dx = CGFloat(normalized.x - previous.x) * size.width
+            let dy = CGFloat(normalized.y - previous.y) * size.height
             guard hypot(dx, dy) >= 4 else { return }
         }
         polygon.append(normalized)
@@ -95,7 +97,7 @@ struct CaptureMaskEditorView: View {
     }
 
     private func screenPoint(_ point: NormalizedMaskPoint, in size: CGSize) -> CGPoint {
-        CGPoint(x: point.x * size.width, y: point.y * size.height)
+        CGPoint(x: CGFloat(point.x) * size.width, y: CGFloat(point.y) * size.height)
     }
 
     private func polygonPath(in size: CGSize) -> Path {

@@ -186,10 +186,10 @@ image references and overwrites, and includes those files in the streamed ZIP.
 The iOS target includes a deterministic polygon rasterizer that validates
 normalized keep polygons and emits full-resolution, 8-bit grayscale PNG masks.
 The capture UI can draw, clear, cancel, and confirm a normalized keep polygon
-over the live camera preview. These are preview-space coordinates: capture
-integration must map the preview's aspect-fill crop and orientation into each
-saved image before rasterization. Passing the confirmed polygon into capture
-and mask packaging remains a separate integration step.
+over the live camera preview. The portrait-only capture path maps the preview's
+centered aspect-fill crop into each portrait JPEG, rasterizes a complete mask
+set as frames are accepted, and declares `image_masks` scope only when every
+captured frame has a mask.
 
 ### Backend Validation
 

@@ -40,6 +40,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private let cameraCaptureManager: CameraCaptureManager
     private let packageWriter: ScanPackageWriter
     private let imageWriter: ARFrameImageWriter
+    private let maskRasterizer = CaptureMaskRasterizer()
+    private let maskCoordinateMapper = CaptureMaskCoordinateMapper()
     private let videoRecorder = ARFrameVideoRecorder()
     private let motionRecorder = MotionCaptureRecorder()
     private let captureQueue = DispatchQueue(label: "ScannerApp.ScanCaptureManager.capture")
@@ -59,6 +61,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var videoCapturedAt: String?
     private var videoRecordingFailed = false
     private var videoDurationLimitMessageShown = false
+    private var reconstructionPolygon: [NormalizedMaskPoint] = []
+    private var reconstructionPreviewSize: CGSize?
+    private var captureMaskCount = 0
 
     private let minimumSharpnessScore: Float = 0.18
     private let fastMovementWarningMetersPerSecond: Float = 0.45
@@ -66,6 +71,15 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
     var arSession: ARSession {
         arTrackingManager.session
+    }
+
+    func startPreview() throws {
+        try arTrackingManager.startTracking()
+    }
+
+    func stopPreview() {
+        guard !isScanning else { return }
+        arTrackingManager.stopTracking()
     }
 
     init(
@@ -100,6 +114,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             videoCapturedAt = ISO8601DateFormatter().string(from: Date())
             videoRecordingFailed = false
             videoDurationLimitMessageShown = false
+            captureMaskCount = 0
             isScanning = true
         }
 
@@ -179,7 +194,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                     : "Scene scan package."
             )
 
-            let manifest = ScanPackageManifest(
+            var manifest = ScanPackageManifest(
                 schemaVersion: "0.3.0",
                 scanId: currentScanId,
                 scanMode: scanMode.rawValue,
@@ -201,6 +216,22 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                     "dense reconstruction requires a CUDA-capable COLMAP build"
                 ]
             )
+            if !reconstructionPolygon.isEmpty {
+                guard captureMaskCount == capturedFrames.count,
+                      captureMaskCount > 0 else {
+                    throw ScanCaptureMaskError.incompleteMaskSet(
+                        expected: capturedFrames.count,
+                        actual: captureMaskCount
+                    )
+                }
+                manifest.reconstructionScope = ReconstructionScopeManifest(
+                    schemaVersion: "1.0",
+                    mode: "image_masks",
+                    maskSpace: "capture_image",
+                    maskConvention: "white_keep_black_exclude",
+                    maskCount: captureMaskCount
+                )
+            }
 
             try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
             try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
@@ -259,6 +290,29 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         )
     }
 
+    func configureReconstructionArea(
+        _ polygon: [NormalizedMaskPoint],
+        previewSize: CGSize
+    ) {
+        do {
+            try maskRasterizer.validate(polygon)
+            guard previewSize.width > 0, previewSize.height > 0 else { return }
+            captureQueue.sync {
+                reconstructionPolygon = polygon
+                reconstructionPreviewSize = previewSize
+            }
+        } catch {
+            return
+        }
+    }
+
+    func clearReconstructionArea() {
+        captureQueue.sync {
+            reconstructionPolygon.removeAll()
+            reconstructionPreviewSize = nil
+        }
+    }
+
     private func considerFrameForCapture(_ frame: ARFrame) {
         guard isScanning,
               let currentScanDirectory else {
@@ -285,11 +339,34 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         let savedImage: SavedFrameImage
         do {
             savedImage = try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
+            if !reconstructionPolygon.isEmpty {
+                guard let reconstructionPreviewSize else {
+                    throw ScanCaptureMaskError.missingPreviewSize
+                }
+                let imagePolygon = try maskCoordinateMapper.imagePolygon(
+                    from: reconstructionPolygon,
+                    previewSize: reconstructionPreviewSize,
+                    imageWidth: savedImage.width,
+                    imageHeight: savedImage.height
+                )
+                let pngData = try maskRasterizer.pngData(
+                    for: imagePolygon,
+                    width: savedImage.width,
+                    height: savedImage.height
+                )
+                try packageWriter.saveCaptureMask(
+                    pngData,
+                    forImagePath: imagePath,
+                    in: currentScanDirectory
+                )
+                captureMaskCount += 1
+            }
         } catch {
             cleanupCaptureAfterFailure()
+            arTrackingManager.stopTracking()
             updatePublishedState(
-                state: .failed("Image write failed"),
-                statusMessage: "Image write failed: \(error.localizedDescription)"
+                state: .failed("Frame packaging failed"),
+                statusMessage: "Frame packaging failed: \(error.localizedDescription)"
             )
             return
         }
@@ -520,6 +597,20 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private func exportSummary(_ summary: ScanExportSummary) -> String {
         let blur = summary.averageBlurScore.map { String(format: "%.2f", $0) } ?? "n/a"
         return "Frames \(summary.acceptedFrameCount), rejected \(summary.rejectedFrameCount), avg blur \(blur)"
+    }
+}
+
+private enum ScanCaptureMaskError: LocalizedError {
+    case missingPreviewSize
+    case incompleteMaskSet(expected: Int, actual: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingPreviewSize:
+            return "The reconstruction area preview size is missing."
+        case let .incompleteMaskSet(expected, actual):
+            return "The scan has \(actual) masks for \(expected) captured images."
+        }
     }
 }
 

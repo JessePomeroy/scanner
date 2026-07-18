@@ -18,7 +18,14 @@ struct ScanView: View {
                 CaptureMaskEditorView(
                     polygon: $reconstructionPolygon,
                     onCancel: cancelReconstructionAreaEditing,
-                    onConfirm: { isEditingReconstructionArea = false }
+                    onConfirm: { previewSize in
+                        scanManager.configureReconstructionArea(
+                            reconstructionPolygon,
+                            previewSize: previewSize
+                        )
+                        scanManager.stopPreview()
+                        isEditingReconstructionArea = false
+                    }
                 )
                 .ignoresSafeArea()
                 .zIndex(1)
@@ -248,14 +255,24 @@ struct ScanView: View {
                 .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
             }
 
-            Button(action: beginReconstructionAreaEditing) {
-                Label(
-                    reconstructionPolygon.isEmpty ? "Limit Reconstruction Area" : "Reconstruction Area Set",
-                    systemImage: reconstructionPolygon.isEmpty ? "square.dashed" : "checkmark.square.fill"
-                )
-                .frame(maxWidth: .infinity)
+            HStack {
+                Button(action: beginReconstructionAreaEditing) {
+                    Label(
+                        reconstructionPolygon.isEmpty ? "Limit Reconstruction Area" : "Edit Reconstruction Area",
+                        systemImage: reconstructionPolygon.isEmpty ? "square.dashed" : "checkmark.square.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                if !reconstructionPolygon.isEmpty {
+                    Button(action: clearReconstructionArea) {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Remove reconstruction area")
+                }
             }
-            .buttonStyle(.bordered)
             .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
         }
         .padding(10)
@@ -343,13 +360,25 @@ struct ScanView: View {
     }
 
     private func beginReconstructionAreaEditing() {
-        polygonBeforeEditing = reconstructionPolygon
-        isEditingReconstructionArea = true
+        do {
+            try scanManager.startPreview()
+            polygonBeforeEditing = reconstructionPolygon
+            isEditingReconstructionArea = true
+        } catch {
+            scanManager.fail(error)
+        }
     }
 
     private func cancelReconstructionAreaEditing() {
         reconstructionPolygon = polygonBeforeEditing
+        scanManager.stopPreview()
         isEditingReconstructionArea = false
+    }
+
+    private func clearReconstructionArea() {
+        reconstructionPolygon.removeAll()
+        polygonBeforeEditing.removeAll()
+        scanManager.clearReconstructionArea()
     }
 }
 
