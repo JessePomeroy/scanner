@@ -57,6 +57,7 @@ from app.mask_undistorter import (  # noqa: E402
     parse_colmap_cameras,
     parse_colmap_image_cameras,
     associate_mask_cameras,
+    convert_capture_mask_set,
     undistort_mask_array,
     undistort_mask_file,
 )
@@ -1302,6 +1303,37 @@ class BackendTests(unittest.TestCase):
                 undistort_mask_file(input_path, output_path, source, target)
 
         self.assertTrue(np.array_equal(values, np.full((3, 3), 255, dtype=np.uint8)))
+
+    def test_convert_capture_mask_set_stages_validates_and_publishes(self) -> None:
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow is not installed in this test environment")
+        with tempfile.TemporaryDirectory() as tmp:
+            scan = Path(tmp) / "scan"
+            (scan / "sparse" / "0").mkdir(parents=True)
+            (scan / "dense" / "sparse").mkdir(parents=True)
+            (scan / "dense" / "images").mkdir()
+            (scan / "masks" / "capture").mkdir(parents=True)
+            Image.fromarray(np.full((5, 5), 255, dtype=np.uint8)).save(
+                scan / "masks" / "capture" / "frame.jpg.png"
+            )
+            (scan / "dense" / "images" / "frame.jpg").write_bytes(_png_header(3, 3, color_type=2))
+
+            def export_model(source: Path, output: Path) -> None:
+                if source == scan / "sparse" / "0":
+                    camera = "1 SIMPLE_RADIAL 5 5 2 2 2 0\n"
+                else:
+                    camera = "1 PINHOLE 3 3 2 2 1 1\n"
+                (output / "cameras.txt").write_text(camera)
+                (output / "images.txt").write_text("1 1 0 0 0 0 0 0 1 frame.jpg\n\n")
+
+            result = convert_capture_mask_set(scan, model_exporter=export_model)
+            with Image.open(scan / "dense" / "masks" / "frame.mask.png") as image:
+                output = np.asarray(image)
+
+        self.assertEqual(result.mask_count, 1)
+        self.assertTrue(np.array_equal(output, np.full((3, 3), 255, dtype=np.uint8)))
 
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
