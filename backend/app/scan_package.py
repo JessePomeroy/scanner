@@ -114,6 +114,7 @@ def write_manifest(scan_root: Path, validation: ScanValidationReport) -> Path:
             "frames": len(frames),
             "imu_samples": len(_read_json_array(motion_path)) if motion_path.exists() else 0,
             "video_metadata_entries": len(video_metadata),
+            "capture_masks": validation.capture_mask_count,
         },
         "sensors": {
             "camera": True,

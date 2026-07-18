@@ -1,6 +1,6 @@
 # Reconstruction Scope Control Specification
 
-Status: Phase 1, density budgets, mask validation, and capture-scope metadata contract implemented
+Status: Phase 1, density budgets, OpenMVS mask validation, and capture-mask package validation implemented
 
 ## Problem
 
@@ -141,9 +141,10 @@ future 3D ROI alignment. It is not sufficient by itself for irregular scenes.
 ### Package Contract
 
 The typed `reconstruction_scope` manifest object below is implemented and
-preserved when the backend regenerates its downstream manifest. Packaging the
-referenced capture masks and converting them to undistorted image space remain
-future slices.
+preserved when the backend regenerates its downstream manifest. Capture masks
+under `masks/capture` are checked for safe layout, exact frame association,
+declared count, grayscale PNG format, and frame dimensions. Converting those
+masks to undistorted image space remains a future slice.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 
