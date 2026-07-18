@@ -83,6 +83,16 @@ xcrun swiftc \
 /tmp/verify_capture_mask_mapper
 ```
 
+Run the post-capture mask-authoring contract verifier on a Mac from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors -parse-as-library \
+  ios/ScannerApp/CaptureMaskRasterizer.swift \
+  scripts/verify_mask_authoring_contract.swift \
+  -o /tmp/verify_mask_authoring_contract
+/tmp/verify_mask_authoring_contract
+```
+
 Run the reconstruction job client verifier from the repo root:
 
 ```bash

@@ -111,6 +111,7 @@ def package_integrity_summary(validation: ScanValidationReport) -> dict[str, Any
         "session_image_count": validation.session_image_count,
         "session_video_count": validation.session_video_count,
         "warnings": list(validation.integrity_warnings),
+        "mask_authoring": validation.mask_authoring,
     }
 
 

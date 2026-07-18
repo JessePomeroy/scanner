@@ -455,6 +455,35 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(generated_manifest["reconstruction_scope"], scope)
         self.assertEqual(generated_manifest["file_counts"]["capture_masks"], 1)
 
+    def test_validate_scan_package_preserves_post_capture_mask_authoring(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            authoring = {
+                "schema_version": "1.0",
+                "authoring_mode": "representative_frames",
+                "coordinate_space": "normalized_capture_image",
+                "mask_convention": "white_keep_black_exclude",
+                "revision": 1,
+                "representative_frames": [{
+                    "frame_id": 1,
+                    "image": "images/frame_000001.jpg",
+                    "regions": [{
+                        "operation": "keep",
+                        "points": [
+                            {"x": 0.1, "y": 0.1}, {"x": 0.9, "y": 0.1},
+                            {"x": 0.9, "y": 0.9},
+                        ],
+                    }],
+                }],
+            }
+            (scan_dir / "metadata" / "mask_authoring.json").write_text(json.dumps(authoring))
+
+            package = validate_and_report_scan(scan_dir)
+            generated_manifest = json.loads(package.manifest_path.read_text())
+
+        self.assertEqual(package.validation.mask_authoring, authoring)
+        self.assertEqual(generated_manifest["mask_authoring"], authoring)
+
     def test_validate_scan_package_rejects_corrupt_capture_mask_pixel_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))

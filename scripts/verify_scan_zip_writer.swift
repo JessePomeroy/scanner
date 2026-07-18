@@ -1,5 +1,15 @@
 import Foundation
 
+private struct MaskAuthoringFixture: Encodable {
+    let schemaVersion = "1.0"
+    let revision = 1
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case revision
+    }
+}
+
 @main
 struct VerifyScanZipWriter {
     static func main() throws {
@@ -48,6 +58,15 @@ struct VerifyScanZipWriter {
         }
         let storedMaskData = try Data(contentsOf: maskURL)
         assert(storedMaskData == maskData)
+        let authoringURL = try writer.saveMaskAuthoringPlan(
+            MaskAuthoringFixture(),
+            in: scanDirectory
+        )
+        assert(authoringURL.lastPathComponent == "mask_authoring.json")
+        let authoringObject = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: authoringURL)
+        ) as? [String: Any]
+        assert(authoringObject?["schema_version"] as? String == "1.0")
 
         var largeData = Data()
         for index in 0..<(2 * 1024 * 1024 + 17) {
@@ -79,6 +98,7 @@ struct VerifyScanZipWriter {
                     'scan_zip_writer_test/arkit/empty/',
                     'scan_zip_writer_test/video/scan.mov',
                     'scan_zip_writer_test/masks/capture/frame_000001.jpg.png',
+                    'scan_zip_writer_test/metadata/mask_authoring.json',
                 }
                 missing = required - names
                 assert not missing, sorted(missing)
