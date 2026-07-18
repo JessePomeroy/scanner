@@ -6,7 +6,7 @@ Goals:
 
 1. Verify CachyOS and the RTX 3070 driver.
 2. Download the scanner repository and enter its folder.
-3. Check out the prepared CachyOS setup branch.
+3. Update the published `main` branch containing the CachyOS setup.
 4. Preview and run the workstation setup script from the repository root.
 5. Reboot at a safe checkpoint if necessary.
 6. Resume setup after reboot.
@@ -39,14 +39,14 @@ If it does not exist:
     cd "$HOME"
     git clone https://github.com/JessePomeroy/scanner.git
 
-Then enter the repository and select the prepared branch:
+Then enter the repository and update the published main branch:
 
     cd "$HOME/scanner"
     git fetch origin
-    git switch agent/benchmark-evidence-tooling
+    git switch main
     git pull --ff-only
 
-Verify that commit `39fd92b` is present in the current branch. Do not continue from `main` if that commit is missing.
+Verify that commit `39fd92b` is present in the current branch. Do not continue if that commit is missing.
 
 3. Read these files before changing the computer:
 

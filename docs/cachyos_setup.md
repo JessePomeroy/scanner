@@ -51,12 +51,13 @@ filesystem, not an NTFS Windows partition:
 cd ~
 git clone https://github.com/JessePomeroy/scanner.git
 cd scanner
-git switch agent/benchmark-evidence-tooling
+git switch main
+git pull --ff-only
 mkdir -p ~/ScannerBenchmarks/input ~/ScannerOutputs ~/ScannerPlans
 ```
 
-The branch command is temporary until the prepared benchmark tooling is merged
-or otherwise moved to the branch used by the workstation.
+The published `main` branch contains the CachyOS setup and paired benchmark
+tooling. Confirm commit `39fd92b` is present before running the setup script.
 
 ## 3. Preview and Run the Base Setup
 
