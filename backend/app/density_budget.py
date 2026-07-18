@@ -60,14 +60,17 @@ def _read_ply_vertex_count(path: Path) -> int:
     consumed = 0
     vertex_count: int | None = None
     with path.open("rb") as stream:
-        first = stream.readline()
+        first = stream.readline(MAX_PLY_HEADER_BYTES + 1)
         consumed += len(first)
         if first.rstrip(b"\r\n") != b"ply":
             raise PointCloudBudgetError(f"Not a PLY file: {path}")
 
-        while consumed <= MAX_PLY_HEADER_BYTES:
-            line = stream.readline()
+        while consumed < MAX_PLY_HEADER_BYTES:
+            remaining = MAX_PLY_HEADER_BYTES - consumed
+            line = stream.readline(remaining + 1)
             consumed += len(line)
+            if consumed > MAX_PLY_HEADER_BYTES:
+                break
             if not line:
                 break
             stripped = line.rstrip(b"\r\n")

@@ -1059,6 +1059,14 @@ class BackendTests(unittest.TestCase):
             with self.assertRaises(PointCloudBudgetError):
                 inspect_ply_point_budget(path)
 
+    def test_ply_density_budget_bounds_a_single_header_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dense.ply"
+            path.write_bytes(b"ply\ncomment " + b"x" * (64 * 1024) + b"\nend_header\n")
+
+            with self.assertRaises(PointCloudBudgetError):
+                inspect_ply_point_budget(path)
+
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
             build_backend_plan(
