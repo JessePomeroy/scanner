@@ -49,6 +49,10 @@ private enum MaskAuthoringContractVerifier {
         try require(decoded == plan, "Mask-authoring JSON did not round-trip")
         let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
         try require(object?["coordinate_space"] as? String == "normalized_capture_image", "Wrong JSON keys")
+        try require(
+            MaskAuthoringSampleSelector.representativeIndices(frameCount: 10) == [0, 2, 4, 7, 9],
+            "Representative frame selection diverged from the backend contract"
+        )
 
         do {
             _ = try rasterizer.pngData(for: [erase], width: 100, height: 100)

@@ -8,6 +8,7 @@ enum ScanPackageWriterError: Error {
     case invalidCaptureMaskImagePath
     case invalidCaptureMaskPNG
     case captureMaskAlreadyExists(URL)
+    case unsafeMaskAuthoringPath
 }
 
 /// Creates and exports the on-device scan package.
@@ -103,6 +104,12 @@ final class ScanPackageWriter {
         let metadataDirectory = scanDirectory.appendingPathComponent("metadata", isDirectory: true)
         try fileManager.createDirectory(at: metadataDirectory, withIntermediateDirectories: true)
         let destination = metadataDirectory.appendingPathComponent("mask_authoring.json")
+        if fileManager.fileExists(atPath: destination.path) {
+            let values = try destination.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw ScanPackageWriterError.unsafeMaskAuthoringPath
+            }
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(plan)

@@ -5,6 +5,7 @@ struct ScanGalleryView: View {
     @StateObject private var gallery = ScanGalleryStore()
     @StateObject private var uploadStore: ScanUploadStore
     @State private var shareURL: URL?
+    @State private var maskEditorURL: URL?
     @State private var deletionError: String?
 
     init(uploadClient: ScanUploading = HTTPScanUploadClient()) {
@@ -45,6 +46,15 @@ struct ScanGalleryView: View {
                                     }
 
                                     Spacer(minLength: 0)
+
+                                    Button {
+                                        maskEditorURL = scan.url
+                                    } label: {
+                                        Image(systemName: "paintbrush.pointed")
+                                    }
+                                    .disabled(!scan.hasEditableFolder || uploadStore.isUploading)
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Edit scene mask draft for \(scan.displayName)")
 
                                     if uploadStore.isUploading(scan.url) {
                                         ProgressView()
@@ -120,6 +130,21 @@ struct ScanGalleryView: View {
                     ShareSheet(items: [shareURL])
                 }
             }
+            .fullScreenCover(
+                isPresented: Binding(
+                    get: { maskEditorURL != nil },
+                    set: { isPresented in
+                        if !isPresented { maskEditorURL = nil }
+                    }
+                )
+            ) {
+                if let maskEditorURL {
+                    PostCaptureMaskEditorView(archiveURL: maskEditorURL) {
+                        self.maskEditorURL = nil
+                        gallery.refresh()
+                    }
+                }
+            }
             .alert(
                 "Unable to Delete Scan",
                 isPresented: Binding(
@@ -171,6 +196,10 @@ struct ScanGalleryView: View {
                deletedURLs.contains(currentShareURL) {
                 shareURL = nil
             }
+            if let currentEditorURL = maskEditorURL,
+               deletedURLs.contains(currentEditorURL) {
+                maskEditorURL = nil
+            }
         } catch {
             deletionError = error.localizedDescription
         }
@@ -183,6 +212,7 @@ struct ScanGalleryItem: Identifiable, Equatable {
     let displayName: String
     let createdAt: Date?
     let fileSizeBytes: Int64?
+    let hasEditableFolder: Bool
 
     var detailText: String {
         let dateText = createdAt.map(Self.dateFormatter.string(from:)) ?? "Unknown date"
@@ -266,8 +296,17 @@ final class ScanGalleryStore: ObservableObject {
             url: url,
             displayName: url.deletingPathExtension().lastPathComponent,
             createdAt: values.creationDate ?? values.contentModificationDate,
-            fileSizeBytes: values.fileSize.map(Int64.init)
+            fileSizeBytes: values.fileSize.map(Int64.init),
+            hasEditableFolder: editableFolderExists(for: url)
         )
+    }
+
+    private func editableFolderExists(for archiveURL: URL) -> Bool {
+        let directory = archiveURL.deletingPathExtension()
+        guard let values = try? directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+            return false
+        }
+        return values.isDirectory == true && values.isSymbolicLink != true
     }
 
     private func delete(_ scan: ScanGalleryItem) throws {

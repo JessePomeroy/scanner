@@ -36,6 +36,7 @@
 		A24C00000000000000000011 /* CaptureMaskCoordinateMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */; };
 		A25C00000000000000000011 /* ReconstructionScopeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25C00000000000000000001 /* ReconstructionScopeClient.swift */; };
 		A25C00000000000000000012 /* ScopeRegionEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25C00000000000000000002 /* ScopeRegionEditorView.swift */; };
+		A26C00000000000000000011 /* PostCaptureMaskEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26C00000000000000000001 /* PostCaptureMaskEditorView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,6 +71,7 @@
 		A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskCoordinateMapper.swift; sourceTree = "<group>"; };
 		A25C00000000000000000001 /* ReconstructionScopeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconstructionScopeClient.swift; sourceTree = "<group>"; };
 		A25C00000000000000000002 /* ScopeRegionEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRegionEditorView.swift; sourceTree = "<group>"; };
+		A26C00000000000000000001 /* PostCaptureMaskEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostCaptureMaskEditorView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +119,7 @@
 				A21C00000000000000000002 /* PointCloudPreviewView.swift */,
 				A25C00000000000000000001 /* ReconstructionScopeClient.swift */,
 				A25C00000000000000000002 /* ScopeRegionEditorView.swift */,
+				A26C00000000000000000001 /* PostCaptureMaskEditorView.swift */,
 				9E9E00CDB1AD45C0ADF14734 /* ARSessionView.swift */,
 				47A171A1C63A4CE6A6E6E3A5 /* ScanCaptureManager.swift */,
 				44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */,
@@ -208,6 +211,7 @@
 				A21C00000000000000000012 /* PointCloudPreviewView.swift in Sources */,
 				A25C00000000000000000011 /* ReconstructionScopeClient.swift in Sources */,
 				A25C00000000000000000012 /* ScopeRegionEditorView.swift in Sources */,
+				A26C00000000000000000011 /* PostCaptureMaskEditorView.swift in Sources */,
 				E82260E9C3CC44FE87B3767D /* ARSessionView.swift in Sources */,
 				8FC8547323AA42859CA9B9E5 /* ScanCaptureManager.swift in Sources */,
 				F08270898A2D43E8AD613035 /* ARTrackingManager.swift in Sources */,
