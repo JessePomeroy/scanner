@@ -128,10 +128,14 @@ def undistort_mask_file(
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
-        Image.fromarray(transformed, mode="L").save(temporary_path, format="PNG", optimize=False)
+        Image.fromarray(transformed).save(temporary_path, format="PNG", optimize=False)
         with temporary_path.open("rb") as stream:
             os.fsync(stream.fileno())
-        os.replace(temporary_path, output_path)
+        try:
+            os.link(temporary_path, output_path)
+        except FileExistsError as error:
+            raise MaskUndistortionError(f"Refusing to overwrite mask output: {output_path}") from error
+        temporary_path.unlink()
     except BaseException:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)

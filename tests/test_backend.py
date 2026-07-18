@@ -1257,7 +1257,7 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "capture.png"
             output_path = Path(tmp) / "dense" / "capture.mask.png"
-            Image.fromarray(np.full((5, 5), 255, dtype=np.uint8), mode="L").save(input_path)
+            Image.fromarray(np.full((5, 5), 255, dtype=np.uint8)).save(input_path)
 
             result = undistort_mask_file(input_path, output_path, source, target)
             with Image.open(result) as written:
