@@ -144,7 +144,7 @@ Implement the following as independently reviewable slices:
    - Publish registered cameras and a bounded sparse point-cloud preview.
    - Pause before dense processing when region review is requested.
    - Resume without repeating feature extraction, matching, or mapping.
-3. Persist region selection and expose it through the job API.
+3. Persist region selection and expose it through the job API. Status: requested-region persistence implemented.
    - Record requested and effective bounds, authoring source, revision, and
      fallback reason.
    - Reject stale or invalid revisions instead of silently changing scope.
