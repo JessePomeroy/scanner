@@ -368,6 +368,10 @@ python3 scripts/reconstruct_gpu.py scan.zip \
 python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
 ```
 
+OpenMVS densification uses its estimated region of interest by default. Use
+`--scope-mode unbounded` only for diagnostics when the automatic ROI removes
+required geometry.
+
 8. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
    GLB, `.blend`, reports, or logs to a shared partition if they are also needed
    from Windows.
