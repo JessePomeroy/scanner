@@ -47,6 +47,23 @@ python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
 Depth outputs are support data. They are not a replacement for textured mesh
 generation.
 
+The smallest implemented use of `depth-anything.cpp` is a representative-frame
+preview sampler. It intentionally does not score scan quality or fuse geometry:
+
+```bash
+python3 scripts/generate_depth_previews.py scan.zip \
+  --runtime /opt/depth-anything.cpp/build/examples/cli/da3-cli \
+  --model /opt/models/depth-anything-base-q8_0.gguf \
+  --maximum-frames 12
+```
+
+The sampler validates and copies the package into an isolated workspace,
+chooses evenly spaced keyframes including both ends of the capture, and writes
+lossless PFM depth, colorized PNG previews, predicted-pose JSON, timings, and
+SHA-256 provenance. Predicted poses are inspection artifacts only; they do not
+replace the scanner's ARKit poses. Depth is not treated as metres unless the
+selected model is explicitly metric.
+
 ## Lingbot-Style Viewer
 
 Lingbot-style workflows are useful references for local video-to-point-cloud UX.

@@ -22,6 +22,10 @@ Current entry points:
   splatting. Gaussian plans prefer full-session image keyframes over the
   30-second support video, preserve an editable PLY master, and default to SOG
   plus a standalone HTML viewer.
+- `generate_depth_previews.py`: validate a scan and run `depth-anything.cpp` on
+  a bounded, evenly spaced set of representative keyframes. It preserves PFM
+  depth, colorized PNG previews, predicted-pose JSON, hashes, timings, and an
+  explicit advisory-only report without changing reconstruction inputs.
 - `benchmark_evidence.py`: verify the frozen input hash, record scanner and
   evidence-tool commits, probe tool versions, wrap named stages with logs,
   elapsed time and peak VRAM sampling, classify daytime/overnight estimates,
