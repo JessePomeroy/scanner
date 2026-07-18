@@ -62,6 +62,7 @@ class SparseReviewTests(unittest.TestCase):
                 "run_openmvs": True,
                 "scope_mode": "auto_roi",
                 "use_masks": True,
+                "mask_profile": "scene_geometry",
             },
         )
         self.assertEqual(outputs["sparse_point_cloud"].name, "sparse_points.ply")

@@ -223,6 +223,19 @@ must be warped with the same camera model and output geometry used by
 result against `dense/images` before passing its directory to
 `DensifyPointCloud --mask-path`.
 
+This conversion now runs immediately after image undistortion. The selected
+mask profile then determines consumers explicitly:
+
+- `scene_geometry` keeps COLMAP feature extraction unmasked, then applies the
+  reviewed masks to COLMAP stereo fusion, OpenMVS densification, and OpenMVS
+  texture selection.
+- `object_foreground` additionally supplies capture-space masks to COLMAP
+  feature extraction for controlled object/turntable jobs.
+
+OpenMVS 2.4 texture selection discovers `.mask.png` files beside its images and
+uses `--ignore-mask-label 0`. The backend stages only a validated, complete mask
+set there immediately before `TextureMesh`; it never edits source JPEGs.
+
 The installed OpenMVS expects mask filenames ending in `.mask.png`. Add an
 integration fixture that proves the exact name mapping for this pinned build.
 

@@ -51,7 +51,12 @@ from app.colmap_runner import (  # noqa: E402
 )
 from app.density_budget import PointCloudBudgetError, inspect_ply_point_budget  # noqa: E402
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
-from app.mask_processor import MaskValidationError, validate_openmvs_masks  # noqa: E402
+from app.mask_processor import (  # noqa: E402
+    MaskValidationError,
+    stage_colmap_fusion_masks,
+    stage_openmvs_texture_masks,
+    validate_openmvs_masks,
+)
 from app.mask_undistorter import (  # noqa: E402
     ColmapCamera,
     MaskCameraAssociation,
@@ -994,6 +999,30 @@ class BackendTests(unittest.TestCase):
         self.assertIn("--FeatureExtraction.use_gpu", commands[0])
         self.assertIn("--FeatureMatching.use_gpu", commands[1])
 
+    def test_colmap_masks_are_forwarded_only_to_configured_stages(self) -> None:
+        from app.colmap_runner import ColmapConfig
+
+        feature_masks = Path("/tmp/capture masks")
+        fusion_masks = Path("/tmp/dense masks")
+        commands = build_colmap_commands(
+            Path("/tmp/scan"),
+            ColmapConfig(
+                feature_mask_path=feature_masks,
+                stereo_fusion_mask_path=fusion_masks,
+            ),
+        )
+
+        feature_extractor = commands[0]
+        fusion = commands[-1]
+        self.assertEqual(
+            feature_extractor[feature_extractor.index("--ImageReader.mask_path") + 1],
+            str(feature_masks.resolve()),
+        )
+        self.assertEqual(
+            fusion[fusion.index("--StereoFusion.mask_path") + 1],
+            str(fusion_masks.resolve()),
+        )
+
     def test_colmap_commands_can_be_split_by_sparse_and_dense_stages(self) -> None:
         sparse_commands = build_colmap_sparse_commands(Path("/tmp/scan"))
         dense_commands = build_colmap_dense_commands(Path("/tmp/scan"))
@@ -1295,6 +1324,42 @@ class BackendTests(unittest.TestCase):
         densify = commands[1]
         self.assertEqual(densify[densify.index("--mask-path") + 1], str(mask_path.resolve()))
         self.assertEqual(densify[densify.index("--ignore-mask-label") + 1], "0")
+
+    def test_openmvs_texture_mask_usage_is_explicit(self) -> None:
+        commands = build_openmvs_commands(
+            Path("/tmp/scanner-openmvs-texture-masks"),
+            OpenMVSConfig(
+                mask_path=Path("/tmp/dense masks"),
+                texture_use_masks=True,
+            ),
+        )
+
+        texture = commands[-1]
+        self.assertEqual(
+            texture[texture.index("--ignore-mask-label") + 1],
+            "0",
+        )
+
+    def test_mask_staging_uses_each_tools_expected_filename_convention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_dir = root / "images"
+            mask_dir = root / "masks"
+            colmap_dir = root / "colmap_masks"
+            image_dir.mkdir()
+            mask_dir.mkdir()
+            Image.new("RGB", (8, 6)).save(image_dir / "frame.jpg")
+            Image.new("L", (8, 6), color=255).save(mask_dir / "frame.mask.png")
+
+            colmap_result = stage_colmap_fusion_masks(
+                mask_dir, image_dir, colmap_dir
+            )
+            texture_result = stage_openmvs_texture_masks(mask_dir, image_dir)
+
+            self.assertTrue((colmap_dir / "frame.jpg.png").is_file())
+            self.assertTrue((image_dir / "frame.mask.png").is_file())
+            self.assertEqual(colmap_result.mask_count, 1)
+            self.assertEqual(texture_result.mask_count, 1)
 
     def test_openmvs_config_rejects_invalid_scope_values(self) -> None:
         with self.assertRaises(ValueError):

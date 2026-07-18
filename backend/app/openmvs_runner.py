@@ -8,7 +8,11 @@ import subprocess
 from typing import Any, Literal
 
 from app.density_budget import PointCloudBudgetResult, inspect_ply_point_budget
-from app.mask_processor import MaskValidationResult, validate_openmvs_masks
+from app.mask_processor import (
+    MaskValidationResult,
+    stage_openmvs_texture_masks,
+    validate_openmvs_masks,
+)
 
 
 OpenMVSScopeMode = Literal["auto_roi", "unbounded"]
@@ -31,6 +35,7 @@ class OpenMVSConfig:
     roi_border: float = 10.0
     mask_path: Path | None = None
     mask_ignore_label: int = 0
+    texture_use_masks: bool = False
     region_path: Path | None = None
     include_refine: bool = False
     point_warning_limit: int = 2_000_000
@@ -75,6 +80,7 @@ class OpenMVSConfig:
             "roi_border": self.roi_border if automatic_roi else 0,
             "mask_path": str(self.mask_path.resolve()) if self.mask_path is not None else None,
             "mask_ignore_label": self.mask_ignore_label if self.mask_path is not None else None,
+            "texture_use_masks": self.texture_use_masks,
             "region_path": str(self.region_path.resolve()) if self.region_path is not None else None,
             "region_method": "openmvs_oriented_box" if self.region_path is not None else None,
             "include_refine": self.include_refine,
@@ -200,8 +206,7 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
         texture_input_scene = refined_scene
         texture_input_mesh = refined_mesh_file
 
-    commands.append(
-        [
+    texture = [
             config.texture_mesh,
             str(texture_input_scene),
             "-m",
@@ -211,7 +216,9 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
             "--export-type",
             "obj",
         ]
-    )
+    if config.texture_use_masks:
+        texture.extend(["--ignore-mask-label", str(config.mask_ignore_label)])
+    commands.append(texture)
     return commands
 
 
@@ -225,6 +232,10 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
     if config.region_path is not None:
         validate_openmvs_region_capabilities(config)
     for command in build_openmvs_commands(scan_dir, config):
+        if command[0] == config.texture_mesh and config.texture_use_masks:
+            if config.mask_path is None:
+                raise RuntimeError("OpenMVS texture masks require a validated mask path")
+            stage_openmvs_texture_masks(config.mask_path, dense_dir / "images")
         # InterfaceCOLMAP stores image paths relative to the COLMAP dense
         # workspace. Every later OpenMVS command must resolve those paths from
         # the same directory rather than from the backend process directory.

@@ -14,6 +14,7 @@ import tempfile
 from typing import Any
 
 from app.openmvs_runner import OpenMVSScopeMode
+from app.mask_profiles import MaskProfileName
 
 
 class SparseReviewError(ValueError):
@@ -29,6 +30,7 @@ class SparseReviewCheckpoint:
     run_openmvs: bool
     scope_mode: OpenMVSScopeMode
     use_masks: bool
+    mask_profile: MaskProfileName
 
 
 def load_sparse_review_checkpoint(scan_root: Path) -> SparseReviewCheckpoint:
@@ -67,15 +69,20 @@ def load_sparse_review_checkpoint(scan_root: Path) -> SparseReviewCheckpoint:
     if created.tzinfo is None or created.utcoffset() is None:
         raise SparseReviewError("Sparse-review checkpoint timestamp must include a timezone")
     continuation = payload.get("continuation")
-    if not isinstance(continuation, dict) or set(continuation) != {
+    if not isinstance(continuation, dict) or set(continuation) not in ({
         "run_dense", "run_openmvs", "scope_mode", "use_masks"
-    }:
+    }, {
+        "run_dense", "run_openmvs", "scope_mode", "use_masks", "mask_profile"
+    }):
         raise SparseReviewError("Sparse-review continuation is invalid")
     if any(type(continuation[name]) is not bool for name in ("run_dense", "run_openmvs", "use_masks")):
         raise SparseReviewError("Sparse-review continuation flags must be booleans")
     scope_mode = continuation["scope_mode"]
     if scope_mode not in {"auto_roi", "unbounded"}:
         raise SparseReviewError("Sparse-review scope mode is invalid")
+    mask_profile = continuation.get("mask_profile", "scene_geometry")
+    if mask_profile not in {"scene_geometry", "object_foreground"}:
+        raise SparseReviewError("Sparse-review mask profile is invalid")
     for relative, expect_directory in (
         ("sparse/0", True), ("sparse/sparse_points.ply", False), ("sparse/cameras_preview.json", False)
     ):
@@ -88,6 +95,7 @@ def load_sparse_review_checkpoint(scan_root: Path) -> SparseReviewCheckpoint:
         run_openmvs=continuation["run_openmvs"],
         scope_mode=scope_mode,
         use_masks=continuation["use_masks"],
+        mask_profile=mask_profile,
     )
 
 
@@ -98,6 +106,7 @@ def publish_sparse_review_checkpoint(
     run_openmvs: bool,
     scope_mode: OpenMVSScopeMode,
     use_masks: bool,
+    mask_profile: MaskProfileName = "scene_geometry",
     colmap_executable: str = "colmap",
     model_exporter: ModelExporter | None = None,
 ) -> dict[str, Path]:
@@ -134,6 +143,7 @@ def publish_sparse_review_checkpoint(
             "run_openmvs": run_openmvs,
             "scope_mode": scope_mode,
             "use_masks": use_masks,
+            "mask_profile": mask_profile,
         },
     }
     _write_json_atomic(checkpoint_path, checkpoint_payload)

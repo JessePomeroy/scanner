@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import shutil
 import struct
+import tempfile
 
 from PIL import Image
 
@@ -55,7 +58,9 @@ def validate_openmvs_masks(mask_dir: Path, image_dir: Path) -> MaskValidationRes
 
     images = sorted(
         path for path in image_dir.rglob("*")
-        if path.is_file() and not path.is_symlink() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        if path.is_file() and not path.is_symlink()
+        and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        and not path.name.lower().endswith(".mask.png")
     )
     if not images:
         raise MaskValidationError(f"No undistorted images found in {image_dir}")
@@ -86,6 +91,98 @@ def validate_openmvs_masks(mask_dir: Path, image_dir: Path) -> MaskValidationRes
         first = min(extras)
         raise MaskValidationError(f"Unexpected mask without a matching image: {first}")
     return MaskValidationResult(mask_dir, len(images), len(actual))
+
+
+def stage_openmvs_texture_masks(mask_dir: Path, image_dir: Path) -> MaskValidationResult:
+    """Publish validated masks beside images for OpenMVS texture selection."""
+    result = validate_openmvs_masks(mask_dir, image_dir)
+    image_dir = image_dir.resolve()
+    for source in sorted(mask_dir.resolve().rglob("*.mask.png")):
+        relative = source.relative_to(mask_dir.resolve())
+        destination = image_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+            raise MaskValidationError(f"Texture mask destination is unsafe: {destination}")
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            with source.open("rb") as input_file:
+                shutil.copyfileobj(input_file, output, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.replace(temporary, destination)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    return result
+
+
+def stage_colmap_fusion_masks(
+    mask_dir: Path,
+    image_dir: Path,
+    output_dir: Path,
+) -> MaskValidationResult:
+    """Translate OpenMVS mask names to COLMAP's full-image-name convention."""
+    result = validate_openmvs_masks(mask_dir, image_dir)
+    image_dir = image_dir.resolve()
+    output_dir = output_dir.resolve()
+    if output_dir.is_symlink():
+        raise MaskValidationError(f"COLMAP mask directory is unsafe: {output_dir}")
+    if output_dir.exists():
+        return _validate_colmap_fusion_masks(mask_dir, image_dir, output_dir, result)
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=output_dir.parent, prefix=".colmap-masks."))
+    try:
+        for image in _undistorted_images(image_dir):
+            relative = image.relative_to(image_dir)
+            source = mask_dir.resolve() / relative.with_suffix(".mask.png")
+            destination = staging / Path(f"{relative.as_posix()}.png")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        os.rename(staging, output_dir)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    return _validate_colmap_fusion_masks(mask_dir, image_dir, output_dir, result)
+
+
+def _validate_colmap_fusion_masks(
+    mask_dir: Path,
+    image_dir: Path,
+    output_dir: Path,
+    source_result: MaskValidationResult,
+) -> MaskValidationResult:
+    if not output_dir.is_dir() or output_dir.is_symlink():
+        raise MaskValidationError(f"COLMAP mask directory is unsafe: {output_dir}")
+    expected: set[Path] = set()
+    for image in _undistorted_images(image_dir):
+        relative = image.relative_to(image_dir)
+        destination = output_dir / Path(f"{relative.as_posix()}.png")
+        expected.add(destination)
+        if not destination.is_file() or destination.is_symlink():
+            raise MaskValidationError(f"Missing COLMAP fusion mask: {destination}")
+        validate_capture_mask_png(destination, _image_dimensions(image))
+    actual = {
+        path for path in output_dir.rglob("*.png")
+        if path.is_file() and not path.is_symlink()
+    }
+    if actual != expected:
+        raise MaskValidationError("COLMAP fusion mask set contains unexpected files")
+    return MaskValidationResult(output_dir, source_result.image_count, len(actual))
+
+
+def _undistorted_images(image_dir: Path) -> list[Path]:
+    return sorted(
+        path for path in image_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+        and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        and not path.name.lower().endswith(".mask.png")
+    )
 
 
 def _image_dimensions(path: Path) -> tuple[int, int]:
