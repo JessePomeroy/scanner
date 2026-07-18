@@ -55,5 +55,7 @@ probabilities. `GET /scans/{scan_id}/mask-review` returns the evidence.
 `POST /scans/{scan_id}/mask-review/approve` revalidates the exact full set and
 atomically promotes it to `masks/capture` while activating
 `reconstruction_scope`. Reject records the decision without deleting evidence.
-A draft-bearing job is blocked from resume until approval succeeds. The next
-slice adds a purpose-built review screen and approve/reject controls to Jobs.
+A draft-bearing job is blocked from resume until approval succeeds. Jobs now
+shows one required **Review Masks** step with all five photo overlays, quality
+messages, confirmation before approving the full set, and a reject-and-correct
+path. Approval returns the user to the existing 3D-region step.

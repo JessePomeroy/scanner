@@ -5,12 +5,14 @@ struct ProcessingHistoryView: View {
     @StateObject private var store: ReconstructionJobStore
     private let artifactClient: any ReconstructionArtifactAccessing
     private let scopeClient: any ReconstructionScopeAccessing
+    private let maskReviewClient: any MaskReviewAccessing
     private let onStartNewScan: () -> Void
 
     init(
         jobClient: any ReconstructionJobLoading = HTTPReconstructionJobClient(),
         artifactClient: any ReconstructionArtifactAccessing = HTTPReconstructionArtifactClient(),
         scopeClient: any ReconstructionScopeAccessing = HTTPReconstructionScopeClient(),
+        maskReviewClient: any MaskReviewAccessing = HTTPMaskReviewClient(),
         onStartNewScan: @escaping () -> Void = {}
     ) {
         _store = StateObject(
@@ -18,6 +20,7 @@ struct ProcessingHistoryView: View {
         )
         self.artifactClient = artifactClient
         self.scopeClient = scopeClient
+        self.maskReviewClient = maskReviewClient
         self.onStartNewScan = onStartNewScan
     }
 
@@ -96,6 +99,7 @@ struct ProcessingHistoryView: View {
                                         baseURLString: backendURLString,
                                         client: artifactClient,
                                         scopeClient: scopeClient,
+                                        maskReviewClient: maskReviewClient,
                                         onStartNewScan: onStartNewScan
                                     )
                                 } label: {
@@ -160,6 +164,7 @@ private struct ReconstructionArtifactListView: View {
     @State private var downloadTask: Task<Void, Never>?
     private let artifactClient: any ReconstructionArtifactAccessing
     private let scopeClient: any ReconstructionScopeAccessing
+    private let maskReviewClient: any MaskReviewAccessing
     private let onStartNewScan: () -> Void
 
     init(
@@ -167,12 +172,14 @@ private struct ReconstructionArtifactListView: View {
         baseURLString: String,
         client: any ReconstructionArtifactAccessing,
         scopeClient: any ReconstructionScopeAccessing,
+        maskReviewClient: any MaskReviewAccessing,
         onStartNewScan: @escaping () -> Void
     ) {
         self.job = job
         self.baseURLString = baseURLString
         self.artifactClient = client
         self.scopeClient = scopeClient
+        self.maskReviewClient = maskReviewClient
         self.onStartNewScan = onStartNewScan
         _store = StateObject(
             wrappedValue: ReconstructionArtifactStore(client: client)
@@ -226,6 +233,42 @@ private struct ReconstructionArtifactListView: View {
                 ReconstructionJobRow(job: job)
             }
 
+            if job.outputs["mask_generation_report"] != nil {
+                Section {
+                    NavigationLink {
+                        MaskReviewView(
+                            scanID: job.scanID,
+                            baseURLString: baseURLString,
+                            artifacts: store.artifacts,
+                            reviewClient: maskReviewClient,
+                            artifactClient: artifactClient
+                        )
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Review Masks")
+                                    .font(.headline)
+                                Text("Required before reconstruction can continue")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "square.stack.3d.up")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    .disabled(store.isLoading || maskReviewSamples.isEmpty)
+                } header: {
+                    Text("Required Review")
+                } footer: {
+                    if store.isLoading {
+                        Text("Loading the five review samples…")
+                    } else if maskReviewSamples.isEmpty {
+                        Text("The backend did not publish the expected review samples.")
+                    }
+                }
+            }
+
             Section {
                 resultsContent
             } header: {
@@ -244,7 +287,7 @@ private struct ReconstructionArtifactListView: View {
                 ProgressView("Loading results")
                 Spacer()
             }
-        } else if store.artifacts.isEmpty {
+        } else if visibleArtifacts.isEmpty {
             ContentUnavailableView(
                 "No Downloadable Results",
                 systemImage: "shippingbox",
@@ -253,10 +296,18 @@ private struct ReconstructionArtifactListView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
         } else {
-            ForEach(store.artifacts) { artifact in
+            ForEach(visibleArtifacts) { artifact in
                 artifactControls(artifact)
             }
         }
+    }
+
+    private var visibleArtifacts: [ReconstructionArtifact] {
+        store.artifacts.filter { !$0.isMaskReviewSample }
+    }
+
+    private var maskReviewSamples: [ReconstructionArtifact] {
+        store.artifacts.filter(\.isMaskReviewSample)
     }
 
     private func artifactControls(_ artifact: ReconstructionArtifact) -> some View {

@@ -147,6 +147,11 @@ evidence with `GET /scans/SCAN_ID/mask-review`, then record the decision with
 proposal set into active reconstruction masks; the backend never silently
 treats a draft as applied.
 
+In the iPhone Jobs tab, open the paused job and choose **Review Masks**. Swipe
+through all five samples, then approve the full set or reject it for correction.
+After approval, use **Set Region** on the sparse point cloud and **Save &
+Continue** as usual.
+
 Store the first reviewed region as revision `1`; later edits must advance by
 exactly one revision:
 

@@ -27,6 +27,12 @@ struct ReconstructionArtifact: Decodable, Identifiable, Equatable, Sendable {
             && (name == "sparse_point_cloud" || filename == "sparse_points.ply")
     }
 
+    var isMaskReviewSample: Bool {
+        name.hasPrefix("mask_review_")
+            && mediaType == "image/png"
+            && (filename as NSString).pathExtension.lowercased() == "png"
+    }
+
     enum CodingKeys: String, CodingKey {
         case name
         case relativePath = "relative_path"
