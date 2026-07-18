@@ -88,6 +88,7 @@ def _png_header(width: int, height: int, *, color_type: int) -> bytes:
         + width.to_bytes(4, "big")
         + height.to_bytes(4, "big")
         + bytes((8, color_type, 0, 0, 0))
+        + b"\x00\x00\x00\x00IEND\xaeB`\x82"
     )
 
 
@@ -1106,6 +1107,19 @@ class BackendTests(unittest.TestCase):
                 validate_openmvs_masks(masks, images)
 
             (masks / "frame.mask.png").write_bytes(_png_header(320, 240, color_type=0))
+            with self.assertRaises(MaskValidationError):
+                validate_openmvs_masks(masks, images)
+
+    def test_openmvs_masks_reject_truncated_png(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            images = root / "images"
+            masks = root / "masks"
+            images.mkdir()
+            masks.mkdir()
+            (images / "frame.png").write_bytes(_png_header(640, 480, color_type=2))
+            (masks / "frame.mask.png").write_bytes(_png_header(640, 480, color_type=0)[:29])
+
             with self.assertRaises(MaskValidationError):
                 validate_openmvs_masks(masks, images)
 

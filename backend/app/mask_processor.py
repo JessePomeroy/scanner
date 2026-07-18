@@ -111,8 +111,15 @@ def _image_dimensions(path: Path) -> tuple[int, int]:
 def _png_dimensions_and_grayscale(path: Path) -> tuple[tuple[int, int], bool]:
     with path.open("rb") as stream:
         header = stream.read(29)
+        try:
+            stream.seek(-12, 2)
+        except OSError as error:
+            raise MaskValidationError(f"Truncated PNG mask: {path}") from error
+        trailer = stream.read(12)
     if len(header) != 29 or not header.startswith(b"\x89PNG\r\n\x1a\n") or header[12:16] != b"IHDR":
         raise MaskValidationError(f"Invalid PNG mask: {path}")
+    if len(trailer) != 12 or trailer[:8] != b"\x00\x00\x00\x00IEND":
+        raise MaskValidationError(f"PNG mask has no terminal IEND chunk: {path}")
     width, height = struct.unpack(">II", header[16:24])
     bit_depth = header[24]
     color_type = header[25]
