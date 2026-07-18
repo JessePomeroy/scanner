@@ -374,6 +374,12 @@ required geometry. The runner warns above 2 million dense points and stops
 before meshing above 10 million points; both thresholds are recorded in the
 reconstruction report.
 
+To use pre-generated masks, place one 8-bit grayscale PNG beside the equivalent
+relative image path under `dense/masks`, replace the source extension with
+`.mask.png` (for example, `frame_000001.jpg` becomes
+`frame_000001.mask.png`), and add `--use-masks`. The runner requires a complete
+set with dimensions matching `dense/images` before starting densification.
+
 8. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
    GLB, `.blend`, reports, or logs to a shared partition if they are also needed
    from Windows.

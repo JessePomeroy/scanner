@@ -8,6 +8,7 @@ import subprocess
 from typing import Any, Literal
 
 from app.density_budget import PointCloudBudgetResult, inspect_ply_point_budget
+from app.mask_processor import MaskValidationResult, validate_openmvs_masks
 
 
 OpenMVSScopeMode = Literal["auto_roi", "unbounded"]
@@ -167,6 +168,7 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
     dense_dir = scan_dir / "dense"
 
     config = config or OpenMVSConfig()
+    validate_openmvs_config_masks(scan_dir, config)
     for command in build_openmvs_commands(scan_dir, config):
         # InterfaceCOLMAP stores image paths relative to the COLMAP dense
         # workspace. Every later OpenMVS command must resolve those paths from
@@ -176,6 +178,16 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
             inspect_openmvs_dense_cloud(scan_dir, config)
 
     return dense_dir / "scene_textured.obj"
+
+
+def validate_openmvs_config_masks(
+    scan_dir: Path,
+    config: OpenMVSConfig,
+) -> MaskValidationResult | None:
+    """Validate configured masks against COLMAP's undistorted images."""
+    if config.mask_path is None:
+        return None
+    return validate_openmvs_masks(config.mask_path, scan_dir.resolve() / "dense" / "images")
 
 
 def inspect_openmvs_dense_cloud(

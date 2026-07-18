@@ -1,6 +1,6 @@
 # Reconstruction Scope Control Specification
 
-Status: Phase 1 implemented; density-budget guardrails implemented
+Status: Phase 1 and density budgets implemented; OpenMVS-ready mask validation implemented
 
 ## Problem
 
@@ -37,9 +37,9 @@ not automatically become dense geometry.
 
 ## Current Repository Gaps
 
-1. Phase 1 now invokes `DensifyPointCloud` with explicit ROI, visibility-filter,
-   and fusion controls. Image-mask production and per-job scope selection are
-   not implemented yet.
+1. Phase 1 invokes `DensifyPointCloud` with explicit ROI, visibility-filter,
+   and fusion controls. Jobs can require a complete OpenMVS-ready mask set from
+   `dense/masks`; capture-mask production and undistortion are not implemented.
 2. COLMAP feature extraction has no mask input. This is acceptable for the
    recommended first pass because background features should remain available
    for alignment.

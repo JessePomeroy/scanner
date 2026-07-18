@@ -47,6 +47,7 @@ from app.colmap_runner import (  # noqa: E402
 )
 from app.density_budget import PointCloudBudgetError, inspect_ply_point_budget  # noqa: E402
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
+from app.mask_processor import MaskValidationError, validate_openmvs_masks  # noqa: E402
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
@@ -77,6 +78,17 @@ from app.storage import (  # noqa: E402
     store_upload_atomically,
 )
 from app.upload_lifecycle import store_job_upload  # noqa: E402
+
+
+def _png_header(width: int, height: int, *, color_type: int) -> bytes:
+    """Return the bytes needed by header-only PNG dimension tests."""
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\x0dIHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + bytes((8, color_type, 0, 0, 0))
+    )
 
 
 class RecordingAsyncReader:
@@ -1066,6 +1078,36 @@ class BackendTests(unittest.TestCase):
 
             with self.assertRaises(PointCloudBudgetError):
                 inspect_ply_point_budget(path)
+
+    def test_openmvs_masks_require_complete_dimension_matched_grayscale_pngs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            images = root / "images"
+            masks = root / "masks"
+            images.mkdir()
+            masks.mkdir()
+            (images / "frame.png").write_bytes(_png_header(640, 480, color_type=2))
+            (masks / "frame.mask.png").write_bytes(_png_header(640, 480, color_type=0))
+
+            result = validate_openmvs_masks(masks, images)
+
+        self.assertEqual(result.image_count, 1)
+        self.assertEqual(result.mask_count, 1)
+
+    def test_openmvs_masks_reject_missing_or_mismatched_masks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            images = root / "images"
+            masks = root / "masks"
+            images.mkdir()
+            masks.mkdir()
+            (images / "frame.png").write_bytes(_png_header(640, 480, color_type=2))
+            with self.assertRaises(MaskValidationError):
+                validate_openmvs_masks(masks, images)
+
+            (masks / "frame.mask.png").write_bytes(_png_header(320, 240, color_type=0))
+            with self.assertRaises(MaskValidationError):
+                validate_openmvs_masks(masks, images)
 
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
