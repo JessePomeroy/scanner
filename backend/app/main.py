@@ -12,7 +12,7 @@ import uuid
 import zipfile
 from time import perf_counter
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -35,6 +35,14 @@ from app.openmvs_runner import (
     inspect_openmvs_dense_cloud,
     run_openmvs_pipeline,
     validate_openmvs_config_masks,
+)
+from app.reconstruction_region import (
+    ReconstructionRegion,
+    ReconstructionRegionError,
+    ReconstructionRegionNotFoundError,
+    ReconstructionRegionRevisionError,
+    load_reconstruction_region,
+    save_reconstruction_region,
 )
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
@@ -174,6 +182,51 @@ def get_scan_status(scan_id: str) -> JobRecord:
         raise HTTPException(status_code=400, detail="Invalid scan id") from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Unknown scan id") from error
+
+
+@app.get("/scans/{scan_id}/scope")
+def get_scan_scope(scan_id: str) -> dict[str, object]:
+    record = get_scan_status(scan_id)
+    scan_root = _stored_scan_root(scan_id, record)
+    try:
+        region = load_reconstruction_region(scan_root)
+    except ReconstructionRegionNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ReconstructionRegionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"scan_id": scan_id, "region": region.as_dict()}
+
+
+@app.put("/scans/{scan_id}/scope")
+def put_scan_scope(
+    scan_id: str,
+    payload: dict[str, object] = Body(...),
+) -> dict[str, object]:
+    record = get_scan_status(scan_id)
+    if record.status != "processing" or record.stage != "awaiting_scope":
+        raise HTTPException(
+            status_code=409,
+            detail="The scan is not awaiting reconstruction-scope review.",
+        )
+    scan_root = _active_scan_root(scan_id)
+    try:
+        region = ReconstructionRegion.from_dict(payload)
+        region_path = save_reconstruction_region(scan_root, region)
+    except ReconstructionRegionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ReconstructionRegionError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    outputs = dict(record.outputs)
+    outputs["reconstruction_region"] = str(region_path)
+    jobs.update(
+        scan_id,
+        status="processing",
+        stage="awaiting_scope",
+        message=f"Reconstruction scope revision {region.revision} is ready.",
+        outputs=outputs,
+    )
+    return {"scan_id": scan_id, "region": region.as_dict()}
 
 
 @app.get("/scans/{scan_id}/artifacts", response_model=list[ScanArtifact])
@@ -404,6 +457,43 @@ def process_scan(
     except Exception as error:
         fail_processing(scan_id, processing_dir)
         jobs.update(scan_id, status="failed", message=str(error))
+
+
+def _active_scan_root(scan_id: str) -> Path:
+    workspace = PROCESSING_DIR / scan_id
+    if workspace.is_symlink() or not workspace.is_dir():
+        raise HTTPException(status_code=409, detail="The scope-review workspace is unavailable.")
+    try:
+        return find_scan_root(workspace)
+    except ScanValidationError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+def _stored_scan_root(scan_id: str, record: JobRecord) -> Path:
+    known_candidates = (
+        PROCESSING_DIR / scan_id,
+        COMPLETED_DIR / scan_id,
+        FAILED_DIR / scan_id,
+    )
+    raw_package = record.outputs.get("package_dir")
+    if raw_package is not None:
+        declared = Path(raw_package)
+        for candidate in known_candidates:
+            if declared.absolute() == candidate.absolute():
+                candidates = (candidate,)
+                break
+        else:
+            raise HTTPException(status_code=409, detail="The stored scan workspace is invalid.")
+    else:
+        candidates = known_candidates
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        try:
+            return find_scan_root(candidate)
+        except ScanValidationError:
+            continue
+    raise HTTPException(status_code=404, detail="The stored scan workspace is unavailable.")
 
 
 def prepare_processing_dir(scan_id: str, incoming_zip: Path) -> Path:

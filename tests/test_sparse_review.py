@@ -215,6 +215,121 @@ class SparseReviewTests(unittest.TestCase):
         export_blender.assert_not_called()
         self.assertEqual(record_step.call_args_list[-1].args[0], "scope_review_checkpoint")
 
+    def test_scope_api_persists_and_reads_reviewed_region(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+
+        payload: dict[str, object] = {
+            "schema_version": "1.0",
+            "shape": "oriented_box",
+            "coordinate_system": "colmap_reconstruction",
+            "center": [0.0, 0.0, 0.0],
+            "extents": [3.0, 2.0, 1.0],
+            "orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+            "source": "user_sparse_preview",
+            "revision": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_root = root / "processing" / "scan-1" / "scan"
+            (scan_root / "metadata").mkdir(parents=True)
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update(
+                "scan-1",
+                status="processing",
+                stage="awaiting_scope",
+                outputs={"package_dir": str(root / "processing" / "scan-1")},
+            )
+
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "_active_scan_root", return_value=scan_root),
+                patch.object(backend_main, "_stored_scan_root", return_value=scan_root),
+            ):
+                saved = backend_main.put_scan_scope("scan-1", payload)
+                loaded = backend_main.get_scan_scope("scan-1")
+
+            record = store.read("scan-1")
+
+        self.assertEqual(saved, loaded)
+        self.assertEqual(saved["region"], payload)
+        self.assertIn("reconstruction_region", record.outputs)
+        self.assertIn("revision 1", record.message or "")
+
+    def test_scope_api_rejects_stale_edit(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+        from fastapi import HTTPException
+
+        payload: dict[str, object] = {
+            "schema_version": "1.0",
+            "shape": "oriented_box",
+            "coordinate_system": "colmap_reconstruction",
+            "center": [0.0, 0.0, 0.0],
+            "extents": [3.0, 2.0, 1.0],
+            "orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+            "source": "user_sparse_preview",
+            "revision": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_root = root / "scan"
+            (scan_root / "metadata").mkdir(parents=True)
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update("scan-1", status="processing", stage="awaiting_scope")
+
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "_active_scan_root", return_value=scan_root),
+            ):
+                backend_main.put_scan_scope("scan-1", payload)
+                conflicting = dict(payload)
+                conflicting["center"] = [5.0, 0.0, 0.0]
+                with self.assertRaises(HTTPException) as raised:
+                    backend_main.put_scan_scope("scan-1", conflicting)
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_scope_reader_honors_declared_completed_workspace(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            processing = root / "processing"
+            completed = root / "completed"
+            failed = root / "failed"
+            (processing / "scan-1").mkdir(parents=True)
+            (completed / "scan-1").mkdir(parents=True)
+            record = SimpleNamespace(
+                outputs={"package_dir": str(completed / "scan-1")}
+            )
+            with (
+                patch.object(backend_main, "PROCESSING_DIR", processing),
+                patch.object(backend_main, "COMPLETED_DIR", completed),
+                patch.object(backend_main, "FAILED_DIR", failed),
+                patch.object(
+                    backend_main,
+                    "find_scan_root",
+                    side_effect=lambda workspace: workspace / "scan",
+                ),
+            ):
+                selected = backend_main._stored_scan_root("scan-1", record)
+
+        self.assertEqual(selected, completed / "scan-1" / "scan")
+
     @staticmethod
     def _write_sparse_scan(root: Path) -> Path:
         (root / "sparse" / "0").mkdir(parents=True)

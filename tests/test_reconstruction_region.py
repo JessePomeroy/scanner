@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -13,6 +14,9 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.reconstruction_region import (  # noqa: E402
     ReconstructionRegion,
     ReconstructionRegionError,
+    ReconstructionRegionRevisionError,
+    load_reconstruction_region,
+    save_reconstruction_region,
 )
 
 
@@ -125,6 +129,64 @@ class ReconstructionRegionTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 with self.assertRaises(ReconstructionRegionError):
                     ReconstructionRegion.from_json(raw)
+
+    def test_persists_first_next_and_idempotent_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_root = Path(tmp)
+            (scan_root / "metadata").mkdir()
+            first = ReconstructionRegion.from_dict(valid_payload())
+
+            first_path = save_reconstruction_region(scan_root, first)
+            same_path = save_reconstruction_region(scan_root, first)
+            second_payload = valid_payload()
+            second_payload["revision"] = 2
+            second_payload["center"] = [2.0, 0.0, 0.0]
+            second = ReconstructionRegion.from_dict(second_payload)
+            second_path = save_reconstruction_region(scan_root, second)
+            loaded = load_reconstruction_region(scan_root)
+
+        self.assertEqual(first_path, same_path)
+        self.assertEqual(second_path, first_path)
+        self.assertEqual(loaded, second)
+
+    def test_rejects_skipped_and_conflicting_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_root = Path(tmp)
+            (scan_root / "metadata").mkdir()
+            skipped_payload = valid_payload()
+            skipped_payload["revision"] = 2
+            with self.assertRaisesRegex(
+                ReconstructionRegionRevisionError,
+                "first.*must be 1",
+            ):
+                save_reconstruction_region(
+                    scan_root,
+                    ReconstructionRegion.from_dict(skipped_payload),
+                )
+
+            first = ReconstructionRegion.from_dict(valid_payload())
+            save_reconstruction_region(scan_root, first)
+            conflicting_payload = valid_payload()
+            conflicting_payload["center"] = [9.0, 0.0, 0.0]
+            with self.assertRaisesRegex(
+                ReconstructionRegionRevisionError,
+                "revision 1 already exists",
+            ):
+                save_reconstruction_region(
+                    scan_root,
+                    ReconstructionRegion.from_dict(conflicting_payload),
+                )
+
+            future_payload = valid_payload()
+            future_payload["revision"] = 3
+            with self.assertRaisesRegex(
+                ReconstructionRegionRevisionError,
+                "advance exactly one step",
+            ):
+                save_reconstruction_region(
+                    scan_root,
+                    ReconstructionRegion.from_dict(future_payload),
+                )
 
 
 if __name__ == "__main__":

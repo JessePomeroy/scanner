@@ -135,6 +135,28 @@ registered-camera JSON, and continuation checkpoint as downloadable artifacts.
 The iPhone uploader does not enable this option until the region editor and
 resume endpoint are implemented.
 
+Store the first reviewed region as revision `1`; later edits must advance by
+exactly one revision:
+
+```bash
+curl -X PUT "http://localhost:8000/scans/SCAN_ID/scope" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "schema_version":"1.0",
+    "shape":"oriented_box",
+    "coordinate_system":"colmap_reconstruction",
+    "center":[0,0,0],
+    "extents":[3,2,1],
+    "orientation_xyzw":[0,0,0,1],
+    "source":"user_sparse_preview",
+    "revision":1
+  }'
+```
+
+Read the current selection with `GET /scans/SCAN_ID/scope`. Conflicting or
+skipped revisions return HTTP 409. Reconstruction cannot resume yet because the
+saved region must be applied and verified first.
+
 For the dual-boot RTX 3070 PC, boot into CachyOS before reconstruction.
 Keep active workspaces on the Linux filesystem rather than an NTFS/shared
 Windows partition:
