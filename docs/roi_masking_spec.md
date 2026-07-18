@@ -179,7 +179,8 @@ Store masks under `masks/capture/<image-filename>.png`. Masks must be
 single-channel or lossless RGB PNG, match the source image dimensions, use 255
 for keep and 0 for exclude, and contain no partially transparent semantics.
 
-The iOS package writer now creates `masks/capture`, writes lossless mask data as
+The iOS package writer lazily creates `masks/capture` when the first mask is
+saved, writes lossless mask data as
 `<original-image-filename>.png` (for example `frame.jpg.png`), refuses invalid
 image references and overwrites, and includes those files in the streamed ZIP.
 The UI does not generate mask pixels yet.

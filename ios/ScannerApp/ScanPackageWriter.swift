@@ -38,9 +38,7 @@ final class ScanPackageWriter {
         }
 
         let scanDirectory = rootDirectory.appendingPathComponent(scanId, isDirectory: true)
-        let subdirectories = [
-            "images", "depth", "arkit", "metadata", "preview", "video", "masks/capture"
-        ]
+        let subdirectories = ["images", "depth", "arkit", "metadata", "preview", "video"]
 
         try fileManager.createDirectory(
             at: scanDirectory,
