@@ -1222,6 +1222,13 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(cameras[1].model, "SIMPLE_RADIAL")
         self.assertEqual(cameras[2].width, 1426)
 
+    def test_parse_colmap_cameras_rejects_non_finite_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cameras.txt"
+            path.write_text("1 SIMPLE_RADIAL 10 10 nan 5 5 0\n")
+            with self.assertRaises(MaskUndistortionError):
+                parse_colmap_cameras(path)
+
     def test_undistort_mask_array_uses_nearest_binary_sampling(self) -> None:
         source = ColmapCamera(1, "SIMPLE_RADIAL", 5, 5, (2.0, 2.0, 2.0, 0.0))
         target = ColmapCamera(1, "PINHOLE", 3, 3, (2.0, 2.0, 1.0, 1.0))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 import numpy as np
@@ -47,6 +48,8 @@ def parse_colmap_cameras(path: Path) -> dict[int, ColmapCamera]:
             raise MaskUndistortionError(f"Invalid camera value at {path}:{line_number}") from error
         if camera.camera_id in cameras or camera.width < 1 or camera.height < 1:
             raise MaskUndistortionError(f"Invalid or duplicate camera id at {path}:{line_number}")
+        if not camera.params or not all(math.isfinite(value) for value in camera.params):
+            raise MaskUndistortionError(f"Camera parameters must be finite at {path}:{line_number}")
         cameras[camera.camera_id] = camera
     if not cameras:
         raise MaskUndistortionError(f"No cameras found in {path}")
@@ -78,8 +81,8 @@ def undistort_mask_array(
     normalized_y = (target_y - target_cy) / target_fy
     radius_squared = normalized_x * normalized_x + normalized_y * normalized_y
     distortion = 1.0 + radial_k * radius_squared
-    source_x = np.rint(source_f * normalized_x * distortion + source_cx).astype(np.int64)
-    source_y = np.rint(source_f * normalized_y * distortion + source_cy).astype(np.int64)
+    source_x = np.floor(source_f * normalized_x * distortion + source_cx + 0.5).astype(np.int64)
+    source_y = np.floor(source_f * normalized_y * distortion + source_cy + 0.5).astype(np.int64)
 
     valid = (
         (source_x >= 0)
