@@ -13,7 +13,8 @@ import tempfile
 from typing import Protocol
 import uuid
 
-from PIL import Image, ImageDraw
+import numpy as np
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from app.mask_authoring import (
     MaskAuthoringFrame,
@@ -38,6 +39,9 @@ class GeneratedMaskFrame:
     confidence: float
     method: str
     source_frame_ids: tuple[int, ...]
+    keep_fraction: float
+    centroid: tuple[float, float] | None
+    safety_dilation_pixels: int
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -47,27 +51,41 @@ class GeneratedMaskFrame:
             "confidence": self.confidence,
             "method": self.method,
             "source_frame_ids": list(self.source_frame_ids),
+            "keep_fraction": self.keep_fraction,
+            "centroid": list(self.centroid) if self.centroid is not None else None,
+            "safety_dilation_pixels": self.safety_dilation_pixels,
         }
 
 
 @dataclass(frozen=True)
 class MaskGenerationResult:
+    state: str
     generator: str
     source_revision: int
     output_dir: Path
     report_path: Path
     frames: tuple[GeneratedMaskFrame, ...]
     review_indices: tuple[int, ...]
+    review_masks: tuple[str, ...]
+    blocking_issues: tuple[dict[str, object], ...]
+    warnings: tuple[dict[str, object], ...]
 
     def report_payload(self) -> dict[str, object]:
         return {
             "schema_version": "1.0",
-            "state": "awaiting_review",
+            "state": self.state,
             "generator": self.generator,
             "source_authoring_revision": self.source_revision,
             "mask_convention": "white_keep_black_exclude",
             "frame_count": len(self.frames),
             "review_indices": list(self.review_indices),
+            "review_masks": list(self.review_masks),
+            "quality": {
+                "blocking_issue_count": len(self.blocking_issues),
+                "warning_count": len(self.warnings),
+                "blocking_issues": list(self.blocking_issues),
+                "warnings": list(self.warnings),
+            },
             "frames": [frame.as_dict() for frame in self.frames],
         }
 
@@ -114,13 +132,25 @@ class PolygonInterpolationMaskGenerator:
             raise MaskGenerationError(f"Masks directory is unsafe: {masks_root}")
         masks_root.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(dir=masks_root, prefix=".proposed."))
+        review_staging = Path(tempfile.mkdtemp(dir=masks_root, prefix=".review."))
         generated: list[GeneratedMaskFrame] = []
+        review_indices = representative_frame_indices(len(frames))
+        review_index_set = set(review_indices)
+        review_masks: list[str] = []
         try:
             for index, frame in enumerate(frames):
                 regions, method, sources, confidence = self._regions_at(index, anchors, len(frames))
                 output_name = Path(frame.image).name + ".png"
                 output = staging / output_name
-                _write_mask(output, regions, frame.resolution)
+                keep_fraction, centroid, dilation_pixels = _write_mask(
+                    output,
+                    regions,
+                    frame.resolution,
+                )
+                if index in review_index_set:
+                    review_output = review_staging / output_name
+                    _write_review_preview(scan_root / frame.image, output, review_output)
+                    review_masks.append(f"masks/review/{output_name}")
                 generated.append(
                     GeneratedMaskFrame(
                         frame_id=frame.id,
@@ -129,26 +159,37 @@ class PolygonInterpolationMaskGenerator:
                         confidence=confidence,
                         method=method,
                         source_frame_ids=sources,
+                        keep_fraction=keep_fraction,
+                        centroid=centroid,
+                        safety_dilation_pixels=dilation_pixels,
                     )
                 )
+            blocking_issues, warnings = _evaluate_quality(generated)
             report_path = scan_root / "metadata" / "mask_generation.json"
             result = MaskGenerationResult(
+                state="needs_correction" if blocking_issues else "awaiting_review",
                 generator=self.identifier,
                 source_revision=plan.revision,
                 output_dir=masks_root / "proposed",
                 report_path=report_path,
                 frames=tuple(generated),
-                review_indices=representative_frame_indices(len(frames)),
+                review_indices=review_indices,
+                review_masks=tuple(review_masks),
+                blocking_issues=blocking_issues,
+                warnings=warnings,
             )
             _publish_generation(
                 masks_root,
                 staging,
+                review_staging,
                 report_path,
                 result.report_payload(),
             )
         except BaseException:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
+            if review_staging.exists():
+                shutil.rmtree(review_staging, ignore_errors=True)
             raise
         return result
 
@@ -293,7 +334,7 @@ def _write_mask(
     path: Path,
     regions: tuple[MaskAuthoringRegion, ...],
     resolution: tuple[int, int],
-) -> None:
+) -> tuple[float, tuple[float, float] | None, int]:
     width, height = resolution
     if width < 1 or height < 1 or width * height > 64_000_000:
         raise MaskGenerationError(f"Frame resolution is unsafe: {resolution}")
@@ -305,41 +346,144 @@ def _write_mask(
             for point in region.points
         ]
         draw.polygon(polygon, fill=255 if region.operation == "keep" else 0)
+    dilation_pixels = min(32, max(2, round(min(width, height) * 0.01)))
+    image = image.filter(ImageFilter.MaxFilter(dilation_pixels * 2 + 1))
     image.save(path, format="PNG", optimize=False)
+    values = np.asarray(image, dtype=np.uint8) > 0
+    kept_y, kept_x = np.nonzero(values)
+    keep_fraction = float(values.mean())
+    centroid = None
+    if kept_x.size:
+        centroid = (
+            float((kept_x.mean() + 0.5) / width),
+            float((kept_y.mean() + 0.5) / height),
+        )
+    return keep_fraction, centroid, dilation_pixels
+
+
+def _write_review_preview(source_path: Path, mask_path: Path, output_path: Path) -> None:
+    """Render a bounded source-image overlay where excluded pixels are visibly red."""
+    try:
+        with Image.open(source_path) as source_image, Image.open(mask_path) as mask_image:
+            source = source_image.convert("RGB")
+            mask = mask_image.convert("L")
+            if source.size != mask.size:
+                raise MaskGenerationError(
+                    f"Review image and mask dimensions differ: {source_path.name}"
+                )
+            source.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+            mask = mask.resize(source.size, Image.Resampling.NEAREST)
+    except (OSError, ValueError) as error:
+        raise MaskGenerationError(f"Unable to render mask review image: {source_path}") from error
+
+    excluded = Image.blend(source, Image.new("RGB", source.size, (150, 20, 20)), 0.62)
+    preview = Image.composite(source, excluded, mask)
+    outer = mask.filter(ImageFilter.MaxFilter(7))
+    inner = mask.filter(ImageFilter.MinFilter(7))
+    boundary = ImageChops.difference(outer, inner)
+    preview.paste((0, 230, 255), mask=boundary)
+    preview.save(output_path, format="PNG", optimize=False)
+
+
+def _evaluate_quality(
+    frames: list[GeneratedMaskFrame],
+) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
+    blocking: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
+    for frame in frames:
+        if frame.keep_fraction <= 0:
+            blocking.append({
+                "code": "empty_mask",
+                "frame_id": frame.frame_id,
+                "message": "The proposal keeps no image pixels.",
+            })
+        elif frame.keep_fraction < 0.005:
+            warnings.append({
+                "code": "very_small_keep_area",
+                "frame_id": frame.frame_id,
+                "message": "The proposal keeps less than 0.5% of the frame.",
+            })
+        if frame.confidence < 0.5:
+            warnings.append({
+                "code": "low_generator_confidence",
+                "frame_id": frame.frame_id,
+                "message": f"The generator used {frame.method} at low confidence.",
+            })
+
+    for previous, current in zip(frames, frames[1:]):
+        smaller = min(previous.keep_fraction, current.keep_fraction)
+        larger = max(previous.keep_fraction, current.keep_fraction)
+        if smaller > 0 and larger / smaller > 1.75:
+            blocking.append({
+                "code": "abrupt_area_change",
+                "frame_ids": [previous.frame_id, current.frame_id],
+                "message": "The kept area changes by more than 75% between adjacent frames.",
+            })
+        if previous.centroid is not None and current.centroid is not None:
+            distance = math.dist(previous.centroid, current.centroid)
+            if distance > 0.18:
+                blocking.append({
+                    "code": "abrupt_centroid_change",
+                    "frame_ids": [previous.frame_id, current.frame_id],
+                    "distance": distance,
+                    "message": "The kept-region center jumps abruptly between adjacent frames.",
+                })
+    return tuple(blocking), tuple(warnings)
 
 
 def _publish_generation(
     masks_root: Path,
     staging: Path,
+    review_staging: Path,
     report_path: Path,
     report_payload: dict[str, object],
 ) -> None:
     """Publish a proposal directory and its provenance report as one locked generation."""
     destination = masks_root / "proposed"
+    review_destination = masks_root / "review"
     lock_path = masks_root.parent / "metadata" / ".mask_generation.lock"
-    if destination.is_symlink() or report_path.is_symlink() or lock_path.is_symlink():
+    if (
+        destination.is_symlink()
+        or review_destination.is_symlink()
+        or report_path.is_symlink()
+        or lock_path.is_symlink()
+    ):
         raise MaskGenerationError("Mask proposal destination is unsafe")
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     backup: Path | None = None
+    review_backup: Path | None = None
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        if destination.exists():
-            if not destination.is_dir():
-                raise MaskGenerationError("Mask proposal destination is unsafe")
-            backup = masks_root / f".proposed.backup.{uuid.uuid4().hex}"
-            os.replace(destination, backup)
+        if destination.exists() and not destination.is_dir():
+            raise MaskGenerationError("Mask proposal destination is unsafe")
+        if review_destination.exists() and not review_destination.is_dir():
+            raise MaskGenerationError("Mask review destination is unsafe")
         try:
+            if destination.exists():
+                backup = masks_root / f".proposed.backup.{uuid.uuid4().hex}"
+                os.replace(destination, backup)
+            if review_destination.exists():
+                review_backup = masks_root / f".review.backup.{uuid.uuid4().hex}"
+                os.replace(review_destination, review_backup)
             os.replace(staging, destination)
+            os.replace(review_staging, review_destination)
             _write_json_atomic(report_path, report_payload)
         except BaseException:
             if destination.exists():
                 shutil.rmtree(destination, ignore_errors=True)
+            if review_destination.exists():
+                shutil.rmtree(review_destination, ignore_errors=True)
             if backup is not None:
                 os.replace(backup, destination)
                 backup = None
+            if review_backup is not None:
+                os.replace(review_backup, review_destination)
+                review_backup = None
             raise
         if backup is not None:
             shutil.rmtree(backup, ignore_errors=True)
+        if review_backup is not None:
+            shutil.rmtree(review_backup, ignore_errors=True)
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)

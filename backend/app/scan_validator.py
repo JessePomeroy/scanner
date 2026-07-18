@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 from app.scan_metadata import (
     FrameMetadata,
     ScanMetadata,
@@ -13,7 +15,11 @@ from app.scan_metadata import (
     load_scan_metadata,
 )
 from app.mask_processor import MaskValidationError, validate_capture_mask_png
-from app.mask_authoring import MaskAuthoringError, load_mask_authoring_plan
+from app.mask_authoring import (
+    MaskAuthoringError,
+    load_mask_authoring_plan,
+    representative_frame_indices,
+)
 
 
 class ScanValidationError(ValueError):
@@ -214,6 +220,9 @@ def _validate_capture_masks(
             allow_capture=True,
         )
         allowed.add(proposed_dir.resolve())
+        review_dir = masks_root / "review"
+        if review_dir.exists() or review_dir.is_symlink():
+            allowed.add(review_dir.resolve())
     if {entry.resolve() for entry in root_entries} != allowed:
         raise ScanValidationError("masks contains an unsupported directory or file")
     mask_files = _validated_flat_files(capture_dir, label="masks/capture")
@@ -245,8 +254,11 @@ def _validate_proposed_masks(
 ) -> None:
     _validate_owned_directory(scan_dir, masks_root, label="masks")
     proposed_dir = masks_root / "proposed"
+    review_dir = masks_root / "review"
     root_entries = list(masks_root.iterdir())
-    allowed_names = {"proposed", "capture"} if allow_capture else {"proposed"}
+    allowed_names = {"proposed", "review"}
+    if allow_capture:
+        allowed_names.add("capture")
     if any(entry.name not in allowed_names for entry in root_entries):
         raise ScanValidationError("masks contains an unsupported directory or file")
     _validate_owned_directory(scan_dir, proposed_dir, label="masks/proposed")
@@ -265,6 +277,45 @@ def _validate_proposed_masks(
             validate_capture_mask_png(mask, frames_by_mask[mask.name].resolution)
     except MaskValidationError as error:
         raise ScanValidationError(str(error)) from error
+    if review_dir.exists() or review_dir.is_symlink():
+        _validate_review_previews(scan_dir, review_dir, frames)
+
+
+def _validate_review_previews(
+    scan_dir: Path,
+    review_dir: Path,
+    frames: tuple[FrameMetadata, ...],
+) -> None:
+    _validate_owned_directory(scan_dir, review_dir, label="masks/review")
+    review_files = _validated_flat_files(review_dir, label="masks/review")
+    expected_names = {
+        Path(frames[index].image).name + ".png"
+        for index in representative_frame_indices(len(frames))
+    }
+    actual_names = {path.name for path in review_files}
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        raise ScanValidationError(
+            f"Mask review association mismatch; missing={missing}, extra={extra}"
+        )
+    try:
+        for path in review_files:
+            with Image.open(path) as image:
+                width, height = image.size
+                if (
+                    image.format != "PNG"
+                    or width < 1
+                    or height < 1
+                    or width > 1600
+                    or height > 1600
+                ):
+                    raise ScanValidationError(
+                        f"Mask review image format or dimensions are unsafe: {path.name}"
+                    )
+                image.load()
+    except (OSError, ValueError, Image.DecompressionBombError) as error:
+        raise ScanValidationError("Unable to decode mask review PNG") from error
 
 
 def _validate_frame_image_references(

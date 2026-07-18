@@ -138,8 +138,14 @@ adjust the cyan box, then tap **Save & Continue**.
 The paintbrush beside a ZIP in the iPhone Scans tab opens the post-capture scene
 mask draft editor. It supports multiple green Keep and red Erase areas on five
 representative photos and safely rebuilds the ZIP. These selections remain an
-explicit draft until temporal propagation and sampled mask review are complete;
-the backend does not silently treat a draft as an applied mask set.
+explicit draft until temporal propagation and sampled mask review are complete.
+The backend adds a conservative edge margin, checks abrupt area/center changes,
+and publishes five red-exclusion/cyan-boundary photo overlays. Inspect the
+evidence with `GET /scans/SCAN_ID/mask-review`, then record the decision with
+`POST /scans/SCAN_ID/mask-review/approve` or
+`POST /scans/SCAN_ID/mask-review/reject`. Only approval promotes the complete
+proposal set into active reconstruction masks; the backend never silently
+treats a draft as applied.
 
 Store the first reviewed region as revision `1`; later edits must advance by
 exactly one revision:
