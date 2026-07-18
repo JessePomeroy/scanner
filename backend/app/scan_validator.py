@@ -7,10 +7,12 @@ from pathlib import Path
 
 from app.scan_metadata import (
     FrameMetadata,
+    ScanMetadata,
     ScanMetadataError,
     VideoMetadata,
     load_scan_metadata,
 )
+from app.mask_processor import MaskValidationError, validate_capture_mask_png
 
 
 class ScanValidationError(ValueError):
@@ -37,6 +39,7 @@ class ScanValidationReport:
     session_video_count: int | None
     integrity_warnings: tuple[str, ...]
     reconstruction_scope: dict[str, object] | None
+    capture_mask_count: int
 
 
 def find_scan_root(extracted_dir: Path) -> Path:
@@ -109,6 +112,7 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         )
 
     _validate_frame_image_references(scan_dir, metadata.frames, images)
+    capture_mask_count = _validate_capture_masks(scan_dir, metadata)
     _validate_session_counts(
         image_count=len(images),
         video_count=len(video_files),
@@ -157,7 +161,42 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
             if metadata.reconstruction_scope is not None
             else None
         ),
+        capture_mask_count=capture_mask_count,
     )
+
+
+def _validate_capture_masks(scan_dir: Path, metadata: ScanMetadata) -> int:
+    scope = metadata.reconstruction_scope
+    masks_root = scan_dir / "masks"
+    if scope is None:
+        if masks_root.exists() or masks_root.is_symlink():
+            raise ScanValidationError("masks directory requires reconstruction_scope metadata")
+        return 0
+
+    capture_dir = masks_root / "capture"
+    _validate_owned_directory(scan_dir, masks_root, label="masks")
+    _validate_owned_directory(scan_dir, capture_dir, label="masks/capture")
+    root_entries = list(masks_root.iterdir())
+    if len(root_entries) != 1 or root_entries[0].resolve() != capture_dir.resolve():
+        raise ScanValidationError("masks must contain only the capture directory")
+    mask_files = _validated_flat_files(capture_dir, label="masks/capture")
+    expected_names = {Path(frame.image).name + ".png" for frame in metadata.frames}
+    actual_names = {path.name for path in mask_files}
+    if len(mask_files) != scope.mask_count:
+        raise ScanValidationError(
+            f"reconstruction_scope mask_count ({scope.mask_count}) does not match mask files ({len(mask_files)})"
+        )
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        raise ScanValidationError(f"Capture mask association mismatch; missing={missing}, extra={extra}")
+    frames_by_mask = {Path(frame.image).name + ".png": frame for frame in metadata.frames}
+    try:
+        for mask in mask_files:
+            validate_capture_mask_png(mask, frames_by_mask[mask.name].resolution)
+    except MaskValidationError as error:
+        raise ScanValidationError(str(error)) from error
+    return len(mask_files)
 
 
 def _validate_frame_image_references(

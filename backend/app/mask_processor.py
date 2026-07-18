@@ -26,6 +26,17 @@ class MaskValidationResult:
         }
 
 
+def validate_capture_mask_png(path: Path, expected_size: tuple[int, int]) -> None:
+    """Validate a capture-space mask's format and declared frame dimensions."""
+    size, grayscale = _png_dimensions_and_grayscale(path)
+    if not grayscale:
+        raise MaskValidationError(f"Mask must be an 8-bit grayscale PNG: {path}")
+    if size != expected_size:
+        raise MaskValidationError(
+            f"Mask dimensions {size} do not match frame dimensions {expected_size}: {path}"
+        )
+
+
 def validate_openmvs_masks(mask_dir: Path, image_dir: Path) -> MaskValidationResult:
     """Require one dimension-matched grayscale PNG mask per undistorted image."""
     if mask_dir.is_symlink():

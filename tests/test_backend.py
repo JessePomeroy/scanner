@@ -421,12 +421,18 @@ class BackendTests(unittest.TestCase):
             (scan_dir / "metadata" / "manifest.json").write_text(
                 json.dumps({"reconstruction_scope": scope})
             )
+            capture_masks = scan_dir / "masks" / "capture"
+            capture_masks.mkdir(parents=True)
+            (capture_masks / "frame_000001.jpg.png").write_bytes(
+                _png_header(1920, 1080, color_type=0)
+            )
 
             package = validate_and_report_scan(scan_dir)
             generated_manifest = json.loads(package.manifest_path.read_text())
 
         self.assertEqual(package.validation.reconstruction_scope, scope)
         self.assertEqual(generated_manifest["reconstruction_scope"], scope)
+        self.assertEqual(generated_manifest["file_counts"]["capture_masks"], 1)
 
     def test_validate_scan_package_rejects_invalid_reconstruction_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -444,6 +450,39 @@ class BackendTests(unittest.TestCase):
                     }
                 )
             )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_masks_without_scope_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            capture_masks = scan_dir / "masks" / "capture"
+            capture_masks.mkdir(parents=True)
+            (capture_masks / "frame_000001.jpg.png").write_bytes(
+                _png_header(1920, 1080, color_type=0)
+            )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_capture_mask_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "metadata" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "reconstruction_scope": {
+                            "schema_version": "1.0",
+                            "mode": "image_masks",
+                            "mask_space": "capture_image",
+                            "mask_convention": "white_keep_black_exclude",
+                            "mask_count": 1,
+                        }
+                    }
+                )
+            )
+            (scan_dir / "masks" / "capture").mkdir(parents=True)
 
             with self.assertRaises(ScanValidationError):
                 validate_scan_package(scan_dir)
