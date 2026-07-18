@@ -29,6 +29,13 @@ struct VerifyScanZipWriter {
         try Data("hello scanner\n".utf8).write(
             to: nestedDirectory.appendingPathComponent("notes.txt")
         )
+        let maskData = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01])
+        let maskURL = try writer.saveCaptureMask(
+            maskData,
+            forImagePath: "images/frame_000001.jpg",
+            in: scanDirectory
+        )
+        assert(maskURL.lastPathComponent == "frame_000001.jpg.png")
 
         var largeData = Data()
         for index in 0..<(2 * 1024 * 1024 + 17) {
@@ -59,6 +66,7 @@ struct VerifyScanZipWriter {
                     'scan_zip_writer_test/metadata/nested/notes.txt',
                     'scan_zip_writer_test/arkit/empty/',
                     'scan_zip_writer_test/video/scan.mov',
+                    'scan_zip_writer_test/masks/capture/frame_000001.jpg.png',
                 }
                 missing = required - names
                 assert not missing, sorted(missing)
