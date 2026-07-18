@@ -84,7 +84,7 @@ struct CaptureMaskRasterizer {
         return output as Data
     }
 
-    private func validate(_ polygon: [NormalizedMaskPoint]) throws {
+    func validate(_ polygon: [NormalizedMaskPoint]) throws {
         guard polygon.count >= 3 else {
             throw CaptureMaskRasterizerError.insufficientPoints
         }
