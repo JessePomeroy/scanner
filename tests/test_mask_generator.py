@@ -35,6 +35,7 @@ class MaskGeneratorTests(unittest.TestCase):
             assert result is not None
             middle = Image.open(root / result.frames[2].mask)
             report = json.loads(result.report_path.read_text())
+            review_exists = (root / result.review_masks[2]).is_file()
 
         self.assertEqual(len(result.frames), 5)
         self.assertEqual(result.frames[0].method, "authored")
@@ -44,6 +45,9 @@ class MaskGeneratorTests(unittest.TestCase):
         self.assertEqual(middle.getpixel((5, 50)), 0)
         self.assertEqual(report["state"], "awaiting_review")
         self.assertEqual(report["review_indices"], [0, 1, 2, 3, 4])
+        self.assertEqual(len(report["review_masks"]), 5)
+        self.assertGreater(result.frames[2].safety_dilation_pixels, 0)
+        self.assertTrue(review_exists)
 
     def test_single_anchor_propagates_both_directions_at_low_confidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -86,6 +90,30 @@ class MaskGeneratorTests(unittest.TestCase):
 
         self.assertEqual(names, ["frame_000000.jpg.png", "frame_000001.jpg.png"])
 
+    def test_abrupt_area_change_blocks_approval_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frames = self._frames(root, count=2)
+            self._write_plan(root, frames, anchors=(0, 1))
+            path = root / "metadata" / "mask_authoring.json"
+            payload = json.loads(path.read_text())
+            payload["representative_frames"][0]["regions"][0]["points"] = [
+                {"x": 0.45, "y": 0.45},
+                {"x": 0.50, "y": 0.45},
+                {"x": 0.50, "y": 0.50},
+                {"x": 0.45, "y": 0.50},
+            ]
+            path.write_text(json.dumps(payload))
+
+            result = generate_mask_proposals(root, frames)
+
+        assert result is not None
+        self.assertEqual(result.state, "needs_correction")
+        self.assertIn(
+            "abrupt_area_change",
+            {issue["code"] for issue in result.blocking_issues},
+        )
+
     @staticmethod
     def _frames(root: Path, *, count: int) -> tuple[FrameMetadata, ...]:
         (root / "metadata").mkdir(parents=True)
@@ -94,6 +122,11 @@ class MaskGeneratorTests(unittest.TestCase):
             FrameMetadata(index, f"images/frame_{index:06d}.jpg", float(index), (100, 100))
             for index in range(count)
         )
+        for frame in frames:
+            Image.new("RGB", frame.resolution, color=(90, 110, 130)).save(
+                root / frame.image,
+                format="JPEG",
+            )
         return frames
 
     @staticmethod

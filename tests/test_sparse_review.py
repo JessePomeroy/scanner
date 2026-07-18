@@ -369,6 +369,44 @@ class SparseReviewTests(unittest.TestCase):
         self.assertIn("awaiting sampled review", blocked.exception.detail)
         self.assertEqual(persisted_stage, "awaiting_scope")
 
+    def test_mask_approval_api_unblocks_resume_without_hiding_review_evidence(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update(
+                "scan-1",
+                status="processing",
+                stage="awaiting_scope",
+                outputs={
+                    "mask_generation_report": "/safe/mask_generation.json",
+                    "mask_review_0": "/safe/review.png",
+                },
+            )
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "_active_scan_root", return_value=root),
+                patch.object(backend_main, "approve_mask_review") as approve,
+                patch.object(backend_main, "validate_and_report_scan"),
+            ):
+                updated = backend_main.approve_scan_mask_review("scan-1")
+
+        approve.assert_called_once_with(root)
+        self.assertNotIn("mask_generation_report", updated.outputs)
+        self.assertEqual(
+            updated.outputs["mask_review_report"],
+            "/safe/mask_generation.json",
+        )
+        self.assertEqual(updated.outputs["mask_review_0"], "/safe/review.png")
+        self.assertEqual(updated.stage, "awaiting_scope")
+
     def test_scope_api_rejects_stale_edit(self) -> None:
         if importlib.util.find_spec("fastapi") is None:
             self.skipTest("FastAPI is not installed in the lightweight test environment")

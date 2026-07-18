@@ -29,8 +29,15 @@ from app.density_budget import inspect_ply_point_budget
 from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
-from app.mask_generator import generate_mask_proposals
+from app.mask_generator import MaskGenerationError, generate_mask_proposals
 from app.mask_processor import validate_openmvs_masks
+from app.mask_review import (
+    MaskReviewBlockedError,
+    MaskReviewError,
+    approve_mask_review,
+    load_mask_review,
+    reject_mask_review,
+)
 from app.openmvs_runner import (
     OpenMVSConfig,
     OpenMVSScopeMode,
@@ -242,6 +249,61 @@ def put_scan_scope(
     return {"scan_id": scan_id, "region": region.as_dict()}
 
 
+@app.get("/scans/{scan_id}/mask-review")
+def get_scan_mask_review(scan_id: str) -> dict[str, object]:
+    record = get_scan_status(scan_id)
+    scan_root = _stored_scan_root(scan_id, record)
+    try:
+        return load_mask_review(scan_root)
+    except MaskReviewError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/scans/{scan_id}/mask-review/approve", response_model=JobRecord)
+def approve_scan_mask_review(scan_id: str) -> JobRecord:
+    record = get_scan_status(scan_id)
+    if record.status != "processing" or record.stage != "awaiting_scope":
+        raise HTTPException(status_code=409, detail="The scan is not awaiting review.")
+    scan_root = _active_scan_root(scan_id)
+    try:
+        approve_mask_review(scan_root)
+        validate_and_report_scan(scan_root)
+    except MaskReviewBlockedError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (MaskReviewError, ScanValidationError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+    outputs = dict(record.outputs)
+    report_path = outputs.pop("mask_generation_report", None)
+    if report_path is not None:
+        outputs["mask_review_report"] = report_path
+    return jobs.update(
+        scan_id,
+        status="processing",
+        stage="awaiting_scope",
+        message="Mask review approved. Set or confirm the 3D region, then continue.",
+        outputs=outputs,
+    )
+
+
+@app.post("/scans/{scan_id}/mask-review/reject", response_model=JobRecord)
+def reject_scan_mask_review(scan_id: str) -> JobRecord:
+    record = get_scan_status(scan_id)
+    if record.status != "processing" or record.stage != "awaiting_scope":
+        raise HTTPException(status_code=409, detail="The scan is not awaiting review.")
+    scan_root = _active_scan_root(scan_id)
+    try:
+        reject_mask_review(scan_root)
+    except MaskReviewError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return jobs.update(
+        scan_id,
+        status="processing",
+        stage="awaiting_scope",
+        message="Mask proposals rejected. Correct the saved scan masks and upload a new job.",
+    )
+
+
 @app.post("/scans/{scan_id}/resume", response_model=JobRecord)
 def resume_scan_job(scan_id: str, background_tasks: BackgroundTasks) -> JobRecord:
     """Continue an awaiting job from its saved sparse model and reviewed region."""
@@ -369,10 +431,14 @@ def process_scan(
             metadata = load_scan_metadata(scan_root / "metadata")
             mask_generation = generate_mask_proposals(scan_root, metadata.frames)
         if mask_generation is not None:
+            if not review_scope:
+                raise MaskGenerationError(
+                    "Post-capture mask proposals require scope review before reconstruction."
+                )
             package.record_processing_step(
                 "mask_generation",
                 {
-                    "state": "awaiting_review",
+                    "state": mask_generation.state,
                     "generator": mask_generation.generator,
                     "source_authoring_revision": mask_generation.source_revision,
                     "frame_count": len(mask_generation.frames),
@@ -380,10 +446,8 @@ def process_scan(
                 },
             )
             proposal_outputs["mask_generation_report"] = str(mask_generation.report_path)
-            for review_number, frame_index in enumerate(mask_generation.review_indices):
-                proposal_outputs[f"mask_review_{review_number}"] = str(
-                    scan_root / mask_generation.frames[frame_index].mask
-                )
+            for review_number, review_path in enumerate(mask_generation.review_masks):
+                proposal_outputs[f"mask_review_{review_number}"] = str(scan_root / review_path)
 
         jobs.update(
             scan_id,
@@ -442,7 +506,11 @@ def process_scan(
                 scan_id,
                 status="processing",
                 stage="awaiting_scope",
-                message="Sparse reconstruction is ready for 3D scope review.",
+                message=(
+                    "Mask proposals need correction before reconstruction can continue."
+                    if mask_generation is not None and mask_generation.state == "needs_correction"
+                    else "Sparse reconstruction is ready for mask and 3D scope review."
+                ),
                 image_count=report.image_count,
                 frame_count=report.frame_count,
                 outputs=outputs,
