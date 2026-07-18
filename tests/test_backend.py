@@ -1256,6 +1256,16 @@ class BackendTests(unittest.TestCase):
         with self.assertRaises(MaskUndistortionError):
             associate_mask_cameras({1: camera}, {"a.jpg": 2}, {1: camera}, {"a.jpg": 1})
 
+    def test_parse_colmap_images_rejects_missing_points_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "images.txt"
+            path.write_text(
+                "1 1 0 0 0 0 0 0 7 first.jpg\n"
+                "2 1 0 0 0 0 0 0 7 second.jpg\n\n"
+            )
+            with self.assertRaises(MaskUndistortionError):
+                parse_colmap_image_cameras(path)
+
     def test_undistort_mask_array_uses_nearest_binary_sampling(self) -> None:
         source = ColmapCamera(1, "SIMPLE_RADIAL", 5, 5, (2.0, 2.0, 2.0, 0.0))
         target = ColmapCamera(1, "PINHOLE", 3, 3, (2.0, 2.0, 1.0, 1.0))

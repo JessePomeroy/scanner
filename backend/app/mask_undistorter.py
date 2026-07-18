@@ -78,6 +78,16 @@ def parse_colmap_image_cameras(path: Path) -> dict[str, int]:
         if line.startswith("#"):
             continue
         if not expect_image_record:
+            point_values = line.split()
+            if len(point_values) % 3 != 0:
+                raise MaskUndistortionError(f"Invalid POINTS2D record at {path}:{line_number}")
+            try:
+                for index in range(0, len(point_values), 3):
+                    float(point_values[index])
+                    float(point_values[index + 1])
+                    int(point_values[index + 2])
+            except ValueError as error:
+                raise MaskUndistortionError(f"Invalid POINTS2D value at {path}:{line_number}") from error
             expect_image_record = True
             continue
         if not line:
@@ -97,6 +107,8 @@ def parse_colmap_image_cameras(path: Path) -> dict[str, int]:
         expect_image_record = False
     if not records:
         raise MaskUndistortionError(f"No images found in {path}")
+    if not expect_image_record:
+        raise MaskUndistortionError(f"Image record has no POINTS2D line in {path}")
     return records
 
 
