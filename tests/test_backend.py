@@ -55,6 +55,7 @@ from app.mask_undistorter import (  # noqa: E402
     MaskUndistortionError,
     parse_colmap_cameras,
     undistort_mask_array,
+    undistort_mask_file,
 )
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
@@ -1245,6 +1246,26 @@ class BackendTests(unittest.TestCase):
         target = ColmapCamera(1, "PINHOLE", 3, 3, (2.0, 2.0, 1.0, 1.0))
         with self.assertRaises(MaskUndistortionError):
             undistort_mask_array(np.zeros((5, 5), dtype=np.uint8), source, target)
+
+    def test_undistort_mask_file_writes_lossless_binary_png_without_overwrite(self) -> None:
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow is not installed in this test environment")
+        source = ColmapCamera(1, "SIMPLE_RADIAL", 5, 5, (2.0, 2.0, 2.0, 0.0))
+        target = ColmapCamera(1, "PINHOLE", 3, 3, (2.0, 2.0, 1.0, 1.0))
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "capture.png"
+            output_path = Path(tmp) / "dense" / "capture.mask.png"
+            Image.fromarray(np.full((5, 5), 255, dtype=np.uint8), mode="L").save(input_path)
+
+            result = undistort_mask_file(input_path, output_path, source, target)
+            with Image.open(result) as written:
+                values = np.asarray(written)
+            with self.assertRaises(MaskUndistortionError):
+                undistort_mask_file(input_path, output_path, source, target)
+
+        self.assertTrue(np.array_equal(values, np.full((3, 3), 255, dtype=np.uint8)))
 
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
