@@ -147,8 +147,10 @@ declared count, grayscale PNG format, and frame dimensions. The geometric core
 for conversion parses COLMAP camera text records and implements nearest-neighbor
 `SIMPLE_RADIAL` to `PINHOLE` mapping, matching the current iPhone pipeline.
 Lossless PNG decoding, binary normalization, atomic publication, and no-clobber
-behavior are implemented. Camera/image association and pipeline integration
-remain future slices.
+behavior are implemented. Original and dense COLMAP image records are matched
+by exact filename and their camera IDs are paired automatically; this was also
+verified against all 254 registered images in the ATV scan. Batch conversion
+and pipeline integration remain future slices.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 
