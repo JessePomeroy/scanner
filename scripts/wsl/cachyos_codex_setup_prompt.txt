@@ -1,0 +1,142 @@
+Help me finish setting up this CachyOS computer as the RTX 3070 reconstruction workstation for my iPhone scanner project.
+
+Work autonomously where safe, but pause whenever I must enter a password, approve a significant system change, or reboot. Explain each checkpoint simply. Do not merely give me commands—run the commands through Codex whenever possible and verify their results.
+
+Goals:
+
+1. Verify CachyOS and the RTX 3070 driver.
+2. Download the scanner repository and enter its folder.
+3. Check out the prepared CachyOS setup branch.
+4. Preview and run the workstation setup script from the repository root.
+5. Reboot at a safe checkpoint if necessary.
+6. Resume setup after reboot.
+7. Run the environment checker and save its JSON report.
+8. Clearly report what is ready and what still needs installation.
+
+Use this workflow:
+
+1. Inspect the operating system and hardware:
+
+    cat /etc/os-release
+    uname -r
+    command -v chwd
+    lspci -k -d ::03xx
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+
+Confirm this is CachyOS and that the expected GPU is an RTX 3070 with approximately 8 GB VRAM.
+
+If the NVIDIA driver is missing, do not install NVIDIA's standalone .run installer and do not blindly choose a kernel-module package. Inspect CachyOS Hardware Detection first:
+
+    chwd -d --list
+    chwd --list-all
+
+If CachyOS has not configured the GPU, explain what `sudo chwd -a` will change, ask for my approval, run it, and stop at a safe reboot checkpoint.
+
+2. Locate the scanner repository. Use `$HOME/scanner` as its Linux location.
+
+If it does not exist:
+
+    cd "$HOME"
+    git clone https://github.com/JessePomeroy/scanner.git
+
+Then enter the repository and select the prepared branch:
+
+    cd "$HOME/scanner"
+    git fetch origin
+    git switch agent/benchmark-evidence-tooling
+    git pull --ff-only
+
+Verify that commit `39fd92b` is present in the current branch. Do not continue from `main` if that commit is missing.
+
+3. Read these files before changing the computer:
+
+    docs/cachyos_setup.md
+    docs/benchmark_runbook.md
+    docs/research/cachyos_reconstruction_setup.md
+    scripts/README.md
+
+Follow `docs/cachyos_setup.md` as the authoritative operational guide.
+
+4. From the repository root, confirm the current folder and preview the setup:
+
+    cd "$HOME/scanner"
+    pwd
+    scripts/wsl/setup_gpu_reconstruction.sh --dry-run
+
+Inspect the preview before continuing. Confirm it selected the CachyOS/Arch `pacman` path—not Ubuntu `apt`—and includes Blender, CUDA, FFmpeg, build tools, Node/npm, SplatTransform, and the OpenAI Codex CLI.
+
+5. If the preview is correct, run the actual setup script:
+
+    cd "$HOME/scanner"
+    scripts/wsl/setup_gpu_reconstruction.sh
+
+Run the script as my normal user. Let the script invoke `sudo` for system packages; do not run the entire script with `sudo`.
+
+When authentication is required, pause and tell me exactly what I need to do. Do not try to bypass sudo, approvals, or security controls.
+
+6. After installation, request a reboot because CachyOS may have updated the kernel or NVIDIA-related packages. Before stopping, give me these exact continuation commands:
+
+    sudo reboot
+
+After the computer restarts:
+
+    cd "$HOME/scanner"
+    codex resume --last
+
+Do not attempt to continue work while the computer is rebooting.
+
+7. After the reboot and session resume, verify the base environment:
+
+    cd "$HOME/scanner"
+    source /etc/profile.d/cuda.sh
+    export PATH="$HOME/.local/bin:$PATH"
+
+    uname -r
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+    cat /sys/module/nvidia_drm/parameters/modeset
+    nvcc --version
+    blender --version
+    ffmpeg -version
+    node --version
+    npm --version
+    codex --version
+    splat-transform --help
+
+The NVIDIA DRM modeset check should report `Y`.
+
+8. Run the non-strict scanner environment check and save the result:
+
+    mkdir -p "$HOME/ScannerBenchmarks"
+
+    cd "$HOME/scanner"
+    python3 scripts/wsl/check_reconstruction_env.py
+    python3 scripts/wsl/check_reconstruction_env.py --json > "$HOME/ScannerBenchmarks/base-environment.json"
+
+Open and inspect the JSON report. Confirm it is valid JSON and tell me its full path.
+
+Do not run strict mode yet unless all pinned reconstruction toolchains have actually been installed. Missing COLMAP, OpenMVS, Nerfstudio, PyTorch/gsplat, or `torch-cuda` checks are expected after the base setup.
+
+Important safety rules:
+
+- Do not use NVIDIA's standalone .run installer.
+- Let CachyOS `chwd` manage the NVIDIA driver.
+- Do not replace a working NVIDIA driver merely to match an example.
+- Do not install Nerfstudio, PyTorch, gsplat, or Open3D into CachyOS's system Python.
+- Do not execute changing AUR recipes without reviewing and pinning them.
+- Do not count a CPU-only COLMAP or OpenMVS installation as ready.
+- OpenMVS will eventually need an explicitly recorded CUDA build using `USE_CUDA=ON`.
+- Keep the repository and reconstruction workspaces on the Linux-native filesystem, not NTFS.
+- Do not begin the long paired reconstruction benchmark during this setup task.
+
+At completion, give me a concise checklist showing:
+
+- CachyOS verified
+- RTX 3070 driver verified
+- CUDA and `nvcc` verified
+- Blender and FFmpeg verified
+- Codex verified
+- SplatTransform verified
+- Environment JSON saved
+- Missing pinned reconstruction components
+- Whether another reboot is required
+- The safest next project step
