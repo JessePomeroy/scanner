@@ -152,8 +152,10 @@ by exact filename and their camera IDs are paired automatically; this was also
 verified against all 254 registered images in the ATV scan. Batch conversion
 now exports both COLMAP models to temporary text form, stages every converted
 mask, validates the complete set against dense images, and publishes
-`dense/masks` under an advisory lock. Pipeline orchestration remains a future
-slice.
+`dense/masks` under an advisory lock. Backend and workstation execution detect
+validated capture-scope metadata, run or resume conversion after COLMAP dense
+preparation, pass the generated directory to OpenMVS, and record conversion and
+validation evidence.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 
