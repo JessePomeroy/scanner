@@ -27,7 +27,7 @@ from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobStore
-from app.openmvs_runner import run_openmvs_pipeline
+from app.openmvs_runner import OpenMVSConfig, run_openmvs_pipeline
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
     ScanValidationError,
@@ -272,13 +272,18 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
                 message="Running OpenMVS mesh reconstruction.",
             )
             started_at = perf_counter()
-            textured_mesh = run_openmvs_pipeline(scan_root)
+            openmvs_config = OpenMVSConfig()
+            textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
             package.record_processing_step(
                 "openmvs",
                 {
                     "elapsed_seconds": perf_counter() - started_at,
                     "output": str(textured_mesh),
+                    "settings": openmvs_config.report_settings(),
                 },
+            )
+            outputs["openmvs_dense_point_cloud"] = str(
+                scan_root / "dense" / "scene_dense.ply"
             )
             outputs["textured_mesh"] = str(textured_mesh)
 

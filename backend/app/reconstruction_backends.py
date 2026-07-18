@@ -75,6 +75,7 @@ def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> Comm
     if config.include_dense:
         outputs["dense_point_cloud"] = scan_dir / "dense" / "fused.ply"
     if config.include_openmvs:
+        outputs["openmvs_dense_point_cloud"] = scan_dir / "dense" / "scene_dense.ply"
         outputs["textured_mesh"] = scan_dir / "dense" / "scene_textured.obj"
 
     return CommandPlan(
@@ -85,6 +86,7 @@ def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> Comm
         notes=[
             "Primary production reconstruction path.",
             "Run dense COLMAP and OpenMVS on native Linux with CUDA-capable tools.",
+            "OpenMVS dense reconstruction uses explicit automatic ROI and visibility filtering defaults.",
         ],
     )
 

@@ -117,6 +117,11 @@ dual-boot RTX 3070 PC.
 
 ## Reconstruction Pipeline
 
+Scope control for dense reconstruction is specified in
+[`roi_masking_spec.md`](roi_masking_spec.md). Implement native OpenMVS
+densification/ROI controls first, followed by validated image masks and later
+ARKit-to-COLMAP 3D ROI alignment.
+
 1. Mac smoke test path.
    - Validate package.
    - Run sparse COLMAP with sequential matching by default. Status: implemented.

@@ -81,8 +81,9 @@ def main() -> None:
     if not args.skip_dense:
         commands.extend(build_colmap_dense_commands(scan_root, colmap_config))
 
+    openmvs_config = OpenMVSConfig()
     if not args.skip_openmvs:
-        commands.extend(build_openmvs_commands(scan_root, OpenMVSConfig()))
+        commands.extend(build_openmvs_commands(scan_root, openmvs_config))
 
     command_log = logs_dir / "commands.log"
     outputs = expected_outputs(scan_root, include_dense=not args.skip_dense, include_openmvs=not args.skip_openmvs)
@@ -90,8 +91,20 @@ def main() -> None:
     package_report_path = package.report_path
 
     started_at = perf_counter()
+    openmvs_commands = {
+        OpenMVSConfig().interface_colmap,
+        OpenMVSConfig().densify_point_cloud,
+        OpenMVSConfig().reconstruct_mesh,
+        OpenMVSConfig().refine_mesh,
+        OpenMVSConfig().texture_mesh,
+    }
     for command in commands:
-        run_command(command, command_log=command_log, dry_run=args.dry_run)
+        run_command(
+            command,
+            command_log=command_log,
+            dry_run=args.dry_run,
+            cwd=scan_root / "dense" if command[0] in openmvs_commands else None,
+        )
     elapsed_seconds = perf_counter() - started_at
     package.record_processing_step(
         "gpu_reconstruction",
@@ -102,6 +115,7 @@ def main() -> None:
             "skip_openmvs": args.skip_openmvs,
             "elapsed_seconds": elapsed_seconds,
             "command_count": len(commands),
+            "openmvs_settings": openmvs_config.report_settings() if not args.skip_openmvs else None,
         },
     )
 
@@ -124,6 +138,7 @@ def main() -> None:
         "object_scan": object_summary,
         "warnings": package_report.get("warnings", []),
         "commands": commands,
+        "openmvs_settings": openmvs_config.report_settings() if not args.skip_openmvs else None,
         "outputs": {key: str(path) for key, path in outputs.items()},
         "notes": [
             "Use this runner on native Linux with a CUDA-enabled COLMAP build.",
@@ -152,7 +167,13 @@ def build_model_converter_command(scan_root: Path, config: ColmapConfig) -> list
     ]
 
 
-def run_command(command: list[str], *, command_log: Path, dry_run: bool) -> None:
+def run_command(
+    command: list[str],
+    *,
+    command_log: Path,
+    dry_run: bool,
+    cwd: Path | None = None,
+) -> None:
     line = shell_join(command)
     with command_log.open("a") as log:
         log.write(line + "\n")
@@ -161,7 +182,7 @@ def run_command(command: list[str], *, command_log: Path, dry_run: bool) -> None
     if dry_run:
         return
 
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, cwd=cwd)
 
 
 def expected_outputs(scan_root: Path, *, include_dense: bool, include_openmvs: bool) -> dict[str, Path]:
@@ -174,6 +195,7 @@ def expected_outputs(scan_root: Path, *, include_dense: bool, include_openmvs: b
         outputs["dense_point_cloud"] = scan_root / "dense" / "fused.ply"
 
     if include_openmvs:
+        outputs["openmvs_dense_point_cloud"] = scan_root / "dense" / "scene_dense.ply"
         outputs["textured_mesh"] = scan_root / "dense" / "scene_textured.obj"
 
     return outputs
