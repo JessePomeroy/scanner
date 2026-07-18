@@ -33,6 +33,7 @@
 		F08270898A2D43E8AD613035 /* ARTrackingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */; };
 		A22C00000000000000000011 /* CaptureMaskRasterizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22C00000000000000000001 /* CaptureMaskRasterizer.swift */; };
 		A23C00000000000000000011 /* CaptureMaskEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23C00000000000000000001 /* CaptureMaskEditorView.swift */; };
+		A24C00000000000000000011 /* CaptureMaskCoordinateMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +65,7 @@
 		FDD18124A7BC45C9B9869EAA /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
 		A22C00000000000000000001 /* CaptureMaskRasterizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskRasterizer.swift; sourceTree = "<group>"; };
 		A23C00000000000000000001 /* CaptureMaskEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskEditorView.swift; sourceTree = "<group>"; };
+		A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskCoordinateMapper.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -120,6 +122,7 @@
 				2F38B5BED7974BB2BD11A900 /* ScanPackageWriter.swift */,
 				A22C00000000000000000001 /* CaptureMaskRasterizer.swift */,
 				A23C00000000000000000001 /* CaptureMaskEditorView.swift */,
+				A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */,
 				C26CDDFEA3AA4A03BC3D2BF5 /* ScanMetadataModels.swift */,
 				FDD18124A7BC45C9B9869EAA /* ShareSheet.swift */,
 				2665A66CFE8047BC82B37593 /* Info.plist */,
@@ -208,6 +211,7 @@
 				EDC208D25C894F14B95B8D19 /* ScanPackageWriter.swift in Sources */,
 				A22C00000000000000000011 /* CaptureMaskRasterizer.swift in Sources */,
 				A23C00000000000000000011 /* CaptureMaskEditorView.swift in Sources */,
+				A24C00000000000000000011 /* CaptureMaskCoordinateMapper.swift in Sources */,
 				B5B1577878A1422D99C78BDD /* ScanMetadataModels.swift in Sources */,
 				73917A366014483DA0D903BE /* ShareSheet.swift in Sources */,
 			);

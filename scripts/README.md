@@ -31,6 +31,8 @@ Current entry points:
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.
 - `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
   source to round-trip the custom ZIP writer through Python `zipfile`.
+- `verify_capture_mask_mapper.swift`: verify identity, aspect-fill crop, and
+  invalid-dimension behavior for preview-to-JPEG mask coordinates.
 - `verify_reconstruction_job_client.swift`: exercise the iOS job client through
   mock HTTP and in-memory adapters.
 - `verify_scan_upload_client.swift`: verify multipart ZIP construction, shared
@@ -65,6 +67,17 @@ swiftc ios/ScannerApp/ScanMetadataModels.swift \
   ios/ScannerApp/ScanPackageWriter.swift \
   scripts/verify_scan_zip_writer.swift \
   -o /tmp/verify_scan_zip_writer && /tmp/verify_scan_zip_writer
+```
+
+Run the capture-mask coordinate verifier on a Mac from the repo root:
+
+```bash
+xcrun swiftc \
+  ios/ScannerApp/CaptureMaskRasterizer.swift \
+  ios/ScannerApp/CaptureMaskCoordinateMapper.swift \
+  scripts/verify_capture_mask_mapper.swift \
+  -o /tmp/verify_capture_mask_mapper
+/tmp/verify_capture_mask_mapper
 ```
 
 Run the reconstruction job client verifier from the repo root:
