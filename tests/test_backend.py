@@ -45,6 +45,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
+from app.density_budget import PointCloudBudgetError, inspect_ply_point_budget  # noqa: E402
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
@@ -959,13 +960,17 @@ class BackendTests(unittest.TestCase):
     def test_openmvs_pipeline_runs_commands_from_dense_workspace(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-workspace")
 
-        with patch("app.openmvs_runner.run_command") as run_command_mock:
+        with (
+            patch("app.openmvs_runner.run_command") as run_command_mock,
+            patch("app.openmvs_runner.inspect_openmvs_dense_cloud") as inspect_mock,
+        ):
             result = run_openmvs_pipeline(scan_dir)
 
         self.assertEqual(result, scan_dir / "dense" / "scene_textured.obj")
         self.assertEqual(run_command_mock.call_count, 4)
         for call in run_command_mock.call_args_list:
             self.assertEqual(call.kwargs["cwd"], scan_dir / "dense")
+        inspect_mock.assert_called_once()
 
     def test_openmvs_commands_densify_with_explicit_scope_controls(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-scope")
@@ -1025,6 +1030,42 @@ class BackendTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             OpenMVSConfig(scope_mode="invalid")  # type: ignore[arg-type]
+
+    def test_ply_density_budget_reads_header_without_point_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dense.ply"
+            path.write_bytes(
+                b"ply\nformat binary_little_endian 1.0\nelement vertex 2500001\n"
+                b"property float x\nend_header\nnot-a-complete-point-payload"
+            )
+            result = inspect_ply_point_budget(path)
+
+        self.assertEqual(result.point_count, 2_500_001)
+        self.assertTrue(result.warning)
+
+    def test_ply_density_budget_rejects_hard_limit_before_payload_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dense.ply"
+            path.write_bytes(b"ply\nformat ascii 1.0\nelement vertex 10000001\nend_header\n")
+
+            with self.assertRaises(PointCloudBudgetError):
+                inspect_ply_point_budget(path)
+
+    def test_ply_density_budget_rejects_invalid_header(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dense.ply"
+            path.write_bytes(b"not-ply\n")
+
+            with self.assertRaises(PointCloudBudgetError):
+                inspect_ply_point_budget(path)
+
+    def test_ply_density_budget_bounds_a_single_header_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dense.ply"
+            path.write_bytes(b"ply\ncomment " + b"x" * (64 * 1024) + b"\nend_header\n")
+
+            with self.assertRaises(PointCloudBudgetError):
+                inspect_ply_point_budget(path)
 
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
