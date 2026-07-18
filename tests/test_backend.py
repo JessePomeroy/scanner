@@ -15,6 +15,8 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+import numpy as np
+
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +50,12 @@ from app.colmap_runner import (  # noqa: E402
 from app.density_budget import PointCloudBudgetError, inspect_ply_point_budget  # noqa: E402
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
 from app.mask_processor import MaskValidationError, validate_openmvs_masks  # noqa: E402
+from app.mask_undistorter import (  # noqa: E402
+    ColmapCamera,
+    MaskUndistortionError,
+    parse_colmap_cameras,
+    undistort_mask_array,
+)
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
@@ -1201,6 +1209,35 @@ class BackendTests(unittest.TestCase):
 
             with self.assertRaises(MaskValidationError):
                 validate_openmvs_masks(masks, images)
+
+    def test_parse_colmap_cameras_reads_simple_radial_and_pinhole(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cameras.txt"
+            path.write_text(
+                "# cameras\n1 SIMPLE_RADIAL 1440 1920 1460.28 720 960 0.01359\n"
+                "2 PINHOLE 1426 1901 1460.28 1460.28 713 950.5\n"
+            )
+            cameras = parse_colmap_cameras(path)
+
+        self.assertEqual(cameras[1].model, "SIMPLE_RADIAL")
+        self.assertEqual(cameras[2].width, 1426)
+
+    def test_undistort_mask_array_uses_nearest_binary_sampling(self) -> None:
+        source = ColmapCamera(1, "SIMPLE_RADIAL", 5, 5, (2.0, 2.0, 2.0, 0.0))
+        target = ColmapCamera(1, "PINHOLE", 3, 3, (2.0, 2.0, 1.0, 1.0))
+        mask = np.zeros((5, 5), dtype=np.uint8)
+        mask[1:4, 1:4] = 200
+
+        output = undistort_mask_array(mask, source, target)
+
+        self.assertEqual(output.dtype, np.uint8)
+        self.assertTrue(np.array_equal(output, np.full((3, 3), 255, dtype=np.uint8)))
+
+    def test_undistort_mask_array_rejects_wrong_shape_or_model(self) -> None:
+        source = ColmapCamera(1, "OPENCV", 5, 5, (2.0, 2.0, 2.0, 2.0))
+        target = ColmapCamera(1, "PINHOLE", 3, 3, (2.0, 2.0, 1.0, 1.0))
+        with self.assertRaises(MaskUndistortionError):
+            undistort_mask_array(np.zeros((5, 5), dtype=np.uint8), source, target)
 
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):

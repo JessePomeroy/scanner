@@ -143,8 +143,10 @@ future 3D ROI alignment. It is not sufficient by itself for irregular scenes.
 The typed `reconstruction_scope` manifest object below is implemented and
 preserved when the backend regenerates its downstream manifest. Capture masks
 under `masks/capture` are checked for safe layout, exact frame association,
-declared count, grayscale PNG format, and frame dimensions. Converting those
-masks to undistorted image space remains a future slice.
+declared count, grayscale PNG format, and frame dimensions. The geometric core
+for conversion parses COLMAP camera text records and implements nearest-neighbor
+`SIMPLE_RADIAL` to `PINHOLE` mapping, matching the current iPhone pipeline.
+Lossless PNG file orchestration and pipeline integration remain future slices.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 
