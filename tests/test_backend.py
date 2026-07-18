@@ -53,6 +53,7 @@ from app.neural_backend_planner import (  # noqa: E402
     build_neural_backend_plan,
     write_neural_backend_report,
 )
+from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands, run_openmvs_pipeline  # noqa: E402
 from app.open3d_cleanup import cleanup_outputs  # noqa: E402
 from app.point_cloud_processor import (  # noqa: E402
     PointCloudProcessingConfig,
@@ -954,6 +955,69 @@ class BackendTests(unittest.TestCase):
             ],
         )
         self.assertIn("sparse_point_cloud", plan.outputs)
+
+    def test_openmvs_pipeline_runs_commands_from_dense_workspace(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-workspace")
+
+        with patch("app.openmvs_runner.run_command") as run_command_mock:
+            result = run_openmvs_pipeline(scan_dir)
+
+        self.assertEqual(result, scan_dir / "dense" / "scene_textured.obj")
+        self.assertEqual(run_command_mock.call_count, 4)
+        for call in run_command_mock.call_args_list:
+            self.assertEqual(call.kwargs["cwd"], scan_dir / "dense")
+
+    def test_openmvs_commands_densify_with_explicit_scope_controls(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-scope")
+        commands = build_openmvs_commands(scan_dir)
+
+        self.assertEqual([command[0] for command in commands], [
+            "InterfaceCOLMAP",
+            "DensifyPointCloud",
+            "ReconstructMesh",
+            "TextureMesh",
+        ])
+        densify = commands[1]
+        self.assertIn(str(scan_dir / "dense" / "scene_dense.mvs"), densify)
+        self.assertEqual(densify[densify.index("--number-views-fuse") + 1], "3")
+        self.assertEqual(densify[densify.index("--filter-point-cloud") + 1], "1")
+        self.assertEqual(densify[densify.index("--estimate-roi") + 1], "1.1")
+        self.assertEqual(densify[densify.index("--crop-to-roi") + 1], "1")
+        self.assertEqual(densify[densify.index("--roi-border") + 1], "10.0")
+        self.assertNotIn("-p", commands[2])
+
+    def test_openmvs_unbounded_mode_disables_roi_crop(self) -> None:
+        commands = build_openmvs_commands(
+            Path("/tmp/scanner-openmvs-unbounded"),
+            OpenMVSConfig(scope_mode="unbounded"),
+        )
+        densify = commands[1]
+
+        self.assertEqual(densify[densify.index("--estimate-roi") + 1], "0")
+        self.assertEqual(densify[densify.index("--crop-to-roi") + 1], "0")
+        self.assertEqual(densify[densify.index("--roi-border") + 1], "0")
+
+    def test_openmvs_mask_path_is_forwarded_to_densification(self) -> None:
+        mask_path = Path("/tmp/scanner masks")
+        commands = build_openmvs_commands(
+            Path("/tmp/scanner-openmvs-masks"),
+            OpenMVSConfig(mask_path=mask_path),
+        )
+
+        densify = commands[1]
+        self.assertEqual(densify[densify.index("--mask-path") + 1], str(mask_path.resolve()))
+
+    def test_openmvs_config_rejects_invalid_scope_values(self) -> None:
+        with self.assertRaises(ValueError):
+            OpenMVSConfig(number_views_fuse=0)
+
+    def test_openmvs_config_reports_effective_scope_settings(self) -> None:
+        settings = OpenMVSConfig(scope_mode="unbounded", roi_border=25).report_settings()
+
+        self.assertEqual(settings["estimate_roi"], 0)
+        self.assertFalse(settings["crop_to_roi"])
+        self.assertEqual(settings["roi_border"], 0)
+        self.assertIsNone(settings["mask_path"])
 
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
