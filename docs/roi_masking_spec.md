@@ -183,7 +183,9 @@ The iOS package writer lazily creates `masks/capture` when the first mask is
 saved, writes lossless mask data as
 `<original-image-filename>.png` (for example `frame.jpg.png`), refuses invalid
 image references and overwrites, and includes those files in the streamed ZIP.
-The UI does not generate mask pixels yet.
+The iOS target includes a deterministic polygon rasterizer that validates
+normalized keep polygons and emits full-resolution, 8-bit grayscale PNG masks.
+The capture UI does not invoke the rasterizer yet.
 
 ### Backend Validation
 
