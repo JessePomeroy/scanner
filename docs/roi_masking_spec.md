@@ -114,6 +114,7 @@ Expose and pin these settings instead of relying on installed-version defaults:
 - `crop_to_roi`: true except in `unbounded` mode
 - `roi_border`: default `10` percent and configurable
 - `mask_path`: omitted unless validated masks exist
+- `mask_ignore_label`: `0` when masks exist, matching black-exclude semantics
 
 The exact defaults require benchmark confirmation. The runner must include them
 in the reconstruction report so upgrades cannot silently change behavior.

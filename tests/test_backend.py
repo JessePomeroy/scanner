@@ -1107,7 +1107,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--crop-to-roi") + 1], "0")
         self.assertEqual(densify[densify.index("--roi-border") + 1], "0")
 
-    def test_openmvs_mask_path_is_forwarded_to_densification(self) -> None:
+    def test_openmvs_mask_path_and_black_ignore_label_are_forwarded_to_densification(self) -> None:
         mask_path = Path("/tmp/scanner masks")
         commands = build_openmvs_commands(
             Path("/tmp/scanner-openmvs-masks"),
@@ -1116,10 +1116,13 @@ class BackendTests(unittest.TestCase):
 
         densify = commands[1]
         self.assertEqual(densify[densify.index("--mask-path") + 1], str(mask_path.resolve()))
+        self.assertEqual(densify[densify.index("--ignore-mask-label") + 1], "0")
 
     def test_openmvs_config_rejects_invalid_scope_values(self) -> None:
         with self.assertRaises(ValueError):
             OpenMVSConfig(number_views_fuse=0)
+        with self.assertRaises(ValueError):
+            OpenMVSConfig(mask_ignore_label=256)
 
     def test_openmvs_config_reports_effective_scope_settings(self) -> None:
         settings = OpenMVSConfig(scope_mode="unbounded", roi_border=25).report_settings()
@@ -1128,6 +1131,7 @@ class BackendTests(unittest.TestCase):
         self.assertFalse(settings["crop_to_roi"])
         self.assertEqual(settings["roi_border"], 0)
         self.assertIsNone(settings["mask_path"])
+        self.assertIsNone(settings["mask_ignore_label"])
 
     def test_openmvs_config_accepts_api_scope_modes(self) -> None:
         self.assertEqual(OpenMVSConfig(scope_mode="auto_roi").scope_mode, "auto_roi")
