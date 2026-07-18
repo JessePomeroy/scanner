@@ -123,7 +123,7 @@ final class ScanPackageWriter {
         guard !fileManager.fileExists(atPath: destination.path) else {
             throw ScanPackageWriterError.captureMaskAlreadyExists(destination)
         }
-        try pngData.write(to: destination, options: [.atomic, .withoutOverwriting])
+        try pngData.write(to: destination, options: .withoutOverwriting)
         return destination
     }
 
