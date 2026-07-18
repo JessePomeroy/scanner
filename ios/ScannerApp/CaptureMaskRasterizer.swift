@@ -68,20 +68,22 @@ struct CaptureMaskRasterizer {
             throw CaptureMaskRasterizerError.imageCreationFailed
         }
 
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            output,
-            UTType.png.identifier as CFString,
-            1,
-            nil
-        ) else {
-            throw CaptureMaskRasterizerError.pngEncodingFailed
+        return try withExtendedLifetime(pixels) {
+            let output = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(
+                output,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+            ) else {
+                throw CaptureMaskRasterizerError.pngEncodingFailed
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else {
+                throw CaptureMaskRasterizerError.pngEncodingFailed
+            }
+            return output as Data
         }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else {
-            throw CaptureMaskRasterizerError.pngEncodingFailed
-        }
-        return output as Data
     }
 
     func validate(_ polygon: [NormalizedMaskPoint]) throws {
