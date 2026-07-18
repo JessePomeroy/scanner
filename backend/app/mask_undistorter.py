@@ -249,6 +249,13 @@ def convert_capture_mask_set(
     lock_fd: int | None = None
     lock_path = dense_dir / ".masks.publish.lock"
     try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise MaskUndistortionError("Another mask publication is already active") from error
+        if output_dir.exists() or output_dir.is_symlink():
+            raise MaskUndistortionError(f"Refusing to overwrite mask directory: {output_dir}")
         with tempfile.TemporaryDirectory(dir=dense_dir, prefix=".mask-models.") as temporary:
             temporary_root = Path(temporary)
             source_text = temporary_root / "source"
@@ -270,11 +277,6 @@ def convert_capture_mask_set(
                 undistort_mask_file(capture_mask, output_mask, association.source, association.target)
             result = validate_openmvs_masks(stage_dir, dense_dir / "images")
 
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise MaskUndistortionError("Another mask publication is already active") from error
         if output_dir.exists() or output_dir.is_symlink():
             raise MaskUndistortionError(f"Refusing to overwrite mask directory: {output_dir}")
         os.rename(stage_dir, output_dir)
