@@ -14,9 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
-from app.jobs import JobStore  # noqa: E402
+from app.jobs import JobClaimError, JobStore  # noqa: E402
+from app.reconstruction_region import ReconstructionRegion, save_reconstruction_region  # noqa: E402
 from app.sparse_review import (  # noqa: E402
     SparseReviewError,
+    load_sparse_review_checkpoint,
     publish_sparse_review_checkpoint,
 )
 
@@ -63,6 +65,38 @@ class SparseReviewTests(unittest.TestCase):
             },
         )
         self.assertEqual(outputs["sparse_point_cloud"].name, "sparse_points.ply")
+
+    def test_loads_strict_resume_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_root = self._write_sparse_scan(Path(tmp))
+            publish_sparse_review_checkpoint(
+                scan_root, run_dense=True, run_openmvs=True, scope_mode="auto_roi",
+                use_masks=False, model_exporter=self._write_text_model,
+            )
+            checkpoint = load_sparse_review_checkpoint(scan_root)
+
+        self.assertTrue(checkpoint.run_dense)
+        self.assertTrue(checkpoint.run_openmvs)
+        self.assertEqual(checkpoint.scope_mode, "auto_roi")
+
+    def test_job_resume_claim_is_one_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp))
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update("scan-1", status="processing", stage="awaiting_scope")
+            claimed = store.claim(
+                "scan-1", expected_status="processing", expected_stage="awaiting_scope",
+                status="processing", stage="reconstructing",
+            )
+            with self.assertRaises(JobClaimError):
+                store.claim(
+                    "scan-1", expected_status="processing", expected_stage="awaiting_scope",
+                    status="processing", stage="reconstructing",
+                )
+
+        self.assertEqual(claimed.stage, "reconstructing")
 
     def test_rejects_missing_sparse_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -260,6 +294,46 @@ class SparseReviewTests(unittest.TestCase):
         self.assertEqual(saved["region"], payload)
         self.assertIn("reconstruction_region", record.outputs)
         self.assertIn("revision 1", record.message or "")
+
+    def test_resume_api_claims_checkpoint_and_queues_continuation_once(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+        from fastapi import BackgroundTasks, HTTPException
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_root = self._write_sparse_scan(root / "processing" / "scan-1" / "scan")
+            publish_sparse_review_checkpoint(
+                scan_root, run_dense=True, run_openmvs=True, scope_mode="auto_roi",
+                use_masks=False, model_exporter=self._write_text_model,
+            )
+            save_reconstruction_region(
+                scan_root,
+                ReconstructionRegion(
+                    center=(0, 0, 0), extents=(2, 2, 2), orientation_xyzw=(0, 0, 0, 1),
+                    source="user_sparse_preview", revision=1,
+                ),
+            )
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update("scan-1", status="processing", stage="awaiting_scope")
+            background = BackgroundTasks()
+
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "_active_scan_root", return_value=scan_root),
+            ):
+                claimed = backend_main.resume_scan_job("scan-1", background)
+                with self.assertRaises(HTTPException) as duplicate:
+                    backend_main.resume_scan_job("scan-1", BackgroundTasks())
+
+        self.assertEqual(claimed.stage, "reconstructing")
+        self.assertEqual(len(background.tasks), 1)
+        self.assertEqual(duplicate.exception.status_code, 409)
 
     def test_scope_api_rejects_stale_edit(self) -> None:
         if importlib.util.find_spec("fastapi") is None:

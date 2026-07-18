@@ -52,6 +52,10 @@ class InvalidScanIDError(ValueError):
     """Raised when a scan id cannot safely name a job record."""
 
 
+class JobClaimError(JobTransitionError):
+    """Raised when a one-time lifecycle transition was already claimed."""
+
+
 class JobStore:
     """Own job transitions, timestamps, ordering, and atomic JSON persistence."""
 
@@ -124,6 +128,31 @@ class JobStore:
             record = JobRecord(**values)
             self._write(record)
             return record
+
+    def claim(
+        self,
+        scan_id: str,
+        *,
+        expected_status: JobStatus,
+        expected_stage: JobStage,
+        status: JobStatus,
+        stage: JobStage,
+        message: str | None = None,
+    ) -> JobRecord:
+        """Atomically claim a resumable job transition within this server process."""
+        with self._lock:
+            current = self.read(scan_id)
+            if current.status != expected_status or current.stage != expected_stage:
+                raise JobClaimError(
+                    f"Job {scan_id} is {current.status}/{current.stage}, not "
+                    f"{expected_status}/{expected_stage}"
+                )
+            return self.update(
+                scan_id,
+                status=status,
+                stage=stage,
+                message=message,
+            )
 
     def read(self, scan_id: str) -> JobRecord:
         with self._lock:

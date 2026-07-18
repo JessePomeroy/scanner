@@ -24,9 +24,10 @@ from app.artifacts import (
     rebase_output_paths,
 )
 from app.blender_exporter import export_blender_formats
-from app.colmap_runner import ColmapConfig, run_colmap_pipeline
+from app.colmap_runner import ColmapConfig, run_colmap_dense_pipeline, run_colmap_pipeline
+from app.density_budget import inspect_ply_point_budget
 from app.job_recovery import reconcile_interrupted_jobs
-from app.jobs import InvalidScanIDError, JobStore
+from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
 from app.mask_processor import validate_openmvs_masks
 from app.openmvs_runner import (
@@ -44,13 +45,18 @@ from app.reconstruction_region import (
     load_reconstruction_region,
     save_reconstruction_region,
 )
+from app.reconstruction_region_application import (
+    record_region_application,
+    verify_point_cloud_in_region,
+    write_openmvs_roi_file,
+)
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
     ScanValidationError,
     find_scan_root,
 )
 from app.schemas import JobRecord, ScanArtifact
-from app.sparse_review import publish_sparse_review_checkpoint
+from app.sparse_review import load_sparse_review_checkpoint, publish_sparse_review_checkpoint
 from app.storage import UnsafeArchiveError, safe_extract_zip
 from app.upload_lifecycle import store_job_upload
 
@@ -107,6 +113,11 @@ async def upload_scan(
     """Upload a scan package and optionally run reconstruction in the background."""
     if review_scope and not run_reconstruction:
         raise HTTPException(status_code=400, detail="Scope review requires reconstruction.")
+    if review_scope and (not run_dense or not run_openmvs):
+        raise HTTPException(
+            status_code=400,
+            detail="Scope review requires dense and OpenMVS reconstruction.",
+        )
     scan_id = str(uuid.uuid4())
     jobs.create(scan_id)
     incoming_zip = INCOMING_DIR / f"{scan_id}.zip"
@@ -227,6 +238,38 @@ def put_scan_scope(
         outputs=outputs,
     )
     return {"scan_id": scan_id, "region": region.as_dict()}
+
+
+@app.post("/scans/{scan_id}/resume", response_model=JobRecord)
+def resume_scan_job(scan_id: str, background_tasks: BackgroundTasks) -> JobRecord:
+    """Continue an awaiting job from its saved sparse model and reviewed region."""
+    record = get_scan_status(scan_id)
+    if record.status != "processing" or record.stage != "awaiting_scope":
+        raise HTTPException(status_code=409, detail="The scan is not awaiting scope review.")
+    scan_root = _active_scan_root(scan_id)
+    try:
+        load_reconstruction_region(scan_root)
+        checkpoint = load_sparse_review_checkpoint(scan_root)
+    except (ReconstructionRegionError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if not checkpoint.run_dense or not checkpoint.run_openmvs:
+        raise HTTPException(
+            status_code=409,
+            detail="This checkpoint cannot produce a region-scoped textured mesh.",
+        )
+    try:
+        claimed = jobs.claim(
+            scan_id,
+            expected_status="processing",
+            expected_stage="awaiting_scope",
+            status="processing",
+            stage="reconstructing",
+            message="Reviewed region saved. Continuing dense reconstruction.",
+        )
+    except JobClaimError as error:
+        raise HTTPException(status_code=409, detail="This scan has already resumed.") from error
+    background_tasks.add_task(resume_scoped_scan, scan_id)
+    return claimed
 
 
 @app.get("/scans/{scan_id}/artifacts", response_model=list[ScanArtifact])
@@ -450,6 +493,137 @@ def process_scan(
             scan_id,
             status="complete",
             message="Reconstruction completed.",
+            image_count=report.image_count,
+            frame_count=report.frame_count,
+            outputs=rebased_outputs,
+        )
+    except Exception as error:
+        fail_processing(scan_id, processing_dir)
+        jobs.update(scan_id, status="failed", message=str(error))
+
+
+def resume_scoped_scan(scan_id: str) -> None:
+    """Resume dense work without repeating sparse feature matching or mapping."""
+    processing_dir = PROCESSING_DIR / scan_id
+    try:
+        scan_root = find_scan_root(processing_dir)
+        checkpoint = load_sparse_review_checkpoint(scan_root)
+        region = load_reconstruction_region(scan_root)
+        package = validate_and_report_scan(scan_root)
+        report = package.validation
+
+        colmap_config = ColmapConfig(use_gpu=True)
+        started_at = perf_counter()
+        colmap_output = run_colmap_dense_pipeline(scan_root, colmap_config)
+        package.record_processing_step(
+            "colmap_resume",
+            {
+                "reused_sparse_model": True,
+                "elapsed_seconds": perf_counter() - started_at,
+                "output": str(colmap_output),
+            },
+        )
+
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="meshing",
+            message="Applying the reviewed region and reconstructing the textured mesh.",
+        )
+        auto_masks = report.reconstruction_scope is not None
+        mask_path = scan_root / "dense" / "masks" if (auto_masks or checkpoint.use_masks) else None
+        if auto_masks:
+            conversion_started_at = perf_counter()
+            if mask_path.is_dir():
+                mask_conversion = validate_openmvs_masks(mask_path, scan_root / "dense" / "images")
+            else:
+                mask_conversion = convert_capture_mask_set(scan_root)
+            package.record_processing_step(
+                "mask_conversion",
+                {
+                    "elapsed_seconds": perf_counter() - conversion_started_at,
+                    "result": mask_conversion.as_dict(),
+                },
+            )
+
+        roi_path = write_openmvs_roi_file(scan_root, region)
+        openmvs_config = OpenMVSConfig(
+            scope_mode=checkpoint.scope_mode,
+            mask_path=mask_path,
+            region_path=roi_path,
+        )
+        started_at = perf_counter()
+        textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
+        dense_dir = scan_root / "dense"
+        unscoped_budget = inspect_ply_point_budget(
+            dense_dir / "scene_dense_unscoped.ply",
+            warning_limit=openmvs_config.point_warning_limit,
+            hard_limit=openmvs_config.point_hard_limit,
+        )
+        scoped_verification = verify_point_cloud_in_region(
+            dense_dir / "scene_dense.ply",
+            region,
+            point_hard_limit=openmvs_config.point_hard_limit,
+        )
+        mesh_verification = verify_point_cloud_in_region(
+            dense_dir / "scene_mesh.ply",
+            region,
+            point_hard_limit=openmvs_config.point_hard_limit,
+        )
+        application_path = record_region_application(
+            scan_root,
+            region,
+            roi_path=roi_path,
+            unscoped_point_count=unscoped_budget.point_count,
+            scoped_verification=scoped_verification,
+            mesh_verification=mesh_verification,
+        )
+        package.record_processing_step(
+            "openmvs",
+            {
+                "elapsed_seconds": perf_counter() - started_at,
+                "output": str(textured_mesh),
+                "settings": openmvs_config.report_settings(),
+                "unscoped_density_budget": unscoped_budget.as_dict(),
+                "scoped_dense_verification": scoped_verification.as_dict(),
+                "mesh_verification": mesh_verification.as_dict(),
+                "automatic_mask_conversion": auto_masks,
+            },
+        )
+        outputs = {
+            "colmap_output": str(colmap_output),
+            "openmvs_unscoped_dense_point_cloud": str(dense_dir / "scene_dense_unscoped.ply"),
+            "openmvs_dense_point_cloud": str(dense_dir / "scene_dense.ply"),
+            "textured_mesh": str(textured_mesh),
+            "reconstruction_region": str(scan_root / "metadata" / "reconstruction_region.json"),
+            "reconstruction_region_application": str(application_path),
+            "scan_report": str(package.report_path),
+        }
+
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="exporting",
+            message="Preparing Blender-friendly outputs.",
+        )
+        export_blender_formats(scan_root)
+        validate_and_report_scan(scan_root)
+        completed_target = COMPLETED_DIR / scan_id
+        rebased_outputs = rebase_output_paths(
+            outputs,
+            old_root=processing_dir,
+            new_root=completed_target,
+        )
+        completed_dir = move_to_completed(scan_id, processing_dir)
+        completed_scan_root = find_scan_root(completed_dir)
+        rebased_outputs["package_dir"] = str(completed_dir)
+        rebased_outputs["scan_report"] = str(
+            completed_scan_root / "metadata" / "scan_report.json"
+        )
+        jobs.update(
+            scan_id,
+            status="complete",
+            message="Reviewed-region reconstruction completed.",
             image_count=report.image_count,
             frame_count=report.frame_count,
             outputs=rebased_outputs,

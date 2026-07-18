@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import math
@@ -20,6 +21,74 @@ class SparseReviewError(ValueError):
 
 
 ModelExporter = Callable[[Path, Path], None]
+
+
+@dataclass(frozen=True)
+class SparseReviewCheckpoint:
+    run_dense: bool
+    run_openmvs: bool
+    scope_mode: OpenMVSScopeMode
+    use_masks: bool
+
+
+def load_sparse_review_checkpoint(scan_root: Path) -> SparseReviewCheckpoint:
+    """Strictly validate the persisted continuation contract before resuming."""
+    scan_root = scan_root.resolve()
+    path = scan_root / "metadata" / "reconstruction_checkpoint.json"
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise SparseReviewError(f"Sparse-review checkpoint is missing or unsafe: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SparseReviewError(f"Sparse-review checkpoint is invalid: {path}") from error
+    expected_fields = {
+        "schema_version", "state", "created_at", "coordinate_system", "sparse_model",
+        "sparse_point_cloud", "camera_preview", "continuation",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_fields:
+        raise SparseReviewError("Sparse-review checkpoint fields are invalid")
+    expected_literals = {
+        "schema_version": "1.0",
+        "state": "awaiting_scope",
+        "coordinate_system": "colmap_reconstruction",
+        "sparse_model": "sparse/0",
+        "sparse_point_cloud": "sparse/sparse_points.ply",
+        "camera_preview": "sparse/cameras_preview.json",
+    }
+    if any(payload.get(name) != value for name, value in expected_literals.items()):
+        raise SparseReviewError("Sparse-review checkpoint identity is invalid")
+    created_at = payload.get("created_at")
+    if not isinstance(created_at, str):
+        raise SparseReviewError("Sparse-review checkpoint timestamp is invalid")
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise SparseReviewError("Sparse-review checkpoint timestamp is invalid") from error
+    if created.tzinfo is None or created.utcoffset() is None:
+        raise SparseReviewError("Sparse-review checkpoint timestamp must include a timezone")
+    continuation = payload.get("continuation")
+    if not isinstance(continuation, dict) or set(continuation) != {
+        "run_dense", "run_openmvs", "scope_mode", "use_masks"
+    }:
+        raise SparseReviewError("Sparse-review continuation is invalid")
+    if any(type(continuation[name]) is not bool for name in ("run_dense", "run_openmvs", "use_masks")):
+        raise SparseReviewError("Sparse-review continuation flags must be booleans")
+    scope_mode = continuation["scope_mode"]
+    if scope_mode not in {"auto_roi", "unbounded"}:
+        raise SparseReviewError("Sparse-review scope mode is invalid")
+    for relative, expect_directory in (
+        ("sparse/0", True), ("sparse/sparse_points.ply", False), ("sparse/cameras_preview.json", False)
+    ):
+        artifact = scan_root / relative
+        valid = artifact.is_dir() if expect_directory else artifact.is_file()
+        if artifact.is_symlink() or not valid:
+            raise SparseReviewError(f"Sparse-review artifact is missing or unsafe: {artifact}")
+    return SparseReviewCheckpoint(
+        run_dense=continuation["run_dense"],
+        run_openmvs=continuation["run_openmvs"],
+        scope_mode=scope_mode,
+        use_masks=continuation["use_masks"],
+    )
 
 
 def publish_sparse_review_checkpoint(

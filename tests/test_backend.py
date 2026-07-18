@@ -1165,6 +1165,21 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--crop-to-roi") + 1], "0")
         self.assertEqual(densify[densify.index("--roi-border") + 1], "0")
 
+    def test_openmvs_reviewed_region_preserves_unscoped_cloud_and_crops_before_mesh(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-reviewed")
+        roi = scan_dir / "metadata" / "openmvs_region.roi"
+        commands = build_openmvs_commands(scan_dir, OpenMVSConfig(region_path=roi))
+
+        self.assertEqual([command[0] for command in commands], [
+            "InterfaceCOLMAP", "DensifyPointCloud", "DensifyPointCloud",
+            "ReconstructMesh", "TextureMesh",
+        ])
+        self.assertIn(str(scan_dir / "dense" / "scene_dense_unscoped.mvs"), commands[1])
+        self.assertEqual(commands[1][commands[1].index("--crop-to-roi") + 1], "0")
+        self.assertEqual(commands[2][commands[2].index("--crop-roi-file") + 1], str(roi.resolve()))
+        self.assertEqual(commands[3][commands[3].index("--integrate-only-roi") + 1], "1")
+        self.assertEqual(commands[3][commands[3].index("--crop-to-roi") + 1], "1")
+
     def test_openmvs_mask_path_and_black_ignore_label_are_forwarded_to_densification(self) -> None:
         mask_path = Path("/tmp/scanner masks")
         commands = build_openmvs_commands(

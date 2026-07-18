@@ -194,6 +194,7 @@ protocol ReconstructionScopeAccessing {
         scanID: String,
         baseURL: URL
     ) async throws -> ReconstructionRegion
+    func resume(scanID: String, baseURL: URL) async throws -> ReconstructionJob
 }
 
 protocol ReconstructionScopeTransport {
@@ -296,6 +297,26 @@ struct HTTPReconstructionScopeClient: ReconstructionScopeAccessing {
         return try Self.decode(data, expectedScanID: scanID)
     }
 
+    func resume(scanID: String, baseURL: URL) async throws -> ReconstructionJob {
+        let endpoint = try Self.scopeURL(scanID: scanID, baseURL: baseURL)
+            .deletingLastPathComponent()
+            .appendingPathComponent("resume", isDirectory: false)
+        var request = Self.request(endpoint: endpoint)
+        request.httpMethod = "POST"
+        let (data, response) = try await transport.data(for: request)
+        guard let response = response as? HTTPURLResponse else {
+            throw ReconstructionScopeClientError.invalidResponse
+        }
+        guard (200...299).contains(response.statusCode) else {
+            throw ReconstructionScopeClientError.httpStatus(response.statusCode)
+        }
+        guard let job = try? JSONDecoder().decode(ReconstructionJob.self, from: data),
+              job.scanID == scanID else {
+            throw ReconstructionScopeClientError.invalidPayload
+        }
+        return job
+    }
+
     private static func request(endpoint: URL) -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -336,6 +357,7 @@ final class ReconstructionScopeStore: ObservableObject {
     @Published private(set) var savedRegion: ReconstructionRegion?
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
+    @Published private(set) var isResuming = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var confirmationMessage: String?
 
@@ -388,6 +410,26 @@ final class ReconstructionScopeStore: ObservableObject {
     func clearMessages() {
         errorMessage = nil
         confirmationMessage = nil
+    }
+
+    @discardableResult
+    func resume(scanID: String, baseURLString: String) async -> Bool {
+        guard let baseURL = Self.baseURL(from: baseURLString) else {
+            errorMessage = ReconstructionJobClientError.invalidBaseURL.localizedDescription
+            return false
+        }
+        isResuming = true
+        errorMessage = nil
+        confirmationMessage = nil
+        defer { isResuming = false }
+        do {
+            _ = try await client.resume(scanID: scanID, baseURL: baseURL)
+            confirmationMessage = "Dense reconstruction resumed."
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     private static func baseURL(from value: String) -> URL? {

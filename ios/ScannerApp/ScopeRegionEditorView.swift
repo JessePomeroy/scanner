@@ -90,13 +90,13 @@ struct ScopeRegionEditorView: View {
                         Button {
                             save()
                         } label: {
-                            if scopeStore.isSaving {
+                            if scopeStore.isSaving || scopeStore.isResuming {
                                 ProgressView()
                             } else {
-                                Text("Save Region")
+                                Text("Save & Continue")
                             }
                         }
-                        .disabled(draft == nil || scopeStore.isSaving)
+                        .disabled(draft == nil || scopeStore.isSaving || scopeStore.isResuming)
                     }
                 }
         }
@@ -352,11 +352,15 @@ struct ScopeRegionEditorView: View {
         guard let draft,
               let region = try? draft.region(revision: nextRevision) else { return }
         Task {
-            _ = await scopeStore.save(
+            let saved = await scopeStore.save(
                 region,
                 scanID: scanID,
                 baseURLString: baseURLString
             )
+            if saved,
+               await scopeStore.resume(scanID: scanID, baseURLString: baseURLString) {
+                onDone()
+            }
         }
     }
 
