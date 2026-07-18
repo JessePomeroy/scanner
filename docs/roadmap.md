@@ -178,7 +178,7 @@ Implement the following as independently reviewable slices:
 3. Add safety dilation, confidence checks, and sampled review.
    Status: backend safety dilation, area/centroid continuity gates, five
    source-image overlays, and atomic approve/reject promotion implemented;
-   native iPhone review controls remain.
+   native iPhone sample review and approve/reject controls implemented.
    - Preview at least the first, quartile, middle, three-quarter, and last mask.
    - Flag abrupt area/centroid changes and require correction before upload.
 4. Add stage-specific mask profiles.

@@ -47,6 +47,8 @@ Current entry points:
 - `verify_reconstruction_scope_client.swift`: verify oriented-box encoding,
   safe scope endpoint construction, missing-scope handling, saves, and stale
   revision errors in the iPhone client.
+- `verify_mask_review_client.swift`: verify bounded mask-review evidence,
+  quality-count validation, safe endpoints, and approve/reject job responses.
 
 Initialize the official benchmark evidence record before running any Linux
 reconstruction command:
@@ -147,4 +149,15 @@ xcrun swiftc -warnings-as-errors -parse-as-library \
   scripts/verify_reconstruction_scope_client.swift \
   -o /tmp/verify_reconstruction_scope_client
 /tmp/verify_reconstruction_scope_client
+```
+
+Run the mask review client verifier from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors -parse-as-library \
+  ios/ScannerApp/ReconstructionJobClient.swift \
+  ios/ScannerApp/MaskReviewClient.swift \
+  scripts/verify_mask_review_client.swift \
+  -o /tmp/verify_mask_review_client
+/tmp/verify_mask_review_client
 ```
