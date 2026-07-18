@@ -185,7 +185,9 @@ saved, writes lossless mask data as
 image references and overwrites, and includes those files in the streamed ZIP.
 The iOS target includes a deterministic polygon rasterizer that validates
 normalized keep polygons and emits full-resolution, 8-bit grayscale PNG masks.
-The capture UI does not invoke the rasterizer yet.
+The capture UI can draw, clear, cancel, and confirm a normalized keep polygon
+over the live camera preview. Passing the confirmed polygon into capture and
+mask packaging remains a separate integration step.
 
 ### Backend Validation
 

@@ -3,6 +3,9 @@ import SwiftUI
 struct ScanView: View {
     @StateObject private var scanManager = ScanCaptureManager()
     @State private var shareURL: URL?
+    @State private var reconstructionPolygon: [NormalizedMaskPoint] = []
+    @State private var polygonBeforeEditing: [NormalizedMaskPoint] = []
+    @State private var isEditingReconstructionArea = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -11,14 +14,26 @@ struct ScanView: View {
             }
                 .ignoresSafeArea()
 
-            VStack(spacing: 12) {
-                modeControls
-                statusBar
-                exportSummaryPanel
-                controls
+            if isEditingReconstructionArea {
+                CaptureMaskEditorView(
+                    polygon: $reconstructionPolygon,
+                    onCancel: cancelReconstructionAreaEditing,
+                    onConfirm: { isEditingReconstructionArea = false }
+                )
+                .ignoresSafeArea()
+                .zIndex(1)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+
+            if !isEditingReconstructionArea {
+                VStack(spacing: 12) {
+                    modeControls
+                    statusBar
+                    exportSummaryPanel
+                    controls
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+            }
         }
         .sheet(
             isPresented: Binding(
@@ -232,6 +247,16 @@ struct ScanView: View {
                 .pickerStyle(.segmented)
                 .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
             }
+
+            Button(action: beginReconstructionAreaEditing) {
+                Label(
+                    reconstructionPolygon.isEmpty ? "Limit Reconstruction Area" : "Reconstruction Area Set",
+                    systemImage: reconstructionPolygon.isEmpty ? "square.dashed" : "checkmark.square.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
         }
         .padding(10)
         .background(.ultraThinMaterial)
@@ -315,6 +340,16 @@ struct ScanView: View {
         } catch {
             scanManager.fail(error)
         }
+    }
+
+    private func beginReconstructionAreaEditing() {
+        polygonBeforeEditing = reconstructionPolygon
+        isEditingReconstructionArea = true
+    }
+
+    private func cancelReconstructionAreaEditing() {
+        reconstructionPolygon = polygonBeforeEditing
+        isEditingReconstructionArea = false
     }
 }
 
