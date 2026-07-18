@@ -36,6 +36,18 @@ struct VerifyScanZipWriter {
             in: scanDirectory
         )
         assert(maskURL.lastPathComponent == "frame_000001.jpg.png")
+        do {
+            _ = try writer.saveCaptureMask(
+                maskData + Data([0x02]),
+                forImagePath: "images/frame_000001.jpg",
+                in: scanDirectory
+            )
+            assertionFailure("Expected an existing capture mask to reject overwrite")
+        } catch ScanPackageWriterError.captureMaskAlreadyExists(let existingURL) {
+            assert(existingURL == maskURL)
+        }
+        let storedMaskData = try Data(contentsOf: maskURL)
+        assert(storedMaskData == maskData)
 
         var largeData = Data()
         for index in 0..<(2 * 1024 * 1024 + 17) {
