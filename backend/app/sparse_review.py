@@ -57,6 +57,15 @@ def load_sparse_review_checkpoint(scan_root: Path) -> SparseReviewCheckpoint:
     }
     if any(payload.get(name) != value for name, value in expected_literals.items()):
         raise SparseReviewError("Sparse-review checkpoint identity is invalid")
+    created_at = payload.get("created_at")
+    if not isinstance(created_at, str):
+        raise SparseReviewError("Sparse-review checkpoint timestamp is invalid")
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise SparseReviewError("Sparse-review checkpoint timestamp is invalid") from error
+    if created.tzinfo is None or created.utcoffset() is None:
+        raise SparseReviewError("Sparse-review checkpoint timestamp must include a timezone")
     continuation = payload.get("continuation")
     if not isinstance(continuation, dict) or set(continuation) != {
         "run_dense", "run_openmvs", "scope_mode", "use_masks"

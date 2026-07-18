@@ -112,6 +112,10 @@ def record_region_application(
 ) -> Path:
     path = scan_root.resolve() / "metadata" / "reconstruction_region_application.json"
     removed = unscoped_point_count - scoped_verification.point_count
+    if unscoped_point_count < 1 or removed < 0:
+        raise ReconstructionRegionApplicationError(
+            "Scoped reconstruction point counts are inconsistent"
+        )
     payload = {
         "schema_version": "1.0",
         "method": "openmvs_oriented_box",
@@ -144,6 +148,10 @@ _SCALARS = {
     "short": "h", "int16": "h", "ushort": "H", "uint16": "H",
     "int": "i", "int32": "i", "uint": "I", "uint32": "I",
     "float": "f", "float32": "f", "double": "d", "float64": "d",
+}
+_INTEGER_SCALARS = {
+    "char", "int8", "uchar", "uint8", "short", "int16", "ushort", "uint16",
+    "int", "int32", "uint", "uint32",
 }
 
 
@@ -198,7 +206,10 @@ def _parse_ply_header(lines: list[str], path: Path):
         elif parts[0] == "property" and elements:
             prop = tuple(parts[1:])
             if (len(prop) == 2 and prop[0] in _SCALARS) or (
-                len(prop) == 4 and prop[0] == "list" and prop[1] in _SCALARS and prop[2] in _SCALARS
+                len(prop) == 4
+                and prop[0] == "list"
+                and prop[1] in _INTEGER_SCALARS
+                and prop[2] in _SCALARS
             ):
                 elements[-1][2].append(prop)
             else:
@@ -227,6 +238,8 @@ def _iter_ascii_elements(file: BinaryIO, elements, path: Path):
                         cursor += 1
                     else:
                         size = int(tokens[cursor])
+                        if size < 0 or size > 1_000_000:
+                            raise ValueError
                         cursor += 1 + size
                         values.append(None)
                 if cursor != len(tokens):

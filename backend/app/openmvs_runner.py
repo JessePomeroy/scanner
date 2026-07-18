@@ -229,9 +229,8 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
         # workspace. Every later OpenMVS command must resolve those paths from
         # the same directory rather than from the backend process directory.
         run_command(command, cwd=dense_dir)
-        if command[0] == config.densify_point_cloud and (
-            config.region_path is None or (dense_dir / "scene_dense.ply").is_file()
-        ):
+        completed_densify = config.region_path is None or "--crop-roi-file" in command
+        if command[0] == config.densify_point_cloud and completed_densify:
             inspect_openmvs_dense_cloud(scan_dir, config)
 
     return dense_dir / "scene_textured.obj"
