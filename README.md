@@ -132,8 +132,8 @@ curl -F "file=@scan.zip" \
 
 The job remains in the `awaiting_scope` stage and publishes its sparse PLY,
 registered-camera JSON, and continuation checkpoint as downloadable artifacts.
-The iPhone uploader does not enable this option until the region editor and
-resume endpoint are implemented.
+The iPhone uploader enables this flow by default. In Jobs, open the sparse PLY,
+adjust the cyan box, then tap **Save & Continue**.
 
 Store the first reviewed region as revision `1`; later edits must advance by
 exactly one revision:
@@ -154,8 +154,10 @@ curl -X PUT "http://localhost:8000/scans/SCAN_ID/scope" \
 ```
 
 Read the current selection with `GET /scans/SCAN_ID/scope`. Conflicting or
-skipped revisions return HTTP 409. Reconstruction cannot resume yet because the
-saved region must be applied and verified first.
+skipped revisions return HTTP 409. Resume the saved checkpoint with
+`POST /scans/SCAN_ID/resume`. The backend preserves the unscoped dense cloud,
+uses the reviewed oriented box for OpenMVS cropping and meshing, and verifies
+that both the scoped cloud and mesh lie inside the selected region.
 
 For the dual-boot RTX 3070 PC, boot into CachyOS before reconstruction.
 Keep active workspaces on the Linux filesystem rather than an NTFS/shared

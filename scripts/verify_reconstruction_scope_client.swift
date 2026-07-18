@@ -102,6 +102,26 @@ private enum ReconstructionScopeClientVerifier {
             revised.contains(x: 1, y: 3.9, z: 3),
             "Oriented-box inclusion did not account for rotation"
         )
+
+        let resumeCapture = RequestCapture()
+        let resumeClient = HTTPReconstructionScopeClient(
+            transport: StubTransport { request in
+                resumeCapture.requests.append(request)
+                let data = Data(
+                    """
+                    {"scan_id":"scan-123","status":"processing","stage":"reconstructing","outputs":{}}
+                    """.utf8
+                )
+                return (data, response(url: request.url!, status: 200))
+            }
+        )
+        let resumed = try await resumeClient.resume(scanID: scanID, baseURL: baseURL)
+        try require(resumed.scanID == scanID, "Resume decoded the wrong job")
+        try require(resumeCapture.requests[0].httpMethod == "POST", "Resume did not use POST")
+        try require(
+            resumeCapture.requests[0].url?.absoluteString == "https://scanner.example/api/scans/scan-123/resume",
+            "Resume URL was incorrect"
+        )
         try require(
             !revised.contains(x: 4.1, y: 2, z: 3),
             "Oriented-box inclusion accepted an excluded point"

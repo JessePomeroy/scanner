@@ -95,6 +95,7 @@ struct HTTPScanUploadClient: ScanUploading {
             URLQueryItem(name: "run_dense", value: "true"),
             URLQueryItem(name: "run_openmvs", value: "true"),
             URLQueryItem(name: "scope_mode", value: "auto_roi"),
+            URLQueryItem(name: "review_scope", value: "true"),
         ]
         guard let endpoint = endpointComponents.url else {
             throw ReconstructionJobClientError.invalidBaseURL

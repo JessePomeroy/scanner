@@ -140,7 +140,7 @@ Implement the following as independently reviewable slices:
      version, coordinate system, and source.
    - Keep the contract usable by the backend, iPhone Jobs UI, reports, and
      future web review without depending on OpenMVS serialization details.
-2. Add a resumable sparse-alignment checkpoint. Status: backend foundation implemented.
+2. Add a resumable sparse-alignment checkpoint. Status: implemented.
    - Publish registered cameras and a bounded sparse point-cloud preview.
    - Pause before dense processing when region review is requested.
    - Resume without repeating feature extraction, matching, or mapping.
@@ -153,10 +153,12 @@ Implement the following as independently reviewable slices:
    - Move, rotate, and resize an oriented 3D box.
    - Show included/excluded sparse points and registered camera coverage.
    - Allow returning to capture when the preview reveals missing coverage.
-5. Apply and verify the region before expensive dense/mesh work.
+5. Apply and verify the region before expensive dense/mesh work. Status: implemented.
    - Prefer a native OpenMVS ROI when the pinned build supports the required
      representation; otherwise use a validated bounded post-dense crop.
    - Preserve diagnostic unscoped artifacts and report reduction statistics.
+   - The iPhone now requests review by default and resumes dense work with one
+     **Save & Continue** action after the region revision is stored.
 
 ### Track B: Propagated per-frame masks
 

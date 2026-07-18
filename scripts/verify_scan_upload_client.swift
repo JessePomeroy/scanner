@@ -56,6 +56,7 @@ struct VerifyScanUploadClient {
             try require(query["run_dense"] == "true", "Expected dense reconstruction request")
             try require(query["run_openmvs"] == "true", "Expected OpenMVS request")
             try require(query["scope_mode"] == "auto_roi", "Expected automatic ROI scope request")
+            try require(query["review_scope"] == "true", "Expected sparse scope-review pause")
 
             let body = try Data(contentsOf: bodyURL)
             let contentType = request.value(forHTTPHeaderField: "Content-Type") ?? ""

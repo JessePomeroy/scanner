@@ -1,8 +1,8 @@
 # Reconstruction Region Contract
 
-Status: backend contract, durable sparse-review checkpoint, revision-safe
-region API, and iPhone sparse-preview editor implemented; reconstruction
-application and verified resume remain the next slice.
+Status: implemented end to end, including the durable sparse-review checkpoint,
+revision-safe API, iPhone editor, native OpenMVS application, output
+verification, and resume without repeating sparse alignment.
 
 This contract records a user-reviewed 3D region after COLMAP sparse alignment.
 It is deliberately independent of the iPhone UI and OpenMVS file format so the
@@ -39,9 +39,18 @@ shapes require a new schema version or an explicitly compatible extension.
 
 Implementation: [`backend/app/reconstruction_region.py`](../backend/app/reconstruction_region.py)
 
-## Next integration slice
+## Reconstruction application
 
-Apply the saved oriented box during reconstruction and verify the resulting
-geometry is bounded by that region. Resume remains intentionally unavailable
-until reconstruction can prove it used the saved region rather than silently
-ignoring it.
+`POST /scans/{scan_id}/resume` claims an `awaiting_scope` checkpoint exactly
+once, reuses its sparse model, and continues with dense reconstruction. The
+backend converts the local-to-world quaternion above into OpenMVS's
+world-to-local OBB matrix, preserves `scene_dense_unscoped.ply`, creates the
+scoped dense cloud before meshing, and asks OpenMVS to integrate and crop only
+the reviewed ROI. It then streams every scoped dense and mesh vertex through
+the same oriented-box test. Any outside vertex fails the job rather than
+publishing a silently unscoped result.
+
+The application sidecar at
+`metadata/reconstruction_region_application.json` records the exact region
+revision, unscoped/scoped point counts, removed count, retained ratio, mesh
+vertex count, and zero-outside verification result.
