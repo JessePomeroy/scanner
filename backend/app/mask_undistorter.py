@@ -24,6 +24,13 @@ class ColmapCamera:
     params: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class MaskCameraAssociation:
+    image_name: str
+    source: ColmapCamera
+    target: ColmapCamera
+
+
 def parse_colmap_cameras(path: Path) -> dict[int, ColmapCamera]:
     """Parse COLMAP cameras.txt without reading any reconstruction payloads."""
     cameras: dict[int, ColmapCamera] = {}
@@ -56,6 +63,76 @@ def parse_colmap_cameras(path: Path) -> dict[int, ColmapCamera]:
     if not cameras:
         raise MaskUndistortionError(f"No cameras found in {path}")
     return cameras
+
+
+def parse_colmap_image_cameras(path: Path) -> dict[str, int]:
+    """Parse image-name to camera-id associations from COLMAP images.txt."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise MaskUndistortionError(f"Unable to read COLMAP images: {path}") from error
+    records: dict[str, int] = {}
+    expect_image_record = True
+    for line_number, raw in enumerate(lines, start=1):
+        line = raw.strip()
+        if line.startswith("#"):
+            continue
+        if not expect_image_record:
+            point_values = line.split()
+            if len(point_values) % 3 != 0:
+                raise MaskUndistortionError(f"Invalid POINTS2D record at {path}:{line_number}")
+            try:
+                for index in range(0, len(point_values), 3):
+                    float(point_values[index])
+                    float(point_values[index + 1])
+                    int(point_values[index + 2])
+            except ValueError as error:
+                raise MaskUndistortionError(f"Invalid POINTS2D value at {path}:{line_number}") from error
+            expect_image_record = True
+            continue
+        if not line:
+            continue
+        parts = line.split(maxsplit=9)
+        if len(parts) != 10:
+            raise MaskUndistortionError(f"Invalid image record at {path}:{line_number}")
+        try:
+            int(parts[0])
+            camera_id = int(parts[8])
+        except ValueError as error:
+            raise MaskUndistortionError(f"Invalid image value at {path}:{line_number}") from error
+        name = parts[9]
+        if not name or name in records:
+            raise MaskUndistortionError(f"Empty or duplicate image name at {path}:{line_number}")
+        records[name] = camera_id
+        expect_image_record = False
+    if not records:
+        raise MaskUndistortionError(f"No images found in {path}")
+    if not expect_image_record:
+        raise MaskUndistortionError(f"Image record has no POINTS2D line in {path}")
+    return records
+
+
+def associate_mask_cameras(
+    source_cameras: dict[int, ColmapCamera],
+    source_images: dict[str, int],
+    target_cameras: dict[int, ColmapCamera],
+    target_images: dict[str, int],
+) -> dict[str, MaskCameraAssociation]:
+    """Pair original and dense cameras for every identically named image."""
+    if source_images.keys() != target_images.keys():
+        missing = sorted(source_images.keys() - target_images.keys())
+        extra = sorted(target_images.keys() - source_images.keys())
+        raise MaskUndistortionError(f"COLMAP image association mismatch; missing={missing}, extra={extra}")
+    associations: dict[str, MaskCameraAssociation] = {}
+    for name, source_camera_id in source_images.items():
+        target_camera_id = target_images[name]
+        try:
+            source = source_cameras[source_camera_id]
+            target = target_cameras[target_camera_id]
+        except KeyError as error:
+            raise MaskUndistortionError(f"Image {name} references an unknown camera id") from error
+        associations[name] = MaskCameraAssociation(name, source, target)
+    return associations
 
 
 def undistort_mask_array(

@@ -52,8 +52,11 @@ from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
 from app.mask_processor import MaskValidationError, validate_openmvs_masks  # noqa: E402
 from app.mask_undistorter import (  # noqa: E402
     ColmapCamera,
+    MaskCameraAssociation,
     MaskUndistortionError,
     parse_colmap_cameras,
+    parse_colmap_image_cameras,
+    associate_mask_cameras,
     undistort_mask_array,
     undistort_mask_file,
 )
@@ -1229,6 +1232,39 @@ class BackendTests(unittest.TestCase):
             path.write_text("1 SIMPLE_RADIAL 10 10 nan 5 5 0\n")
             with self.assertRaises(MaskUndistortionError):
                 parse_colmap_cameras(path)
+
+    def test_parse_colmap_images_and_associate_original_dense_cameras(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "images.txt"
+            path.write_text(
+                "# images\n1 1 0 0 0 0 0 0 7 frame_000001.jpg\n\n"
+                "2 1 0 0 0 0 0 0 7 frame_000002.jpg\n10 20 -1\n"
+            )
+            images = parse_colmap_image_cameras(path)
+        source = {7: ColmapCamera(7, "SIMPLE_RADIAL", 5, 5, (2, 2, 2, 0))}
+        target = {9: ColmapCamera(9, "PINHOLE", 3, 3, (2, 2, 1, 1))}
+        associations = associate_mask_cameras(source, images, target, {name: 9 for name in images})
+
+        self.assertEqual(images["frame_000001.jpg"], 7)
+        self.assertIsInstance(associations["frame_000002.jpg"], MaskCameraAssociation)
+        self.assertEqual(associations["frame_000002.jpg"].target.camera_id, 9)
+
+    def test_associate_mask_cameras_rejects_name_or_camera_mismatch(self) -> None:
+        camera = ColmapCamera(1, "SIMPLE_RADIAL", 5, 5, (2, 2, 2, 0))
+        with self.assertRaises(MaskUndistortionError):
+            associate_mask_cameras({1: camera}, {"a.jpg": 1}, {1: camera}, {"b.jpg": 1})
+        with self.assertRaises(MaskUndistortionError):
+            associate_mask_cameras({1: camera}, {"a.jpg": 2}, {1: camera}, {"a.jpg": 1})
+
+    def test_parse_colmap_images_rejects_missing_points_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "images.txt"
+            path.write_text(
+                "1 1 0 0 0 0 0 0 7 first.jpg\n"
+                "2 1 0 0 0 0 0 0 7 second.jpg\n\n"
+            )
+            with self.assertRaises(MaskUndistortionError):
+                parse_colmap_image_cameras(path)
 
     def test_undistort_mask_array_uses_nearest_binary_sampling(self) -> None:
         source = ColmapCamera(1, "SIMPLE_RADIAL", 5, 5, (2.0, 2.0, 2.0, 0.0))
