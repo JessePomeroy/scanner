@@ -184,6 +184,7 @@ struct ScanPackageManifest: Codable, Equatable {
     let usesVideo: Bool
     let createdAt: String
     let limitations: [String]
+    var reconstructionScope: ReconstructionScopeManifest? = nil
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -200,6 +201,23 @@ struct ScanPackageManifest: Codable, Equatable {
         case usesVideo = "uses_video"
         case createdAt = "created_at"
         case limitations
+        case reconstructionScope = "reconstruction_scope"
+    }
+}
+
+struct ReconstructionScopeManifest: Codable, Equatable {
+    let schemaVersion: String
+    let mode: String
+    let maskSpace: String
+    let maskConvention: String
+    let maskCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case mode
+        case maskSpace = "mask_space"
+        case maskConvention = "mask_convention"
+        case maskCount = "mask_count"
     }
 }
 
