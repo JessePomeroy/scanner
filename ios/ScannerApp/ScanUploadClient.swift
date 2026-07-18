@@ -83,7 +83,21 @@ struct HTTPScanUploadClient: ScanUploading {
 
     func uploadScan(archiveURL: URL, baseURL: URL) async throws -> ReconstructionJob {
         try Self.validateArchive(archiveURL)
-        let endpoint = try ReconstructionBackendEndpoint.scansURL(baseURL: baseURL)
+        let scansEndpoint = try ReconstructionBackendEndpoint.scansURL(baseURL: baseURL)
+        guard var endpointComponents = URLComponents(
+            url: scansEndpoint,
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw ReconstructionJobClientError.invalidBaseURL
+        }
+        endpointComponents.queryItems = [
+            URLQueryItem(name: "run_reconstruction", value: "true"),
+            URLQueryItem(name: "run_dense", value: "true"),
+            URLQueryItem(name: "run_openmvs", value: "true"),
+        ]
+        guard let endpoint = endpointComponents.url else {
+            throw ReconstructionJobClientError.invalidBaseURL
+        }
         let boundary = "ScannerBoundary-\(UUID().uuidString)"
 
         let multipart: MultipartFormUpload

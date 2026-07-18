@@ -42,7 +42,19 @@ struct VerifyScanUploadClient {
             await capture.record(bodyURL)
             try require(request.httpMethod == "POST", "Expected POST upload")
             try require(request.url?.path == "/api/scans", "Expected nested scans endpoint")
-            try require(request.url?.query == nil, "Expected validation-only default query")
+            guard let requestURL = request.url else {
+                throw ScanUploadVerificationError.assertionFailed("Expected upload URL")
+            }
+            let queryItems = URLComponents(
+                url: requestURL,
+                resolvingAgainstBaseURL: false
+            )?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.compactMap { item in
+                item.value.map { (item.name, $0) }
+            })
+            try require(query["run_reconstruction"] == "true", "Expected reconstruction request")
+            try require(query["run_dense"] == "true", "Expected dense reconstruction request")
+            try require(query["run_openmvs"] == "true", "Expected OpenMVS request")
 
             let body = try Data(contentsOf: bodyURL)
             let contentType = request.value(forHTTPHeaderField: "Content-Type") ?? ""

@@ -162,9 +162,9 @@ removes both the exported `.zip` and the matching extracted scan folder from the
 device.
 
 Tap the cloud-upload button on a row to send that existing ZIP to the backend
-URL configured in the `Jobs` tab. The initial handoff is validation-only: it
-uses `POST /scans` without reconstruction query flags, then decodes the returned
-job. A validated or failed result is shown immediately, and the `Jobs` tab is
+URL configured in the `Jobs` tab. The upload requests CUDA COLMAP dense
+reconstruction and OpenMVS meshing, then decodes the queued job returned by the
+backend. A queued or failed result is shown immediately, and the `Jobs` tab is
 the ongoing status/history surface. Only one gallery upload runs at a time, and
 the uploading ZIP cannot be deleted until the request finishes.
 

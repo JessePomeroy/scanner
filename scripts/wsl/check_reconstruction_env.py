@@ -38,11 +38,11 @@ def main() -> None:
         ),
         check_command("nvcc", ["nvcc", "--version"]),
         check_colmap(),
-        check_command("InterfaceCOLMAP", ["InterfaceCOLMAP", "--help"]),
-        check_command("DensifyPointCloud", ["DensifyPointCloud", "--help"]),
-        check_command("ReconstructMesh", ["ReconstructMesh", "--help"]),
-        check_command("RefineMesh", ["RefineMesh", "--help"]),
-        check_command("TextureMesh", ["TextureMesh", "--help"]),
+        check_openmvs_command("InterfaceCOLMAP"),
+        check_openmvs_command("DensifyPointCloud"),
+        check_openmvs_command("ReconstructMesh"),
+        check_openmvs_command("RefineMesh"),
+        check_openmvs_command("TextureMesh"),
         check_command("blender", ["blender", "--version"]),
         check_command("ns-process-data", ["ns-process-data", "--help"]),
         check_command("ns-train", ["ns-train", "--help"]),
@@ -129,6 +129,14 @@ def check_command(name: str, command: list[str], *, required: bool = True) -> Ch
         else executable
     )
     return CheckResult(name, completed.returncode == 0, first_line)
+
+
+def check_openmvs_command(name: str) -> CheckResult:
+    """Accept OpenMVS's nonzero --help exit when its version banner is present."""
+    result = check_command(name, [name, "--help"])
+    if "OpenMVS" in result.detail:
+        result.ok = True
+    return result
 
 
 def check_colmap() -> CheckResult:

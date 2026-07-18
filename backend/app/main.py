@@ -243,16 +243,17 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
             message="Running COLMAP reconstruction.",
         )
         started_at = perf_counter()
+        colmap_config = ColmapConfig(use_gpu=True)
         colmap_output = run_colmap_pipeline(
             scan_root,
-            ColmapConfig(use_gpu=False),
+            colmap_config,
             include_dense=run_dense,
         )
         package.record_processing_step(
             "colmap",
             {
-                "matcher": ColmapConfig().matcher,
-                "use_gpu": False,
+                "matcher": colmap_config.matcher,
+                "use_gpu": colmap_config.use_gpu,
                 "include_dense": run_dense,
                 "elapsed_seconds": perf_counter() - started_at,
                 "output": str(colmap_output),
