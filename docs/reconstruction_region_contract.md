@@ -1,7 +1,8 @@
 # Reconstruction Region Contract
 
-Status: backend contract implemented; job checkpoint, persistence API, preview
-editor, and OpenMVS application remain future slices.
+Status: backend contract and durable sparse-review checkpoint implemented;
+region persistence API, preview editor, and OpenMVS application remain future
+slices.
 
 This contract records a user-reviewed 3D region after COLMAP sparse alignment.
 It is deliberately independent of the iPhone UI and OpenMVS file format so the
@@ -40,7 +41,7 @@ Implementation: [`backend/app/reconstruction_region.py`](../backend/app/reconstr
 
 ## Next integration slice
 
-After sparse alignment, publish a bounded point-cloud/camera preview and pause
-jobs that request region review. The chosen region can then be stored with a
-revision and applied without repeating feature extraction, matching, or sparse
-mapping.
+Persist a selected region with optimistic revision checks and add the resume
+endpoint. Sparse-review jobs now publish the point-cloud and registered-camera
+artifacts, preserve the continuation settings, and remain at the intentional
+`awaiting_scope` checkpoint across backend restarts.

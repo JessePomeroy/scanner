@@ -122,6 +122,19 @@ Run reconstruction mode when COLMAP is installed:
 curl -F "file=@scan.zip" "http://localhost:8000/scans?run_reconstruction=true"
 ```
 
+To stop after sparse alignment for a future 3D-region review, request the
+durable checkpoint explicitly:
+
+```bash
+curl -F "file=@scan.zip" \
+  "http://localhost:8000/scans?run_reconstruction=true&run_dense=true&run_openmvs=true&review_scope=true"
+```
+
+The job remains in the `awaiting_scope` stage and publishes its sparse PLY,
+registered-camera JSON, and continuation checkpoint as downloadable artifacts.
+The iPhone uploader does not enable this option until the region editor and
+resume endpoint are implemented.
+
 For the dual-boot RTX 3070 PC, boot into CachyOS before reconstruction.
 Keep active workspaces on the Linux filesystem rather than an NTFS/shared
 Windows partition:
