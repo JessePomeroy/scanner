@@ -44,6 +44,9 @@ Current entry points:
 - `verify_ply_point_cloud_loader.swift`: verify bounded ASCII and binary PLY
   parsing, endian/scalar handling, color normalization, sampling, bounds,
   malformed-layout rejection, file mapping, and symlink rejection.
+- `verify_reconstruction_scope_client.swift`: verify oriented-box encoding,
+  safe scope endpoint construction, missing-scope handling, saves, and stale
+  revision errors in the iPhone client.
 
 Initialize the official benchmark evidence record before running any Linux
 reconstruction command:
@@ -123,4 +126,15 @@ xcrun swiftc -warnings-as-errors \
   scripts/verify_ply_point_cloud_loader.swift \
   -o /tmp/verify_ply_point_cloud_loader
 /tmp/verify_ply_point_cloud_loader
+```
+
+Run the reconstruction scope client verifier from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors -parse-as-library \
+  ios/ScannerApp/ReconstructionJobClient.swift \
+  ios/ScannerApp/ReconstructionScopeClient.swift \
+  scripts/verify_reconstruction_scope_client.swift \
+  -o /tmp/verify_reconstruction_scope_client
+/tmp/verify_reconstruction_scope_client
 ```

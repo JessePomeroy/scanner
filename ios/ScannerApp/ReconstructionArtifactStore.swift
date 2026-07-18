@@ -4,6 +4,7 @@ import Foundation
 enum ReconstructionArtifactDownloadDestination: Equatable, Sendable {
     case share
     case pointCloudPreview
+    case scopeEditor
 }
 
 @MainActor
@@ -15,6 +16,7 @@ final class ReconstructionArtifactStore: ObservableObject {
     @Published private(set) var downloadingArtifactID: ReconstructionArtifact.ID?
     @Published private(set) var sharedDownload: DownloadedReconstructionArtifact?
     @Published private(set) var previewedDownload: DownloadedReconstructionArtifact?
+    @Published private(set) var scopeEditorDownload: DownloadedReconstructionArtifact?
 
     private let client: any ReconstructionArtifactAccessing
     private var refreshSequence = 0
@@ -69,7 +71,7 @@ final class ReconstructionArtifactStore: ObservableObject {
         destination: ReconstructionArtifactDownloadDestination = .share
     ) async {
         guard downloadingArtifactID == nil else { return }
-        guard destination != .pointCloudPreview || artifact.supportsPointCloudPreview else {
+        guard destination == .share || artifact.supportsPointCloudPreview else {
             errorMessage = "Only PLY point clouds can be previewed."
             return
         }
@@ -111,6 +113,8 @@ final class ReconstructionArtifactStore: ObservableObject {
                 sharedDownload = download
             case .pointCloudPreview:
                 previewedDownload = download
+            case .scopeEditor:
+                scopeEditorDownload = download
             }
         } catch is CancellationError {
             guard sequence == downloadSequence else { return }
@@ -147,6 +151,14 @@ final class ReconstructionArtifactStore: ObservableObject {
     func dismissPreviewedDownload() {
         guard let download = previewedDownload else { return }
         previewedDownload = nil
+        Task {
+            await client.discardDownloadedArtifact(download)
+        }
+    }
+
+    func dismissScopeEditorDownload() {
+        guard let download = scopeEditorDownload else { return }
+        scopeEditorDownload = nil
         Task {
             await client.discardDownloadedArtifact(download)
         }
@@ -189,9 +201,10 @@ final class ReconstructionArtifactStore: ObservableObject {
     }
 
     private func releasePresentedDownloads() -> [DownloadedReconstructionArtifact] {
-        let downloads = [sharedDownload, previewedDownload].compactMap { $0 }
+        let downloads = [sharedDownload, previewedDownload, scopeEditorDownload].compactMap { $0 }
         sharedDownload = nil
         previewedDownload = nil
+        scopeEditorDownload = nil
         return downloads
     }
 }

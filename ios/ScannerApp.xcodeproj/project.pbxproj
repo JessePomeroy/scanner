@@ -34,6 +34,8 @@
 		A22C00000000000000000011 /* CaptureMaskRasterizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22C00000000000000000001 /* CaptureMaskRasterizer.swift */; };
 		A23C00000000000000000011 /* CaptureMaskEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23C00000000000000000001 /* CaptureMaskEditorView.swift */; };
 		A24C00000000000000000011 /* CaptureMaskCoordinateMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */; };
+		A25C00000000000000000011 /* ReconstructionScopeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25C00000000000000000001 /* ReconstructionScopeClient.swift */; };
+		A25C00000000000000000012 /* ScopeRegionEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25C00000000000000000002 /* ScopeRegionEditorView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -66,6 +68,8 @@
 		A22C00000000000000000001 /* CaptureMaskRasterizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskRasterizer.swift; sourceTree = "<group>"; };
 		A23C00000000000000000001 /* CaptureMaskEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskEditorView.swift; sourceTree = "<group>"; };
 		A24C00000000000000000001 /* CaptureMaskCoordinateMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMaskCoordinateMapper.swift; sourceTree = "<group>"; };
+		A25C00000000000000000001 /* ReconstructionScopeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReconstructionScopeClient.swift; sourceTree = "<group>"; };
+		A25C00000000000000000002 /* ScopeRegionEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScopeRegionEditorView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -111,6 +115,8 @@
 				A20C00000000000000000002 /* ReconstructionArtifactStore.swift */,
 				A21C00000000000000000001 /* PLYPointCloudLoader.swift */,
 				A21C00000000000000000002 /* PointCloudPreviewView.swift */,
+				A25C00000000000000000001 /* ReconstructionScopeClient.swift */,
+				A25C00000000000000000002 /* ScopeRegionEditorView.swift */,
 				9E9E00CDB1AD45C0ADF14734 /* ARSessionView.swift */,
 				47A171A1C63A4CE6A6E6E3A5 /* ScanCaptureManager.swift */,
 				44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */,
@@ -200,6 +206,8 @@
 				A20C00000000000000000012 /* ReconstructionArtifactStore.swift in Sources */,
 				A21C00000000000000000011 /* PLYPointCloudLoader.swift in Sources */,
 				A21C00000000000000000012 /* PointCloudPreviewView.swift in Sources */,
+				A25C00000000000000000011 /* ReconstructionScopeClient.swift in Sources */,
+				A25C00000000000000000012 /* ScopeRegionEditorView.swift in Sources */,
 				E82260E9C3CC44FE87B3767D /* ARSessionView.swift in Sources */,
 				8FC8547323AA42859CA9B9E5 /* ScanCaptureManager.swift in Sources */,
 				F08270898A2D43E8AD613035 /* ARTrackingManager.swift in Sources */,
