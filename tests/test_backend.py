@@ -484,6 +484,82 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(package.validation.mask_authoring, authoring)
         self.assertEqual(generated_manifest["mask_authoring"], authoring)
 
+    def test_validate_scan_package_accepts_complete_inactive_mask_proposals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            authoring = {
+                "schema_version": "1.0",
+                "authoring_mode": "representative_frames",
+                "coordinate_space": "normalized_capture_image",
+                "mask_convention": "white_keep_black_exclude",
+                "revision": 1,
+                "representative_frames": [{
+                    "frame_id": 1,
+                    "image": "images/frame_000001.jpg",
+                    "regions": [{
+                        "operation": "keep",
+                        "points": [
+                            {"x": 0.1, "y": 0.1}, {"x": 0.9, "y": 0.1},
+                            {"x": 0.9, "y": 0.9},
+                        ],
+                    }],
+                }],
+            }
+            (scan_dir / "metadata" / "mask_authoring.json").write_text(json.dumps(authoring))
+            proposed = scan_dir / "masks" / "proposed"
+            proposed.mkdir(parents=True)
+            (proposed / "frame_000001.jpg.png").write_bytes(_grayscale_png(1920, 1080))
+
+            report = validate_scan_package(scan_dir)
+
+        self.assertEqual(report.capture_mask_count, 0)
+        self.assertIsNone(report.reconstruction_scope)
+
+    def test_validate_scan_package_rejects_proposals_without_authoring(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            proposed = scan_dir / "masks" / "proposed"
+            proposed.mkdir(parents=True)
+            (proposed / "frame_000001.jpg.png").write_bytes(_grayscale_png(1920, 1080))
+
+            with self.assertRaisesRegex(
+                ScanValidationError,
+                "masks directory requires reconstruction_scope metadata",
+            ):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_inactive_capture_masks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            authoring = {
+                "schema_version": "1.0",
+                "authoring_mode": "representative_frames",
+                "coordinate_space": "normalized_capture_image",
+                "mask_convention": "white_keep_black_exclude",
+                "revision": 1,
+                "representative_frames": [{
+                    "frame_id": 1,
+                    "image": "images/frame_000001.jpg",
+                    "regions": [{
+                        "operation": "keep",
+                        "points": [
+                            {"x": 0.1, "y": 0.1}, {"x": 0.9, "y": 0.1},
+                            {"x": 0.9, "y": 0.9},
+                        ],
+                    }],
+                }],
+            }
+            (scan_dir / "metadata" / "mask_authoring.json").write_text(json.dumps(authoring))
+            capture = scan_dir / "masks" / "capture"
+            capture.mkdir(parents=True)
+            (capture / "frame_000001.jpg.png").write_bytes(_grayscale_png(1920, 1080))
+
+            with self.assertRaisesRegex(
+                ScanValidationError,
+                "masks contains an unsupported directory or file",
+            ):
+                validate_scan_package(scan_dir)
+
     def test_validate_scan_package_rejects_corrupt_capture_mask_pixel_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
