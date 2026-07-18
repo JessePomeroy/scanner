@@ -32,6 +32,7 @@ from app.openmvs_runner import (
     OpenMVSScopeMode,
     inspect_openmvs_dense_cloud,
     run_openmvs_pipeline,
+    validate_openmvs_config_masks,
 )
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
@@ -89,6 +90,7 @@ async def upload_scan(
     run_dense: bool = Query(False),
     run_openmvs: bool = Query(False),
     scope_mode: OpenMVSScopeMode = Query("auto_roi"),
+    use_masks: bool = Query(False),
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
     scan_id = str(uuid.uuid4())
@@ -116,6 +118,7 @@ async def upload_scan(
             run_dense,
             run_openmvs,
             scope_mode,
+            use_masks,
         )
         return jobs.update(
             scan_id,
@@ -235,6 +238,7 @@ def process_scan(
     run_dense: bool,
     run_openmvs: bool,
     scope_mode: OpenMVSScopeMode = "auto_roi",
+    use_masks: bool = False,
 ) -> None:
     processing_dir: Path | None = None
     try:
@@ -285,9 +289,13 @@ def process_scan(
                 message="Running OpenMVS mesh reconstruction.",
             )
             started_at = perf_counter()
-            openmvs_config = OpenMVSConfig(scope_mode=scope_mode)
+            openmvs_config = OpenMVSConfig(
+                scope_mode=scope_mode,
+                mask_path=scan_root / "dense" / "masks" if use_masks else None,
+            )
             textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
             density_budget = inspect_openmvs_dense_cloud(scan_root, openmvs_config)
+            mask_validation = validate_openmvs_config_masks(scan_root, openmvs_config)
             package.record_processing_step(
                 "openmvs",
                 {
@@ -295,6 +303,9 @@ def process_scan(
                     "output": str(textured_mesh),
                     "settings": openmvs_config.report_settings(),
                     "density_budget": density_budget.as_dict(),
+                    "mask_validation": (
+                        mask_validation.as_dict() if mask_validation is not None else None
+                    ),
                 },
             )
             outputs["openmvs_dense_point_cloud"] = str(
