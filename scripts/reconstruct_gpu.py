@@ -39,6 +39,12 @@ def main() -> None:
     parser.add_argument("--matcher", default="exhaustive_matcher")
     parser.add_argument("--skip-dense", action="store_true")
     parser.add_argument("--skip-openmvs", action="store_true")
+    parser.add_argument(
+        "--scope-mode",
+        choices=("auto_roi", "unbounded"),
+        default="auto_roi",
+        help="Limit OpenMVS densification to its estimated ROI or retain the full scene.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print and report commands without executing them.")
     args = parser.parse_args()
 
@@ -81,7 +87,7 @@ def main() -> None:
     if not args.skip_dense:
         commands.extend(build_colmap_dense_commands(scan_root, colmap_config))
 
-    openmvs_config = OpenMVSConfig()
+    openmvs_config = OpenMVSConfig(scope_mode=args.scope_mode)
     if not args.skip_openmvs:
         commands.extend(build_openmvs_commands(scan_root, openmvs_config))
 

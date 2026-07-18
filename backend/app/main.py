@@ -27,7 +27,7 @@ from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobStore
-from app.openmvs_runner import OpenMVSConfig, run_openmvs_pipeline
+from app.openmvs_runner import OpenMVSConfig, OpenMVSScopeMode, run_openmvs_pipeline
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
     ScanValidationError,
@@ -83,6 +83,7 @@ async def upload_scan(
     run_reconstruction: bool = Query(False),
     run_dense: bool = Query(False),
     run_openmvs: bool = Query(False),
+    scope_mode: OpenMVSScopeMode = Query("auto_roi"),
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
     scan_id = str(uuid.uuid4())
@@ -109,6 +110,7 @@ async def upload_scan(
             incoming_zip,
             run_dense,
             run_openmvs,
+            scope_mode,
         )
         return jobs.update(
             scan_id,
@@ -222,7 +224,13 @@ def _stream_artifact(file: BinaryIO, chunk_size: int = 1024 * 1024) -> Iterator[
         file.close()
 
 
-def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs: bool) -> None:
+def process_scan(
+    scan_id: str,
+    incoming_zip: Path,
+    run_dense: bool,
+    run_openmvs: bool,
+    scope_mode: OpenMVSScopeMode = "auto_roi",
+) -> None:
     processing_dir: Path | None = None
     try:
         jobs.update(
@@ -272,7 +280,7 @@ def process_scan(scan_id: str, incoming_zip: Path, run_dense: bool, run_openmvs:
                 message="Running OpenMVS mesh reconstruction.",
             )
             started_at = perf_counter()
-            openmvs_config = OpenMVSConfig()
+            openmvs_config = OpenMVSConfig(scope_mode=scope_mode)
             textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
             package.record_processing_step(
                 "openmvs",

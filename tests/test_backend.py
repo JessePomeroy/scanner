@@ -1019,6 +1019,13 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(settings["roi_border"], 0)
         self.assertIsNone(settings["mask_path"])
 
+    def test_openmvs_config_accepts_api_scope_modes(self) -> None:
+        self.assertEqual(OpenMVSConfig(scope_mode="auto_roi").scope_mode, "auto_roi")
+        self.assertEqual(OpenMVSConfig(scope_mode="unbounded").scope_mode, "unbounded")
+
+        with self.assertRaises(ValueError):
+            OpenMVSConfig(scope_mode="invalid")  # type: ignore[arg-type]
+
     def test_backend_plan_rejects_openmvs_without_dense_colmap(self) -> None:
         with self.assertRaises(ValueError):
             build_backend_plan(
