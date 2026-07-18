@@ -140,7 +140,7 @@ Implement the following as independently reviewable slices:
      version, coordinate system, and source.
    - Keep the contract usable by the backend, iPhone Jobs UI, reports, and
      future web review without depending on OpenMVS serialization details.
-2. Add a resumable sparse-alignment checkpoint.
+2. Add a resumable sparse-alignment checkpoint. Status: backend foundation implemented.
    - Publish registered cameras and a bounded sparse point-cloud preview.
    - Pause before dense processing when region review is requested.
    - Resume without repeating feature extraction, matching, or mapping.

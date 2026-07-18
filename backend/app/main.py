@@ -42,6 +42,7 @@ from app.scan_validator import (
     find_scan_root,
 )
 from app.schemas import JobRecord, ScanArtifact
+from app.sparse_review import publish_sparse_review_checkpoint
 from app.storage import UnsafeArchiveError, safe_extract_zip
 from app.upload_lifecycle import store_job_upload
 
@@ -93,8 +94,11 @@ async def upload_scan(
     run_openmvs: bool = Query(False),
     scope_mode: OpenMVSScopeMode = Query("auto_roi"),
     use_masks: bool = Query(False),
+    review_scope: bool = Query(False),
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
+    if review_scope and not run_reconstruction:
+        raise HTTPException(status_code=400, detail="Scope review requires reconstruction.")
     scan_id = str(uuid.uuid4())
     jobs.create(scan_id)
     incoming_zip = INCOMING_DIR / f"{scan_id}.zip"
@@ -121,6 +125,7 @@ async def upload_scan(
             run_openmvs,
             scope_mode,
             use_masks,
+            review_scope,
         )
         return jobs.update(
             scan_id,
@@ -177,7 +182,7 @@ def list_scan_artifacts(scan_id: str) -> list[ScanArtifact]:
     try:
         artifacts = list_downloadable_artifacts(
             record.outputs,
-            allowed_package_roots=(COMPLETED_DIR, FAILED_DIR),
+            allowed_package_roots=(PROCESSING_DIR, COMPLETED_DIR, FAILED_DIR),
         )
     except ArtifactUnavailableError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -202,7 +207,7 @@ def download_scan_file(scan_id: str, relative_path: str) -> StreamingResponse:
         opened = open_downloadable_artifact(
             record.outputs,
             relative_path,
-            allowed_package_roots=(COMPLETED_DIR, FAILED_DIR),
+            allowed_package_roots=(PROCESSING_DIR, COMPLETED_DIR, FAILED_DIR),
         )
     except ArtifactUnavailableError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -241,6 +246,7 @@ def process_scan(
     run_openmvs: bool,
     scope_mode: OpenMVSScopeMode = "auto_roi",
     use_masks: bool = False,
+    review_scope: bool = False,
 ) -> None:
     processing_dir: Path | None = None
     try:
@@ -266,14 +272,15 @@ def process_scan(
         colmap_output = run_colmap_pipeline(
             scan_root,
             colmap_config,
-            include_dense=run_dense,
+            include_dense=run_dense and not review_scope,
         )
         package.record_processing_step(
             "colmap",
             {
                 "matcher": colmap_config.matcher,
                 "use_gpu": colmap_config.use_gpu,
-                "include_dense": run_dense,
+                "include_dense": run_dense and not review_scope,
+                "review_scope": review_scope,
                 "elapsed_seconds": perf_counter() - started_at,
                 "output": str(colmap_output),
             },
@@ -282,6 +289,40 @@ def process_scan(
             "colmap_output": str(colmap_output),
             "scan_report": str(package.report_path),
         }
+
+        if review_scope:
+            checkpoint_outputs = publish_sparse_review_checkpoint(
+                scan_root,
+                run_dense=run_dense,
+                run_openmvs=run_openmvs,
+                scope_mode=scope_mode,
+                use_masks=use_masks,
+                colmap_executable=colmap_config.executable,
+            )
+            # Publish the explicit sparse-preview name rather than two output
+            # labels pointing at the same PLY artifact.
+            outputs.pop("colmap_output", None)
+            outputs.update({name: str(path) for name, path in checkpoint_outputs.items()})
+            outputs["package_dir"] = str(processing_dir)
+            package.record_processing_step(
+                "scope_review_checkpoint",
+                {
+                    "state": "awaiting_scope",
+                    "artifacts": {
+                        name: str(path) for name, path in checkpoint_outputs.items()
+                    },
+                },
+            )
+            jobs.update(
+                scan_id,
+                status="processing",
+                stage="awaiting_scope",
+                message="Sparse reconstruction is ready for 3D scope review.",
+                image_count=report.image_count,
+                frame_count=report.frame_count,
+                outputs=outputs,
+            )
+            return
 
         if run_openmvs:
             jobs.update(

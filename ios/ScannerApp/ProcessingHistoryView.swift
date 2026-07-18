@@ -137,6 +137,8 @@ private extension ReconstructionJob {
         switch status {
         case .validated, .complete, .failed:
             return true
+        case .processing where stage == .awaitingScope:
+            return true
         case .received, .processing, .unknown:
             return false
         }
