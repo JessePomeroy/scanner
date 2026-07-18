@@ -146,7 +146,9 @@ under `masks/capture` are checked for safe layout, exact frame association,
 declared count, grayscale PNG format, and frame dimensions. The geometric core
 for conversion parses COLMAP camera text records and implements nearest-neighbor
 `SIMPLE_RADIAL` to `PINHOLE` mapping, matching the current iPhone pipeline.
-Lossless PNG file orchestration and pipeline integration remain future slices.
+Lossless PNG decoding, binary normalization, atomic publication, and no-clobber
+behavior are implemented. Camera/image association and pipeline integration
+remain future slices.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import os
+import tempfile
 
 import numpy as np
 
@@ -93,3 +95,49 @@ def undistort_mask_array(
     output = np.zeros((target.height, target.width), dtype=np.uint8)
     output[valid] = np.where(mask[source_y[valid], source_x[valid]] > 127, 255, 0)
     return output
+
+
+def undistort_mask_file(
+    input_path: Path,
+    output_path: Path,
+    source: ColmapCamera,
+    target: ColmapCamera,
+) -> Path:
+    """Decode, transform, and atomically publish a lossless grayscale PNG mask."""
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise RuntimeError("Pillow is required for mask PNG conversion") from error
+    if output_path.exists() or output_path.is_symlink():
+        raise MaskUndistortionError(f"Refusing to overwrite mask output: {output_path}")
+    try:
+        with Image.open(input_path) as image:
+            image.load()
+            mask = np.asarray(image.convert("L"), dtype=np.uint8)
+    except (OSError, ValueError) as error:
+        raise MaskUndistortionError(f"Unable to decode capture mask: {input_path}") from error
+
+    transformed = undistort_mask_array(mask, source, target)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp.png",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        Image.fromarray(transformed).save(temporary_path, format="PNG", optimize=False)
+        with temporary_path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary_path, output_path)
+        except FileExistsError as error:
+            raise MaskUndistortionError(f"Refusing to overwrite mask output: {output_path}") from error
+        temporary_path.unlink()
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+    return output_path
