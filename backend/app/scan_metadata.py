@@ -44,11 +44,21 @@ class VideoMetadata:
 
 
 @dataclass(frozen=True)
+class ReconstructionScopeMetadata:
+    schema_version: str
+    mode: str
+    mask_space: str
+    mask_convention: str
+    mask_count: int
+
+
+@dataclass(frozen=True)
 class ScanMetadata:
     frames: tuple[FrameMetadata, ...]
     session: SessionMetadata
     videos: tuple[VideoMetadata, ...]
     has_video_metadata: bool
+    reconstruction_scope: ReconstructionScopeMetadata | None
 
 
 def load_scan_metadata(metadata_dir: Path) -> ScanMetadata:
@@ -57,6 +67,8 @@ def load_scan_metadata(metadata_dir: Path) -> ScanMetadata:
     session_value = _read_json(metadata_dir / "session.json")
     video_path = metadata_dir / "video.json"
     video_value = _read_json(video_path) if video_path.exists() else []
+    manifest_path = metadata_dir / "manifest.json"
+    manifest_value = _read_json(manifest_path) if manifest_path.exists() else {}
 
     if not isinstance(frames_value, list):
         raise ScanMetadataError("frames.json must contain a JSON array")
@@ -64,6 +76,8 @@ def load_scan_metadata(metadata_dir: Path) -> ScanMetadata:
         raise ScanMetadataError("session.json must contain a JSON object")
     if not isinstance(video_value, list):
         raise ScanMetadataError("video.json must contain a JSON array")
+    if not isinstance(manifest_value, dict):
+        raise ScanMetadataError("manifest.json must contain a JSON object")
 
     frames = tuple(_parse_frame(value, index) for index, value in enumerate(frames_value))
     videos = tuple(_parse_video(value, index) for index, value in enumerate(video_value))
@@ -72,7 +86,30 @@ def load_scan_metadata(metadata_dir: Path) -> ScanMetadata:
         session=_parse_session(session_value),
         videos=videos,
         has_video_metadata=video_path.exists(),
+        reconstruction_scope=_parse_reconstruction_scope(manifest_value.get("reconstruction_scope")),
     )
+
+
+def _parse_reconstruction_scope(value: Any) -> ReconstructionScopeMetadata | None:
+    if value is None:
+        return None
+    item = _object(value, "manifest.json.reconstruction_scope")
+    schema_version = _non_empty_string(item.get("schema_version"), "reconstruction_scope.schema_version")
+    mode = _non_empty_string(item.get("mode"), "reconstruction_scope.mode")
+    mask_space = _non_empty_string(item.get("mask_space"), "reconstruction_scope.mask_space")
+    convention = _non_empty_string(item.get("mask_convention"), "reconstruction_scope.mask_convention")
+    mask_count = _integer(item.get("mask_count"), "reconstruction_scope.mask_count", minimum=1)
+    if schema_version != "1.0":
+        raise ScanMetadataError("reconstruction_scope.schema_version must be '1.0'")
+    if mode != "image_masks":
+        raise ScanMetadataError("reconstruction_scope.mode must be 'image_masks'")
+    if mask_space != "capture_image":
+        raise ScanMetadataError("reconstruction_scope.mask_space must be 'capture_image'")
+    if convention != "white_keep_black_exclude":
+        raise ScanMetadataError(
+            "reconstruction_scope.mask_convention must be 'white_keep_black_exclude'"
+        )
+    return ReconstructionScopeMetadata(schema_version, mode, mask_space, convention, mask_count)
 
 
 def _parse_frame(value: Any, index: int) -> FrameMetadata:

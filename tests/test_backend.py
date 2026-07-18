@@ -408,6 +408,46 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(report.scan_id, "scan_test")
         self.assertEqual(report.scan_mode, "scene_scan")
 
+    def test_validate_scan_package_preserves_typed_reconstruction_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            scope = {
+                "schema_version": "1.0",
+                "mode": "image_masks",
+                "mask_space": "capture_image",
+                "mask_convention": "white_keep_black_exclude",
+                "mask_count": 1,
+            }
+            (scan_dir / "metadata" / "manifest.json").write_text(
+                json.dumps({"reconstruction_scope": scope})
+            )
+
+            package = validate_and_report_scan(scan_dir)
+            generated_manifest = json.loads(package.manifest_path.read_text())
+
+        self.assertEqual(package.validation.reconstruction_scope, scope)
+        self.assertEqual(generated_manifest["reconstruction_scope"], scope)
+
+    def test_validate_scan_package_rejects_invalid_reconstruction_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            (scan_dir / "metadata" / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "reconstruction_scope": {
+                            "schema_version": "1.0",
+                            "mode": "unbounded",
+                            "mask_space": "capture_image",
+                            "mask_convention": "white_keep_black_exclude",
+                            "mask_count": 1,
+                        }
+                    }
+                )
+            )
+
+            with self.assertRaises(ScanValidationError):
+                validate_scan_package(scan_dir)
+
     def test_validate_scan_package_rejects_missing_image_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))

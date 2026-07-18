@@ -1,6 +1,6 @@
 # Reconstruction Scope Control Specification
 
-Status: Phase 1 and density budgets implemented; OpenMVS-ready mask validation implemented
+Status: Phase 1, density budgets, mask validation, and capture-scope metadata contract implemented
 
 ## Problem
 
@@ -139,6 +139,11 @@ The original object-center/radius UI remains useful for distance guidance and
 future 3D ROI alignment. It is not sufficient by itself for irregular scenes.
 
 ### Package Contract
+
+The typed `reconstruction_scope` manifest object below is implemented and
+preserved when the backend regenerates its downstream manifest. Packaging the
+referenced capture masks and converting them to undistorted image space remain
+future slices.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 

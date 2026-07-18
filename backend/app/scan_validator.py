@@ -36,6 +36,7 @@ class ScanValidationReport:
     session_image_count: int | None
     session_video_count: int | None
     integrity_warnings: tuple[str, ...]
+    reconstruction_scope: dict[str, object] | None
 
 
 def find_scan_root(extracted_dir: Path) -> Path:
@@ -145,6 +146,17 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         session_image_count=metadata.session.image_count,
         session_video_count=metadata.session.video_count,
         integrity_warnings=tuple(integrity_warnings),
+        reconstruction_scope=(
+            {
+                "schema_version": metadata.reconstruction_scope.schema_version,
+                "mode": metadata.reconstruction_scope.mode,
+                "mask_space": metadata.reconstruction_scope.mask_space,
+                "mask_convention": metadata.reconstruction_scope.mask_convention,
+                "mask_count": metadata.reconstruction_scope.mask_count,
+            }
+            if metadata.reconstruction_scope is not None
+            else None
+        ),
     )
 
 
