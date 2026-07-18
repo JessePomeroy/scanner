@@ -22,6 +22,11 @@ struct ReconstructionArtifact: Decodable, Identifiable, Equatable, Sendable {
         (filename as NSString).pathExtension.lowercased() == "ply"
     }
 
+    var isSparsePointCloud: Bool {
+        supportsPointCloudPreview
+            && (name == "sparse_point_cloud" || filename == "sparse_points.ply")
+    }
+
     enum CodingKeys: String, CodingKey {
         case name
         case relativePath = "relative_path"

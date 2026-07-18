@@ -4,15 +4,21 @@ struct ProcessingHistoryView: View {
     @AppStorage("scanner.backendBaseURL") private var backendURLString = "http://localhost:8000"
     @StateObject private var store: ReconstructionJobStore
     private let artifactClient: any ReconstructionArtifactAccessing
+    private let scopeClient: any ReconstructionScopeAccessing
+    private let onStartNewScan: () -> Void
 
     init(
         jobClient: any ReconstructionJobLoading = HTTPReconstructionJobClient(),
-        artifactClient: any ReconstructionArtifactAccessing = HTTPReconstructionArtifactClient()
+        artifactClient: any ReconstructionArtifactAccessing = HTTPReconstructionArtifactClient(),
+        scopeClient: any ReconstructionScopeAccessing = HTTPReconstructionScopeClient(),
+        onStartNewScan: @escaping () -> Void = {}
     ) {
         _store = StateObject(
             wrappedValue: ReconstructionJobStore(client: jobClient)
         )
         self.artifactClient = artifactClient
+        self.scopeClient = scopeClient
+        self.onStartNewScan = onStartNewScan
     }
 
     var body: some View {
@@ -88,7 +94,9 @@ struct ProcessingHistoryView: View {
                                     ReconstructionArtifactListView(
                                         job: job,
                                         baseURLString: backendURLString,
-                                        client: artifactClient
+                                        client: artifactClient,
+                                        scopeClient: scopeClient,
+                                        onStartNewScan: onStartNewScan
                                     )
                                 } label: {
                                     ReconstructionJobRow(job: job)
@@ -150,14 +158,22 @@ private struct ReconstructionArtifactListView: View {
     let baseURLString: String
     @StateObject private var store: ReconstructionArtifactStore
     @State private var downloadTask: Task<Void, Never>?
+    private let artifactClient: any ReconstructionArtifactAccessing
+    private let scopeClient: any ReconstructionScopeAccessing
+    private let onStartNewScan: () -> Void
 
     init(
         job: ReconstructionJob,
         baseURLString: String,
-        client: any ReconstructionArtifactAccessing
+        client: any ReconstructionArtifactAccessing,
+        scopeClient: any ReconstructionScopeAccessing,
+        onStartNewScan: @escaping () -> Void
     ) {
         self.job = job
         self.baseURLString = baseURLString
+        self.artifactClient = client
+        self.scopeClient = scopeClient
+        self.onStartNewScan = onStartNewScan
         _store = StateObject(
             wrappedValue: ReconstructionArtifactStore(client: client)
         )
@@ -178,7 +194,8 @@ private struct ReconstructionArtifactListView: View {
             }
             .onDisappear {
                 guard store.sharedDownload == nil,
-                      store.previewedDownload == nil else { return }
+                      store.previewedDownload == nil,
+                      store.scopeEditorDownload == nil else { return }
                 downloadTask?.cancel()
                 downloadTask = nil
                 Task {
@@ -190,6 +207,9 @@ private struct ReconstructionArtifactListView: View {
             }
             .fullScreenCover(isPresented: previewPresented) {
                 pointCloudPreview
+            }
+            .fullScreenCover(isPresented: scopeEditorPresented) {
+                scopeEditor
             }
             .alert("Unable to Open Result", isPresented: errorPresented) {
                 Button("OK", role: .cancel) {
@@ -211,7 +231,7 @@ private struct ReconstructionArtifactListView: View {
             } header: {
                 Text("Downloadable Results")
             } footer: {
-                Text("PLY results can be previewed in the app. Temporary downloads are removed when preview or sharing closes.")
+                Text("PLY results can be previewed in the app. Sparse review jobs also let you set the 3D reconstruction region. Temporary downloads are removed when a viewer closes.")
             }
         }
     }
@@ -254,6 +274,13 @@ private struct ReconstructionArtifactListView: View {
                             startDownload(artifact, destination: .pointCloudPreview)
                         } label: {
                             Label("Preview", systemImage: "eye")
+                        }
+                    }
+                    if job.stage == .awaitingScope && artifact.isSparsePointCloud {
+                        Button {
+                            startDownload(artifact, destination: .scopeEditor)
+                        } label: {
+                            Label("Set Region", systemImage: "cube.transparent")
                         }
                     }
                     Button {
@@ -302,6 +329,26 @@ private struct ReconstructionArtifactListView: View {
         }
     }
 
+    @ViewBuilder
+    private var scopeEditor: some View {
+        if let download = store.scopeEditorDownload {
+            ScopeRegionEditorView(
+                download: download,
+                scanID: job.scanID,
+                baseURLString: baseURLString,
+                scopeClient: scopeClient,
+                cameraArtifact: store.artifacts.first(where: { $0.name == "sparse_camera_preview" }),
+                artifactClient: artifactClient,
+                onStartNewScan: {
+                    store.dismissScopeEditorDownload()
+                    onStartNewScan()
+                }
+            ) {
+                store.dismissScopeEditorDownload()
+            }
+        }
+    }
+
     private var emptyDescription: String {
         store.hasLoaded
             ? "This job has no published result files."
@@ -336,6 +383,17 @@ private struct ReconstructionArtifactListView: View {
             set: { isPresented in
                 if !isPresented {
                     store.dismissPreviewedDownload()
+                }
+            }
+        )
+    }
+
+    private var scopeEditorPresented: Binding<Bool> {
+        Binding(
+            get: { store.scopeEditorDownload != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.dismissScopeEditorDownload()
                 }
             }
         )

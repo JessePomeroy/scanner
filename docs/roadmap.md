@@ -148,7 +148,8 @@ Implement the following as independently reviewable slices:
    - Record requested and effective bounds, authoring source, revision, and
      fallback reason.
    - Reject stale or invalid revisions instead of silently changing scope.
-4. Add an interactive sparse-preview region editor.
+4. Add an interactive sparse-preview region editor. Status: initial iPhone
+   editor implemented.
    - Move, rotate, and resize an oriented 3D box.
    - Show included/excluded sparse points and registered camera coverage.
    - Allow returning to capture when the preview reveals missing coverage.
