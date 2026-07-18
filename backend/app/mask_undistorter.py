@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
 import math
 from pathlib import Path
 import os
+import shutil
+import subprocess
 import tempfile
+from typing import Callable
 
 import numpy as np
+
+from app.mask_processor import MaskValidationResult, validate_openmvs_masks
 
 
 class MaskUndistortionError(ValueError):
@@ -218,3 +224,83 @@ def undistort_mask_file(
             temporary_path.unlink(missing_ok=True)
         raise
     return output_path
+
+
+ModelExporter = Callable[[Path, Path], None]
+
+
+def convert_capture_mask_set(
+    scan_dir: Path,
+    *,
+    colmap_executable: str = "colmap",
+    model_exporter: ModelExporter | None = None,
+) -> MaskValidationResult:
+    """Convert every validated capture mask and publish one complete OpenMVS set."""
+    scan_dir = scan_dir.resolve()
+    dense_dir = scan_dir / "dense"
+    output_dir = dense_dir / "masks"
+    if output_dir.exists() or output_dir.is_symlink():
+        raise MaskUndistortionError(f"Refusing to overwrite mask directory: {output_dir}")
+    exporter = model_exporter or (
+        lambda source, output: _export_colmap_model(source, output, colmap_executable)
+    )
+    dense_dir.mkdir(parents=True, exist_ok=True)
+    stage_dir: Path | None = None
+    lock_fd: int | None = None
+    lock_path = dense_dir / ".masks.publish.lock"
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise MaskUndistortionError("Another mask publication is already active") from error
+        if output_dir.exists() or output_dir.is_symlink():
+            raise MaskUndistortionError(f"Refusing to overwrite mask directory: {output_dir}")
+        with tempfile.TemporaryDirectory(dir=dense_dir, prefix=".mask-models.") as temporary:
+            temporary_root = Path(temporary)
+            source_text = temporary_root / "source"
+            target_text = temporary_root / "target"
+            source_text.mkdir()
+            target_text.mkdir()
+            exporter(scan_dir / "sparse" / "0", source_text)
+            exporter(dense_dir / "sparse", target_text)
+            associations = associate_mask_cameras(
+                parse_colmap_cameras(source_text / "cameras.txt"),
+                parse_colmap_image_cameras(source_text / "images.txt"),
+                parse_colmap_cameras(target_text / "cameras.txt"),
+                parse_colmap_image_cameras(target_text / "images.txt"),
+            )
+            stage_dir = Path(tempfile.mkdtemp(dir=dense_dir, prefix=".masks.stage."))
+            for name, association in associations.items():
+                capture_mask = scan_dir / "masks" / "capture" / f"{name}.png"
+                output_mask = stage_dir / Path(name).with_suffix(".mask.png").name
+                undistort_mask_file(capture_mask, output_mask, association.source, association.target)
+            result = validate_openmvs_masks(stage_dir, dense_dir / "images")
+
+        if output_dir.exists() or output_dir.is_symlink():
+            raise MaskUndistortionError(f"Refusing to overwrite mask directory: {output_dir}")
+        os.rename(stage_dir, output_dir)
+        stage_dir = None
+        return MaskValidationResult(output_dir, result.image_count, result.mask_count)
+    finally:
+        if lock_fd is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+        if stage_dir is not None:
+            shutil.rmtree(stage_dir, ignore_errors=True)
+
+
+def _export_colmap_model(source: Path, output: Path, executable: str) -> None:
+    subprocess.run(
+        [
+            executable,
+            "model_converter",
+            "--input_path",
+            str(source),
+            "--output_path",
+            str(output),
+            "--output_type",
+            "TXT",
+        ],
+        check=True,
+    )

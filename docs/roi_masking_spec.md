@@ -150,7 +150,10 @@ Lossless PNG decoding, binary normalization, atomic publication, and no-clobber
 behavior are implemented. Original and dense COLMAP image records are matched
 by exact filename and their camera IDs are paired automatically; this was also
 verified against all 254 registered images in the ATV scan. Batch conversion
-and pipeline integration remain future slices.
+now exports both COLMAP models to temporary text form, stages every converted
+mask, validates the complete set against dense images, and publishes
+`dense/masks` under an advisory lock. Pipeline orchestration remains a future
+slice.
 
 Extend the manifest schema with an optional reconstruction-scope object:
 
