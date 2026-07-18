@@ -5,6 +5,9 @@ enum ScanPackageWriterError: Error {
     case missingScanDirectory(URL)
     case unsupportedLargeFile(URL)
     case unsupportedLargeArchive
+    case invalidCaptureMaskImagePath
+    case invalidCaptureMaskPNG
+    case captureMaskAlreadyExists(URL)
 }
 
 /// Creates and exports the on-device scan package.
@@ -90,6 +93,38 @@ final class ScanPackageWriter {
             manifest,
             to: scanDirectory.appendingPathComponent("metadata", isDirectory: true)
         )
+    }
+
+    @discardableResult
+    func saveCaptureMask(
+        _ pngData: Data,
+        forImagePath imagePath: String,
+        in scanDirectory: URL
+    ) throws -> URL {
+        let components = imagePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              components[0] == "images",
+              !components[1].isEmpty,
+              components[1] != ".",
+              components[1] != "..",
+              !imagePath.contains("\\") else {
+            throw ScanPackageWriterError.invalidCaptureMaskImagePath
+        }
+        let pngSignature = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        guard pngData.count >= pngSignature.count,
+              pngData.prefix(pngSignature.count) == pngSignature else {
+            throw ScanPackageWriterError.invalidCaptureMaskPNG
+        }
+        let captureDirectory = scanDirectory
+            .appendingPathComponent("masks", isDirectory: true)
+            .appendingPathComponent("capture", isDirectory: true)
+        try fileManager.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+        let destination = captureDirectory.appendingPathComponent(String(components[1]) + ".png")
+        guard !fileManager.fileExists(atPath: destination.path) else {
+            throw ScanPackageWriterError.captureMaskAlreadyExists(destination)
+        }
+        try pngData.write(to: destination, options: [.atomic, .withoutOverwriting])
+        return destination
     }
 
     @discardableResult
