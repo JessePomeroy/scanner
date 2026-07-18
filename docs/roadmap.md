@@ -169,6 +169,9 @@ Implement the following as independently reviewable slices:
    - Preserve the current fixed capture polygon as an explicit centered-subject
      mode rather than the scene default.
 2. Add temporal propagation behind a replaceable mask-generator interface.
+   Status: interface, deterministic bidirectional polygon interpolation, full
+   proposal publication, and per-frame provenance implemented; image-aware
+   generator evaluation remains.
    - Track user-defined regions forward and backward through ordered frames.
    - Avoid fixed semantic classes because artistic scenes may include unrelated
      objects plus connecting ground.

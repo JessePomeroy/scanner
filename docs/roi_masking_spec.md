@@ -247,6 +247,12 @@ The model must be optional and isolated behind a `MaskGenerator` interface so
 manual masks and future on-device/backend implementations share the same
 validated output contract.
 
+That interface and its first conservative implementation are documented in
+[`mask_generation_contract.md`](mask_generation_contract.md). The polygon
+interpolator is a deterministic baseline, not a semantic tracker. It publishes
+only `awaiting_review` proposals and blocks resume until the following review
+slice promotes an approved complete set.
+
 ## Phase 4: ARKit-to-Reconstruction 3D ROI
 
 The first data-contract slice is implemented in

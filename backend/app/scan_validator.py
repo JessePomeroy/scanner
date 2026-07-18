@@ -118,7 +118,11 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         mask_authoring_plan = load_mask_authoring_plan(metadata_dir, metadata.frames)
     except MaskAuthoringError as error:
         raise ScanValidationError(str(error)) from error
-    capture_mask_count = _validate_capture_masks(scan_dir, metadata)
+    capture_mask_count = _validate_capture_masks(
+        scan_dir,
+        metadata,
+        has_mask_authoring=mask_authoring_plan is not None,
+    )
     _validate_session_counts(
         image_count=len(images),
         video_count=len(video_files),
@@ -174,20 +178,44 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
     )
 
 
-def _validate_capture_masks(scan_dir: Path, metadata: ScanMetadata) -> int:
+def _validate_capture_masks(
+    scan_dir: Path,
+    metadata: ScanMetadata,
+    *,
+    has_mask_authoring: bool,
+) -> int:
     scope = metadata.reconstruction_scope
     masks_root = scan_dir / "masks"
     if scope is None:
         if masks_root.exists() or masks_root.is_symlink():
-            raise ScanValidationError("masks directory requires reconstruction_scope metadata")
+            if not has_mask_authoring:
+                raise ScanValidationError("masks directory requires reconstruction_scope metadata")
+            _validate_proposed_masks(
+                scan_dir,
+                masks_root,
+                metadata.frames,
+                allow_capture=False,
+            )
         return 0
 
     capture_dir = masks_root / "capture"
     _validate_owned_directory(scan_dir, masks_root, label="masks")
     _validate_owned_directory(scan_dir, capture_dir, label="masks/capture")
     root_entries = list(masks_root.iterdir())
-    if len(root_entries) != 1 or root_entries[0].resolve() != capture_dir.resolve():
-        raise ScanValidationError("masks must contain only the capture directory")
+    allowed = {capture_dir.resolve()}
+    proposed_dir = masks_root / "proposed"
+    if proposed_dir.exists() or proposed_dir.is_symlink():
+        if not has_mask_authoring:
+            raise ScanValidationError("Proposed masks require mask-authoring metadata")
+        _validate_proposed_masks(
+            scan_dir,
+            masks_root,
+            metadata.frames,
+            allow_capture=True,
+        )
+        allowed.add(proposed_dir.resolve())
+    if {entry.resolve() for entry in root_entries} != allowed:
+        raise ScanValidationError("masks contains an unsupported directory or file")
     mask_files = _validated_flat_files(capture_dir, label="masks/capture")
     expected_names = {Path(frame.image).name + ".png" for frame in metadata.frames}
     actual_names = {path.name for path in mask_files}
@@ -206,6 +234,37 @@ def _validate_capture_masks(scan_dir: Path, metadata: ScanMetadata) -> int:
     except MaskValidationError as error:
         raise ScanValidationError(str(error)) from error
     return len(mask_files)
+
+
+def _validate_proposed_masks(
+    scan_dir: Path,
+    masks_root: Path,
+    frames: tuple[FrameMetadata, ...],
+    *,
+    allow_capture: bool,
+) -> None:
+    _validate_owned_directory(scan_dir, masks_root, label="masks")
+    proposed_dir = masks_root / "proposed"
+    root_entries = list(masks_root.iterdir())
+    allowed_names = {"proposed", "capture"} if allow_capture else {"proposed"}
+    if any(entry.name not in allowed_names for entry in root_entries):
+        raise ScanValidationError("masks contains an unsupported directory or file")
+    _validate_owned_directory(scan_dir, proposed_dir, label="masks/proposed")
+    proposed_files = _validated_flat_files(proposed_dir, label="masks/proposed")
+    expected_names = {Path(frame.image).name + ".png" for frame in frames}
+    actual_names = {path.name for path in proposed_files}
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        raise ScanValidationError(
+            f"Proposed mask association mismatch; missing={missing}, extra={extra}"
+        )
+    frames_by_mask = {Path(frame.image).name + ".png": frame for frame in frames}
+    try:
+        for mask in proposed_files:
+            validate_capture_mask_png(mask, frames_by_mask[mask.name].resolution)
+    except MaskValidationError as error:
+        raise ScanValidationError(str(error)) from error
 
 
 def _validate_frame_image_references(

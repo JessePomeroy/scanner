@@ -335,6 +335,40 @@ class SparseReviewTests(unittest.TestCase):
         self.assertEqual(len(background.tasks), 1)
         self.assertEqual(duplicate.exception.status_code, 409)
 
+    def test_resume_api_blocks_unreviewed_generated_masks(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+        from fastapi import BackgroundTasks, HTTPException
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update(
+                "scan-1",
+                status="processing",
+                stage="awaiting_scope",
+                outputs={"mask_generation_report": "/safe/report.json"},
+            )
+            checkpoint = SimpleNamespace(run_dense=True, run_openmvs=True)
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "_active_scan_root", return_value=root),
+                patch.object(backend_main, "load_reconstruction_region"),
+                patch.object(backend_main, "load_sparse_review_checkpoint", return_value=checkpoint),
+                self.assertRaises(HTTPException) as blocked,
+            ):
+                backend_main.resume_scan_job("scan-1", BackgroundTasks())
+            persisted_stage = store.read("scan-1").stage
+
+        self.assertEqual(blocked.exception.status_code, 409)
+        self.assertIn("awaiting sampled review", blocked.exception.detail)
+        self.assertEqual(persisted_stage, "awaiting_scope")
+
     def test_scope_api_rejects_stale_edit(self) -> None:
         if importlib.util.find_spec("fastapi") is None:
             self.skipTest("FastAPI is not installed in the lightweight test environment")

@@ -29,6 +29,7 @@ from app.density_budget import inspect_ply_point_budget
 from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
+from app.mask_generator import generate_mask_proposals
 from app.mask_processor import validate_openmvs_masks
 from app.openmvs_runner import (
     OpenMVSConfig,
@@ -51,6 +52,7 @@ from app.reconstruction_region_application import (
     write_openmvs_roi_file,
 )
 from app.scan_package import validate_and_report_scan
+from app.scan_metadata import load_scan_metadata
 from app.scan_validator import (
     ScanValidationError,
     find_scan_root,
@@ -257,6 +259,11 @@ def resume_scan_job(scan_id: str, background_tasks: BackgroundTasks) -> JobRecor
             status_code=409,
             detail="This checkpoint cannot produce a region-scoped textured mesh.",
         )
+    if record.outputs.get("mask_generation_report"):
+        raise HTTPException(
+            status_code=409,
+            detail="Generated mask proposals are awaiting sampled review before reconstruction can resume.",
+        )
     try:
         claimed = jobs.claim(
             scan_id,
@@ -356,6 +363,27 @@ def process_scan(
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
         report = package.validation
+        proposal_outputs: dict[str, str] = {}
+        mask_generation = None
+        if getattr(report, "mask_authoring", None) is not None:
+            metadata = load_scan_metadata(scan_root / "metadata")
+            mask_generation = generate_mask_proposals(scan_root, metadata.frames)
+        if mask_generation is not None:
+            package.record_processing_step(
+                "mask_generation",
+                {
+                    "state": "awaiting_review",
+                    "generator": mask_generation.generator,
+                    "source_authoring_revision": mask_generation.source_revision,
+                    "frame_count": len(mask_generation.frames),
+                    "report": str(mask_generation.report_path),
+                },
+            )
+            proposal_outputs["mask_generation_report"] = str(mask_generation.report_path)
+            for review_number, frame_index in enumerate(mask_generation.review_indices):
+                proposal_outputs[f"mask_review_{review_number}"] = str(
+                    scan_root / mask_generation.frames[frame_index].mask
+                )
 
         jobs.update(
             scan_id,
@@ -384,6 +412,7 @@ def process_scan(
         outputs = {
             "colmap_output": str(colmap_output),
             "scan_report": str(package.report_path),
+            **proposal_outputs,
         }
 
         if review_scope:
