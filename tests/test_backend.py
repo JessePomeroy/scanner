@@ -1121,7 +1121,7 @@ class BackendTests(unittest.TestCase):
         self.assertIn("sparse_point_cloud", plan.outputs)
 
     def test_openmvs_pipeline_runs_commands_from_dense_workspace(self) -> None:
-        scan_dir = Path("/tmp/scanner-openmvs-workspace")
+        scan_dir = Path("/tmp/scanner-openmvs-workspace").resolve()
 
         with (
             patch("app.openmvs_runner.run_command") as run_command_mock,
@@ -1372,7 +1372,7 @@ class BackendTests(unittest.TestCase):
         except ImportError:
             self.skipTest("Pillow is not installed in this test environment")
         with tempfile.TemporaryDirectory() as tmp:
-            scan = Path(tmp) / "scan"
+            scan = Path(tmp).resolve() / "scan"
             (scan / "sparse" / "0").mkdir(parents=True)
             (scan / "dense" / "sparse").mkdir(parents=True)
             (scan / "dense" / "images").mkdir()
