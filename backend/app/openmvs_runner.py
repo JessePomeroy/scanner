@@ -30,6 +30,7 @@ class OpenMVSConfig:
     estimate_roi: float = 1.1
     roi_border: float = 10.0
     mask_path: Path | None = None
+    mask_ignore_label: int = 0
     include_refine: bool = False
     point_warning_limit: int = 2_000_000
     point_hard_limit: int = 10_000_000
@@ -51,6 +52,8 @@ class OpenMVSConfig:
             raise ValueError("OpenMVS estimate_roi must be non-negative")
         if self.roi_border < 0:
             raise ValueError("OpenMVS roi_border must be non-negative")
+        if not 0 <= self.mask_ignore_label <= 255:
+            raise ValueError("OpenMVS mask_ignore_label must be between 0 and 255")
         if self.point_warning_limit < 1:
             raise ValueError("OpenMVS point_warning_limit must be positive")
         if self.point_hard_limit < self.point_warning_limit:
@@ -69,6 +72,7 @@ class OpenMVSConfig:
             "crop_to_roi": self.scope_mode == "auto_roi",
             "roi_border": self.roi_border if self.scope_mode == "auto_roi" else 0,
             "mask_path": str(self.mask_path.resolve()) if self.mask_path is not None else None,
+            "mask_ignore_label": self.mask_ignore_label if self.mask_path is not None else None,
             "include_refine": self.include_refine,
             "point_warning_limit": self.point_warning_limit,
             "point_hard_limit": self.point_hard_limit,
@@ -114,7 +118,14 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
         str(config.roi_border if config.scope_mode == "auto_roi" else 0),
     ]
     if config.mask_path is not None:
-        densify.extend(["--mask-path", str(config.mask_path.resolve())])
+        densify.extend(
+            [
+                "--mask-path",
+                str(config.mask_path.resolve()),
+                "--ignore-mask-label",
+                str(config.mask_ignore_label),
+            ]
+        )
 
     commands = [
         [
