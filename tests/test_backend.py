@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 import json
 import importlib.util
 import os
@@ -16,6 +17,7 @@ from unittest.mock import patch
 import zipfile
 
 import numpy as np
+from PIL import Image
 
 import sys
 
@@ -103,6 +105,12 @@ def _png_header(width: int, height: int, *, color_type: int) -> bytes:
         + bytes((8, color_type, 0, 0, 0))
         + b"\x00\x00\x00\x00IEND\xaeB`\x82"
     )
+
+
+def _grayscale_png(width: int, height: int, *, value: int = 255) -> bytes:
+    output = BytesIO()
+    Image.new("L", (width, height), color=value).save(output, format="PNG")
+    return output.getvalue()
 
 
 class RecordingAsyncReader:
@@ -437,7 +445,7 @@ class BackendTests(unittest.TestCase):
             capture_masks = scan_dir / "masks" / "capture"
             capture_masks.mkdir(parents=True)
             (capture_masks / "frame_000001.jpg.png").write_bytes(
-                _png_header(1920, 1080, color_type=0)
+                _grayscale_png(1920, 1080)
             )
 
             package = validate_and_report_scan(scan_dir)
@@ -446,6 +454,56 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(package.validation.reconstruction_scope, scope)
         self.assertEqual(generated_manifest["reconstruction_scope"], scope)
         self.assertEqual(generated_manifest["file_counts"]["capture_masks"], 1)
+
+    def test_validate_scan_package_rejects_corrupt_capture_mask_pixel_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            scope = {
+                "schema_version": "1.0",
+                "mode": "image_masks",
+                "mask_space": "capture_image",
+                "mask_convention": "white_keep_black_exclude",
+                "mask_count": 1,
+            }
+            (scan_dir / "metadata" / "manifest.json").write_text(
+                json.dumps({"reconstruction_scope": scope})
+            )
+            capture_masks = scan_dir / "masks" / "capture"
+            capture_masks.mkdir(parents=True)
+            (capture_masks / "frame_000001.jpg.png").write_bytes(
+                _png_header(1920, 1080, color_type=0)
+            )
+
+            with self.assertRaisesRegex(ScanValidationError, "Unable to decode PNG mask"):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_png_decompression_bomb(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            scope = {
+                "schema_version": "1.0",
+                "mode": "image_masks",
+                "mask_space": "capture_image",
+                "mask_convention": "white_keep_black_exclude",
+                "mask_count": 1,
+            }
+            (scan_dir / "metadata" / "manifest.json").write_text(
+                json.dumps({"reconstruction_scope": scope})
+            )
+            capture_masks = scan_dir / "masks" / "capture"
+            capture_masks.mkdir(parents=True)
+            (capture_masks / "frame_000001.jpg.png").write_bytes(
+                _grayscale_png(1920, 1080)
+            )
+
+            with (
+                patch(
+                    "app.mask_processor.Image.open",
+                    side_effect=Image.DecompressionBombError("unsafe dimensions"),
+                ),
+                self.assertRaisesRegex(ScanValidationError, "Unable to decode PNG mask"),
+            ):
+                validate_scan_package(scan_dir)
 
     def test_validate_scan_package_rejects_invalid_reconstruction_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1184,7 +1242,7 @@ class BackendTests(unittest.TestCase):
             images.mkdir()
             masks.mkdir()
             (images / "frame.png").write_bytes(_png_header(640, 480, color_type=2))
-            (masks / "frame.mask.png").write_bytes(_png_header(640, 480, color_type=0))
+            (masks / "frame.mask.png").write_bytes(_grayscale_png(640, 480))
 
             result = validate_openmvs_masks(masks, images)
 

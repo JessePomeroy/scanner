@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import struct
 
+from PIL import Image
+
 
 class MaskValidationError(ValueError):
     """Raised when an OpenMVS mask set is incomplete or malformed."""
@@ -35,6 +37,7 @@ def validate_capture_mask_png(path: Path, expected_size: tuple[int, int]) -> Non
         raise MaskValidationError(
             f"Mask dimensions {size} do not match frame dimensions {expected_size}: {path}"
         )
+    _verify_png_decodes(path, expected_size)
 
 
 def validate_openmvs_masks(mask_dir: Path, image_dir: Path) -> MaskValidationResult:
@@ -72,6 +75,7 @@ def validate_openmvs_masks(mask_dir: Path, image_dir: Path) -> MaskValidationRes
             raise MaskValidationError(
                 f"Mask dimensions {mask_size} do not match image dimensions {image_size}: {mask}"
             )
+        _verify_png_decodes(mask, image_size)
 
     actual = {
         path for path in mask_dir.rglob("*.mask.png")
@@ -137,3 +141,20 @@ def _png_dimensions_and_grayscale(path: Path) -> tuple[tuple[int, int], bool]:
     if width < 1 or height < 1:
         raise MaskValidationError(f"Invalid PNG mask dimensions: {path}")
     return (width, height), bit_depth == 8 and color_type == 0
+
+
+def _verify_png_decodes(path: Path, expected_size: tuple[int, int]) -> None:
+    """Verify the complete PNG stream after bounded header checks succeed."""
+    try:
+        with Image.open(path) as image:
+            image_format = image.format
+            image_mode = image.mode
+            image_size = image.size
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError) as error:
+        raise MaskValidationError(f"Unable to decode PNG mask: {path}") from error
+
+    if image_format != "PNG" or image_mode != "L" or image_size != expected_size:
+        raise MaskValidationError(f"Mask must decode as an 8-bit grayscale PNG: {path}")
