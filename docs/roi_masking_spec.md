@@ -1,6 +1,6 @@
 # Reconstruction Scope Control Specification
 
-Status: Phase 1 in progress
+Status: Phase 1 implemented; density-budget guardrails implemented
 
 ## Problem
 
@@ -49,7 +49,9 @@ not automatically become dense geometry.
    COLMAP-space center and post-hoc spherical crop.
 4. Job records expose broad stages only. They do not report scope source,
    mask coverage, ROI bounds, point counts, or reduction ratios.
-5. Cleanup defaults do not set a voxel size, so density remains unbounded.
+5. Dense PLY headers are now checked against warning and hard point-count
+   limits before meshing. Cleanup still does not set a voxel size, so clouds
+   below the hard limit are not automatically downsampled.
 
 ## Proposed Pipeline
 

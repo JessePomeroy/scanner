@@ -27,7 +27,12 @@ from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline
 from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobStore
-from app.openmvs_runner import OpenMVSConfig, OpenMVSScopeMode, run_openmvs_pipeline
+from app.openmvs_runner import (
+    OpenMVSConfig,
+    OpenMVSScopeMode,
+    inspect_openmvs_dense_cloud,
+    run_openmvs_pipeline,
+)
 from app.scan_package import validate_and_report_scan
 from app.scan_validator import (
     ScanValidationError,
@@ -282,12 +287,14 @@ def process_scan(
             started_at = perf_counter()
             openmvs_config = OpenMVSConfig(scope_mode=scope_mode)
             textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
+            density_budget = inspect_openmvs_dense_cloud(scan_root, openmvs_config)
             package.record_processing_step(
                 "openmvs",
                 {
                     "elapsed_seconds": perf_counter() - started_at,
                     "output": str(textured_mesh),
                     "settings": openmvs_config.report_settings(),
+                    "density_budget": density_budget.as_dict(),
                 },
             )
             outputs["openmvs_dense_point_cloud"] = str(

@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 from typing import Any, Literal
 
+from app.density_budget import PointCloudBudgetResult, inspect_ply_point_budget
+
 
 OpenMVSScopeMode = Literal["auto_roi", "unbounded"]
 
@@ -28,6 +30,8 @@ class OpenMVSConfig:
     roi_border: float = 10.0
     mask_path: Path | None = None
     include_refine: bool = False
+    point_warning_limit: int = 2_000_000
+    point_hard_limit: int = 10_000_000
 
     def __post_init__(self) -> None:
         if self.scope_mode not in {"auto_roi", "unbounded"}:
@@ -46,6 +50,10 @@ class OpenMVSConfig:
             raise ValueError("OpenMVS estimate_roi must be non-negative")
         if self.roi_border < 0:
             raise ValueError("OpenMVS roi_border must be non-negative")
+        if self.point_warning_limit < 1:
+            raise ValueError("OpenMVS point_warning_limit must be positive")
+        if self.point_hard_limit < self.point_warning_limit:
+            raise ValueError("OpenMVS point_hard_limit must be at least point_warning_limit")
 
     def report_settings(self) -> dict[str, Any]:
         """Return stable, JSON-safe settings for reconstruction reports."""
@@ -61,6 +69,8 @@ class OpenMVSConfig:
             "roi_border": self.roi_border if self.scope_mode == "auto_roi" else 0,
             "mask_path": str(self.mask_path.resolve()) if self.mask_path is not None else None,
             "include_refine": self.include_refine,
+            "point_warning_limit": self.point_warning_limit,
+            "point_hard_limit": self.point_hard_limit,
         }
 
 
@@ -156,10 +166,26 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
     scan_dir = scan_dir.resolve()
     dense_dir = scan_dir / "dense"
 
+    config = config or OpenMVSConfig()
     for command in build_openmvs_commands(scan_dir, config):
         # InterfaceCOLMAP stores image paths relative to the COLMAP dense
         # workspace. Every later OpenMVS command must resolve those paths from
         # the same directory rather than from the backend process directory.
         run_command(command, cwd=dense_dir)
+        if command[0] == config.densify_point_cloud:
+            inspect_openmvs_dense_cloud(scan_dir, config)
 
     return dense_dir / "scene_textured.obj"
+
+
+def inspect_openmvs_dense_cloud(
+    scan_dir: Path,
+    config: OpenMVSConfig | None = None,
+) -> PointCloudBudgetResult:
+    """Inspect the OpenMVS dense PLY without loading its point payload."""
+    config = config or OpenMVSConfig()
+    return inspect_ply_point_budget(
+        scan_dir.resolve() / "dense" / "scene_dense.ply",
+        warning_limit=config.point_warning_limit,
+        hard_limit=config.point_hard_limit,
+    )

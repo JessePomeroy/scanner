@@ -21,7 +21,11 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
 )
-from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands  # noqa: E402
+from app.openmvs_runner import (  # noqa: E402
+    OpenMVSConfig,
+    build_openmvs_commands,
+    inspect_openmvs_dense_cloud,
+)
 from app.report_writer import object_scan_summary, write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
 from app.scan_validator import find_scan_root  # noqa: E402
@@ -97,6 +101,7 @@ def main() -> None:
     package_report_path = package.report_path
 
     started_at = perf_counter()
+    density_budget = None
     openmvs_commands = {
         OpenMVSConfig().interface_colmap,
         OpenMVSConfig().densify_point_cloud,
@@ -111,6 +116,8 @@ def main() -> None:
             dry_run=args.dry_run,
             cwd=scan_root / "dense" if command[0] in openmvs_commands else None,
         )
+        if not args.dry_run and command[0] == openmvs_config.densify_point_cloud:
+            density_budget = inspect_openmvs_dense_cloud(scan_root, openmvs_config)
     elapsed_seconds = perf_counter() - started_at
     package.record_processing_step(
         "gpu_reconstruction",
@@ -122,6 +129,7 @@ def main() -> None:
             "elapsed_seconds": elapsed_seconds,
             "command_count": len(commands),
             "openmvs_settings": openmvs_config.report_settings() if not args.skip_openmvs else None,
+            "density_budget": density_budget.as_dict() if density_budget is not None else None,
         },
     )
 
@@ -145,6 +153,7 @@ def main() -> None:
         "warnings": package_report.get("warnings", []),
         "commands": commands,
         "openmvs_settings": openmvs_config.report_settings() if not args.skip_openmvs else None,
+        "density_budget": density_budget.as_dict() if density_budget is not None else None,
         "outputs": {key: str(path) for key, path in outputs.items()},
         "notes": [
             "Use this runner on native Linux with a CUDA-enabled COLMAP build.",
