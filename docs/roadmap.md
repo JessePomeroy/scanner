@@ -115,6 +115,102 @@ dual-boot RTX 3070 PC.
    - Show accepted frames, rejected frames, blur range, movement speed, scan
      mode, object radius, and whether object center was set.
 
+## Scene Scope and Cleanup
+
+The research comparison in
+[`research/reconstruction_scope_competitor_research.md`](research/reconstruction_scope_competitor_research.md)
+shows that mature photogrammetry tools layer capture guidance, per-image masks,
+a post-alignment 3D reconstruction region, and reversible cleanup. The scanner
+should follow that layered approach instead of treating one fixed screen-space
+polygon as a complete scene-selection system.
+
+The current **Limit Reconstruction Area** feature remains useful for centered
+subjects. It preserves full-image COLMAP alignment and applies validated
+white-keep/black-exclude masks during OpenMVS densification. For scene scans,
+the same polygon is currently repeated at fixed screen coordinates in every
+frame, so it must remain optional until scene-aware review exists.
+
+Implement the following as independently reviewable slices:
+
+### Track A: Post-alignment 3D reconstruction region
+
+1. Define a versioned, typed reconstruction-region contract. Status: implemented.
+   - Start with an oriented box expressed in reconstruction coordinates.
+   - Validate finite center, positive extents, normalized orientation, schema
+     version, coordinate system, and source.
+   - Keep the contract usable by the backend, iPhone Jobs UI, reports, and
+     future web review without depending on OpenMVS serialization details.
+2. Add a resumable sparse-alignment checkpoint.
+   - Publish registered cameras and a bounded sparse point-cloud preview.
+   - Pause before dense processing when region review is requested.
+   - Resume without repeating feature extraction, matching, or mapping.
+3. Persist region selection and expose it through the job API.
+   - Record requested and effective bounds, authoring source, revision, and
+     fallback reason.
+   - Reject stale or invalid revisions instead of silently changing scope.
+4. Add an interactive sparse-preview region editor.
+   - Move, rotate, and resize an oriented 3D box.
+   - Show included/excluded sparse points and registered camera coverage.
+   - Allow returning to capture when the preview reveals missing coverage.
+5. Apply and verify the region before expensive dense/mesh work.
+   - Prefer a native OpenMVS ROI when the pinned build supports the required
+     representation; otherwise use a validated bounded post-dense crop.
+   - Preserve diagnostic unscoped artifacts and report reduction statistics.
+
+### Track B: Propagated per-frame masks
+
+1. Move scene mask authoring to post-capture representative frames.
+   - Support multiple keep regions and erase regions.
+   - Preserve the current fixed capture polygon as an explicit centered-subject
+     mode rather than the scene default.
+2. Add temporal propagation behind a replaceable mask-generator interface.
+   - Track user-defined regions forward and backward through ordered frames.
+   - Avoid fixed semantic classes because artistic scenes may include unrelated
+     objects plus connecting ground.
+3. Add safety dilation, confidence checks, and sampled review.
+   - Preview at least the first, quartile, middle, three-quarter, and last mask.
+   - Flag abrupt area/centroid changes and require correction before upload.
+4. Add stage-specific mask profiles.
+   - Scene default: full-image COLMAP alignment and reviewed dense-stage masks.
+   - Object/turntable option: masks may also constrain COLMAP features when
+     background alignment would be misleading.
+   - Evaluate texture-stage exclusion for occluders and boundary contamination.
+
+### Track C: Scene capture coverage guidance
+
+1. Add a scene-specific capture interaction inspired by area scanning.
+   - Use a reticle/brush metaphor rather than forcing a centered object box.
+   - Show camera path and captured surface/angle coverage while still on site.
+2. Add actionable coverage warnings.
+   - Identify gaps, weak viewing-angle diversity, excessive distance changes,
+     and disconnected detail passes.
+   - Let the user continue the same capture before packaging it.
+3. Keep object and scene guidance distinct.
+   - Object mode retains orbit/radius guidance and centered-subject masking.
+   - Scene mode favors connected passes, bridging frames, and world-space
+     coverage.
+
+### Track D: Mesh and Gaussian cleanup contracts
+
+1. Add reversible mesh cleanup before GLB publication.
+   - Support box/cylinder crop, inside/outside inversion, loose-component
+     selection, and a Blender-ready retained result.
+   - Ensure discarded geometry does not remain in the exported GLB.
+2. Add Gaussian primitive selection and cropping.
+   - Treat viewer hiding and destructive export cropping as different states.
+   - Verify excluded splats are absent from the published SOG/PLY rather than
+     merely hidden in the viewer.
+3. Record scope independently for mesh and Gaussian outputs.
+   - Store effective bounds, retained counts, reduction ratios, and cleanup
+     revisions for each artifact.
+
+### Target production profile
+
+The eventual scene default is hybrid: full images for robust sparse alignment,
+reviewed per-frame masks for projection ambiguity, a user-approved 3D region
+for world-space bounds, bounded geometry budgets, and reversible cleanup before
+mesh or Gaussian export.
+
 ## Reconstruction Pipeline
 
 Scope control for dense reconstruction is specified in

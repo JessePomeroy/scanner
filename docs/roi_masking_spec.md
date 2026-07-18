@@ -242,6 +242,12 @@ validated output contract.
 
 ## Phase 4: ARKit-to-Reconstruction 3D ROI
 
+The first data-contract slice is implemented in
+[`reconstruction_region_contract.md`](reconstruction_region_contract.md). It
+defines a strict versioned oriented box in COLMAP reconstruction coordinates.
+Sparse checkpointing, job persistence, interactive review, and application to
+the reconstruction remain separate follow-up slices.
+
 Estimate a similarity transform between ARKit world coordinates and the COLMAP
 reconstruction using corresponding camera centers/rotations from accepted
 frames. The transform must account for rotation, translation, and scale.
