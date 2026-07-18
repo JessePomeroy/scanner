@@ -135,13 +135,21 @@ registered-camera JSON, and continuation checkpoint as downloadable artifacts.
 The iPhone uploader enables this flow by default. In Jobs, open the sparse PLY,
 adjust the cyan box, then tap **Save & Continue**.
 
+Mask use is explicit through `mask_profile`. The iPhone requests
+`scene_geometry`: COLMAP feature extraction sees each complete photo for stable
+alignment, while reviewed masks constrain COLMAP fusion, OpenMVS
+densification, and texture selection. For a pre-masked object or turntable
+package, request `mask_profile=object_foreground` to constrain COLMAP features
+as well. Every processing report records the effective profile and each stage
+that consumed masks.
+
 The paintbrush beside a ZIP in the iPhone Scans tab opens the post-capture scene
-mask draft editor. It supports multiple green Keep and red Erase areas on five
-representative photos and safely rebuilds the ZIP. These selections remain an
-explicit draft until temporal propagation and sampled mask review are complete.
-The backend adds a conservative edge margin, checks abrupt area/center changes,
-and publishes five red-exclusion/cyan-boundary photo overlays. Inspect the
-evidence with `GET /scans/SCAN_ID/mask-review`, then record the decision with
+mask editor. It supports multiple green Keep and red Erase areas on five
+representative photos and safely rebuilds the ZIP. The backend propagates the
+regions through the ordered frames, adds a conservative edge margin, checks
+abrupt area/center changes, and publishes five red-exclusion/cyan-boundary
+photo overlays. Inspect the evidence in the Jobs tab or with
+`GET /scans/SCAN_ID/mask-review`, then record the decision with
 `POST /scans/SCAN_ID/mask-review/approve` or
 `POST /scans/SCAN_ID/mask-review/reject`. Only approval promotes the complete
 proposal set into active reconstruction masks; the backend never silently

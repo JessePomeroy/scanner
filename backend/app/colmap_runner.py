@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,8 @@ class ColmapConfig:
     single_camera: bool = True
     use_gpu: bool = True
     geometric_consistency: bool = True
+    feature_mask_path: Path | None = None
+    stereo_fusion_mask_path: Path | None = None
 
 
 def run_command(command: list[str], cwd: Path | None = None) -> None:
@@ -45,6 +48,10 @@ def build_colmap_sparse_commands(scan_dir: Path, config: ColmapConfig | None = N
         "--FeatureExtraction.use_gpu",
         "1" if config.use_gpu else "0",
     ]
+    if config.feature_mask_path is not None:
+        feature_extractor.extend(
+            ["--ImageReader.mask_path", str(config.feature_mask_path.resolve())]
+        )
 
     matcher = [
         config.executable,
@@ -116,6 +123,10 @@ def build_colmap_dense_commands(scan_dir: Path, config: ColmapConfig | None = No
         "--output_path",
         str(dense_path / "fused.ply"),
     ]
+    if config.stereo_fusion_mask_path is not None:
+        stereo_fusion.extend(
+            ["--StereoFusion.mask_path", str(config.stereo_fusion_mask_path.resolve())]
+        )
 
     return [
         image_undistorter,
@@ -135,13 +146,20 @@ def run_colmap_sparse_pipeline(scan_dir: Path, config: ColmapConfig | None = Non
     return scan_dir / "sparse" / "0"
 
 
-def run_colmap_dense_pipeline(scan_dir: Path, config: ColmapConfig | None = None) -> Path:
+def run_colmap_dense_pipeline(
+    scan_dir: Path,
+    config: ColmapConfig | None = None,
+    *,
+    after_undistort: Callable[[], None] | None = None,
+) -> Path:
     """Run image undistortion, dense stereo, and dense point cloud fusion."""
     scan_dir = scan_dir.resolve()
     (scan_dir / "dense").mkdir(exist_ok=True)
 
-    for command in build_colmap_dense_commands(scan_dir, config):
+    for index, command in enumerate(build_colmap_dense_commands(scan_dir, config)):
         run_command(command)
+        if index == 0 and after_undistort is not None:
+            after_undistort()
 
     return scan_dir / "dense" / "fused.ply"
 
@@ -174,11 +192,16 @@ def run_colmap_pipeline(
     config: ColmapConfig | None = None,
     *,
     include_dense: bool = True,
+    after_undistort: Callable[[], None] | None = None,
 ) -> Path:
     """Run COLMAP and return the most complete output path produced."""
     run_colmap_sparse_pipeline(scan_dir, config)
 
     if include_dense:
-        return run_colmap_dense_pipeline(scan_dir, config)
+        return run_colmap_dense_pipeline(
+            scan_dir,
+            config,
+            after_undistort=after_undistort,
+        )
 
     return export_sparse_point_cloud(scan_dir, config)

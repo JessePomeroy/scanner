@@ -30,7 +30,8 @@ from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
 from app.mask_generator import MaskGenerationError, generate_mask_proposals
-from app.mask_processor import validate_openmvs_masks
+from app.mask_processor import stage_colmap_fusion_masks, validate_openmvs_masks
+from app.mask_profiles import MaskProfileName, mask_stage_profile
 from app.mask_review import (
     MaskReviewBlockedError,
     MaskReviewError,
@@ -117,6 +118,7 @@ async def upload_scan(
     run_openmvs: bool = Query(False),
     scope_mode: OpenMVSScopeMode = Query("auto_roi"),
     use_masks: bool = Query(False),
+    mask_profile: MaskProfileName = Query("scene_geometry"),
     review_scope: bool = Query(False),
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
@@ -154,6 +156,7 @@ async def upload_scan(
             scope_mode,
             use_masks,
             review_scope,
+            mask_profile,
         )
         return jobs.update(
             scan_id,
@@ -412,6 +415,7 @@ def process_scan(
     scope_mode: OpenMVSScopeMode = "auto_roi",
     use_masks: bool = False,
     review_scope: bool = False,
+    mask_profile: MaskProfileName = "scene_geometry",
 ) -> None:
     processing_dir: Path | None = None
     try:
@@ -425,6 +429,7 @@ def process_scan(
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
         report = package.validation
+        profile = mask_stage_profile(mask_profile)
         proposal_outputs: dict[str, str] = {}
         mask_generation = None
         if getattr(report, "mask_authoring", None) is not None:
@@ -456,11 +461,74 @@ def process_scan(
             message="Running COLMAP reconstruction.",
         )
         started_at = perf_counter()
-        colmap_config = ColmapConfig(use_gpu=True)
+        masks_available = report.reconstruction_scope is not None or use_masks
+        capture_mask_path = (
+            scan_root / "masks" / "capture"
+            if report.reconstruction_scope is not None
+            else None
+        )
+        dense_mask_path = scan_root / "dense" / "masks" if masks_available else None
+        colmap_fusion_mask_path = (
+            scan_root / "dense" / "colmap_masks" if masks_available else None
+        )
+        mask_conversion = None
+
+        def prepare_dense_masks() -> None:
+            nonlocal mask_conversion
+            assert dense_mask_path is not None
+            conversion_started_at = perf_counter()
+            if report.reconstruction_scope is not None:
+                if dense_mask_path.is_dir():
+                    mask_conversion = validate_openmvs_masks(
+                        dense_mask_path, scan_root / "dense" / "images"
+                    )
+                else:
+                    mask_conversion = convert_capture_mask_set(scan_root)
+            else:
+                mask_conversion = validate_openmvs_masks(
+                    dense_mask_path, scan_root / "dense" / "images"
+                )
+            package.record_processing_step(
+                "mask_conversion",
+                {
+                    "elapsed_seconds": perf_counter() - conversion_started_at,
+                    "result": mask_conversion.as_dict(),
+                },
+            )
+            if profile.colmap_stereo_fusion:
+                assert colmap_fusion_mask_path is not None
+                stage_colmap_fusion_masks(
+                    dense_mask_path,
+                    scan_root / "dense" / "images",
+                    colmap_fusion_mask_path,
+                )
+
+        package.record_processing_step(
+            "mask_profile",
+            profile.as_dict(masks_available=masks_available),
+        )
+        colmap_config = ColmapConfig(
+            use_gpu=True,
+            feature_mask_path=(
+                capture_mask_path
+                if masks_available and profile.colmap_features
+                else None
+            ),
+            stereo_fusion_mask_path=(
+                colmap_fusion_mask_path
+                if masks_available and profile.colmap_stereo_fusion
+                else None
+            ),
+        )
         colmap_output = run_colmap_pipeline(
             scan_root,
             colmap_config,
             include_dense=run_dense and not review_scope,
+            after_undistort=(
+                prepare_dense_masks
+                if run_dense and not review_scope and dense_mask_path is not None
+                else None
+            ),
         )
         package.record_processing_step(
             "colmap",
@@ -471,6 +539,9 @@ def process_scan(
                 "review_scope": review_scope,
                 "elapsed_seconds": perf_counter() - started_at,
                 "output": str(colmap_output),
+                "mask_profile": profile.name,
+                "feature_masks": colmap_config.feature_mask_path is not None,
+                "stereo_fusion_masks": colmap_config.stereo_fusion_mask_path is not None,
             },
         )
         outputs = {
@@ -486,6 +557,7 @@ def process_scan(
                 run_openmvs=run_openmvs,
                 scope_mode=scope_mode,
                 use_masks=use_masks,
+                mask_profile=profile.name,
                 colmap_executable=colmap_config.executable,
             )
             # Publish the explicit sparse-preview name rather than two output
@@ -525,25 +597,18 @@ def process_scan(
                 message="Running OpenMVS mesh reconstruction.",
             )
             auto_masks = report.reconstruction_scope is not None
-            mask_path = scan_root / "dense" / "masks" if (auto_masks or use_masks) else None
-            mask_conversion = None
-            if auto_masks:
-                conversion_started_at = perf_counter()
-                if mask_path.is_dir():
-                    mask_conversion = validate_openmvs_masks(mask_path, scan_root / "dense" / "images")
-                else:
-                    mask_conversion = convert_capture_mask_set(scan_root)
-                package.record_processing_step(
-                    "mask_conversion",
-                    {
-                        "elapsed_seconds": perf_counter() - conversion_started_at,
-                        "result": mask_conversion.as_dict(),
-                    },
-                )
+            mask_path = (
+                dense_mask_path
+                if masks_available and profile.openmvs_densification
+                else None
+            )
             started_at = perf_counter()
             openmvs_config = OpenMVSConfig(
                 scope_mode=scope_mode,
                 mask_path=mask_path,
+                texture_use_masks=(
+                    masks_available and profile.openmvs_texturing
+                ),
             )
             textured_mesh = run_openmvs_pipeline(scan_root, openmvs_config)
             density_budget = inspect_openmvs_dense_cloud(scan_root, openmvs_config)
@@ -609,15 +674,66 @@ def resume_scoped_scan(scan_id: str) -> None:
         package = validate_and_report_scan(scan_root)
         report = package.validation
 
-        colmap_config = ColmapConfig(use_gpu=True)
+        profile = mask_stage_profile(checkpoint.mask_profile)
+        masks_available = report.reconstruction_scope is not None or checkpoint.use_masks
+        dense_mask_path = scan_root / "dense" / "masks" if masks_available else None
+        colmap_fusion_mask_path = (
+            scan_root / "dense" / "colmap_masks" if masks_available else None
+        )
+        mask_conversion = None
+
+        def prepare_dense_masks() -> None:
+            nonlocal mask_conversion
+            assert dense_mask_path is not None
+            conversion_started_at = perf_counter()
+            if report.reconstruction_scope is not None and not dense_mask_path.is_dir():
+                mask_conversion = convert_capture_mask_set(scan_root)
+            else:
+                mask_conversion = validate_openmvs_masks(
+                    dense_mask_path, scan_root / "dense" / "images"
+                )
+            package.record_processing_step(
+                "mask_conversion",
+                {
+                    "elapsed_seconds": perf_counter() - conversion_started_at,
+                    "result": mask_conversion.as_dict(),
+                },
+            )
+            if profile.colmap_stereo_fusion:
+                assert colmap_fusion_mask_path is not None
+                stage_colmap_fusion_masks(
+                    dense_mask_path,
+                    scan_root / "dense" / "images",
+                    colmap_fusion_mask_path,
+                )
+
+        package.record_processing_step(
+            "mask_profile",
+            profile.as_dict(masks_available=masks_available),
+        )
+
+        colmap_config = ColmapConfig(
+            use_gpu=True,
+            stereo_fusion_mask_path=(
+                colmap_fusion_mask_path
+                if masks_available and profile.colmap_stereo_fusion
+                else None
+            ),
+        )
         started_at = perf_counter()
-        colmap_output = run_colmap_dense_pipeline(scan_root, colmap_config)
+        colmap_output = run_colmap_dense_pipeline(
+            scan_root,
+            colmap_config,
+            after_undistort=(prepare_dense_masks if dense_mask_path is not None else None),
+        )
         package.record_processing_step(
             "colmap_resume",
             {
                 "reused_sparse_model": True,
                 "elapsed_seconds": perf_counter() - started_at,
                 "output": str(colmap_output),
+                "mask_profile": profile.name,
+                "stereo_fusion_masks": colmap_config.stereo_fusion_mask_path is not None,
             },
         )
 
@@ -628,25 +744,17 @@ def resume_scoped_scan(scan_id: str) -> None:
             message="Applying the reviewed region and reconstructing the textured mesh.",
         )
         auto_masks = report.reconstruction_scope is not None
-        mask_path = scan_root / "dense" / "masks" if (auto_masks or checkpoint.use_masks) else None
-        if auto_masks:
-            conversion_started_at = perf_counter()
-            if mask_path.is_dir():
-                mask_conversion = validate_openmvs_masks(mask_path, scan_root / "dense" / "images")
-            else:
-                mask_conversion = convert_capture_mask_set(scan_root)
-            package.record_processing_step(
-                "mask_conversion",
-                {
-                    "elapsed_seconds": perf_counter() - conversion_started_at,
-                    "result": mask_conversion.as_dict(),
-                },
-            )
+        mask_path = (
+            dense_mask_path
+            if masks_available and profile.openmvs_densification
+            else None
+        )
 
         roi_path = write_openmvs_roi_file(scan_root, region)
         openmvs_config = OpenMVSConfig(
             scope_mode=checkpoint.scope_mode,
             mask_path=mask_path,
+            texture_use_masks=(masks_available and profile.openmvs_texturing),
             region_path=roi_path,
         )
         started_at = perf_counter()
