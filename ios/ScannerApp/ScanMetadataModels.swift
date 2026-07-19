@@ -178,6 +178,7 @@ struct SceneCoverageMetadata: Codable, Equatable {
     let headingBinCount: Int
     let elevationBinCount: Int
     let pathLengthMeters: Float
+    let disconnectedJumpCount: Int
     let score: Float
 
     enum CodingKeys: String, CodingKey {
@@ -187,6 +188,7 @@ struct SceneCoverageMetadata: Codable, Equatable {
         case headingBinCount = "heading_bin_count"
         case elevationBinCount = "elevation_bin_count"
         case pathLengthMeters = "path_length_meters"
+        case disconnectedJumpCount = "disconnected_jump_count"
         case score
     }
 }

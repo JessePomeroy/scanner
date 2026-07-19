@@ -42,6 +42,13 @@ crop planner will not know the intended subject center.
 - If the app asks for side/diagonal views, keep recognizable structure from the
   previous view in frame while changing angle. If it asks for a higher/lower
   pass, preserve overlap rather than jumping to a disconnected viewpoint.
+- If a large jump creates a path-gap warning, keep recording and walk a slow,
+  overlapping route back to the earlier cyan trail. Reaching that route clears
+  the unresolved gap. When Stop is tapped with weak coverage or an unresolved
+  gap, choose **Continue Scanning** to repair it or **Finish Anyway** when the
+  limitation is intentional.
 - Coverage evidence is saved under `scene_coverage` in `metadata/session.json`
   and copied into the backend scan report. Scores below 55% add a
-  `low_scene_coverage` warning for later comparison with reconstruction quality.
+  `low_scene_coverage` warning; unresolved jumps add a
+  `disconnected_scene_passes` warning for later comparison with reconstruction
+  quality.

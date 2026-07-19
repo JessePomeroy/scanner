@@ -182,12 +182,19 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
         warnings.append("fast_camera_motion")
     if capture.get("scan_mode") == "scene_scan" and isinstance(scene_coverage, dict):
         coverage_score = scene_coverage.get("score")
+        disconnected_jump_count = scene_coverage.get("disconnected_jump_count")
         if (
             isinstance(coverage_score, (int, float))
             and math.isfinite(coverage_score)
             and coverage_score < 0.55
         ):
             warnings.append("low_scene_coverage")
+        if (
+            isinstance(disconnected_jump_count, int)
+            and not isinstance(disconnected_jump_count, bool)
+            and disconnected_jump_count > 0
+        ):
+            warnings.append("disconnected_scene_passes")
     if object_scan["is_object_scan"] and not object_scan["ready_for_manual_radius_crop"]:
         warnings.append("object_scan_missing_subject_tap")
 

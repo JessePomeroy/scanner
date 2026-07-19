@@ -40,6 +40,40 @@ private enum SceneCoverageVerifier {
 
         tracker.reset()
         try require(tracker.snapshot == .empty, "Expected reset to clear all evidence")
+
+        _ = tracker.record(cameraTransform: transform(position: .zero, yaw: 0))
+        _ = tracker.record(
+            cameraTransform: transform(position: SIMD3<Float>(3, 0, 0), yaw: 0)
+        )
+        let disconnected = tracker.snapshot
+        try require(
+            disconnected.disconnectedJumpCount == 1,
+            "Expected a large accepted-pose jump to be flagged"
+        )
+        try require(
+            disconnected.pathLengthMeters == 0,
+            "Expected disconnected jumps not to reward connected path length"
+        )
+        try require(
+            disconnected.guidance.contains("Bridge the path gap"),
+            "Expected actionable path-gap guidance"
+        )
+        try require(disconnected.shouldWarnBeforeFinish, "Expected finish warning")
+
+        for x in stride(from: Float(2.5), through: Float(0.5), by: -0.5) {
+            _ = tracker.record(
+                cameraTransform: transform(position: SIMD3<Float>(x, 0, 0), yaw: .pi)
+            )
+        }
+        let reconnected = tracker.snapshot
+        try require(
+            reconnected.disconnectedJumpCount == 0,
+            "Expected an overlapping return pass to resolve the path gap"
+        )
+        try require(
+            reconnected.pathLengthMeters >= 2,
+            "Expected the overlapping return pass to add connected path evidence"
+        )
         print("Verified scene coverage tracker")
     }
 

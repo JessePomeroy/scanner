@@ -208,6 +208,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                         headingBinCount: $0.headingBinCount,
                         elevationBinCount: $0.elevationBinCount,
                         pathLengthMeters: $0.pathLengthMeters,
+                        disconnectedJumpCount: $0.disconnectedJumpCount,
                         score: $0.score
                     )
                 },
