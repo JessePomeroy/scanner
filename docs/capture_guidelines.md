@@ -19,6 +19,11 @@
   falls back unusually often so the capture can be compared against texture
   quality. It rejects partial or contradictory capture evidence, including a
   fallback without a reason or totals that do not match the frame records.
+- For a physical-device audit, extract the ZIP and run
+  `python scripts/inspect_scan.py <scan-folder> --verify-images`. The command
+  summarizes image sources, per-source metadata/decoded resolutions, and
+  fallback reasons; it decodes every image and fails if recorded dimensions do
+  not match the file.
 
 - Move slowly and avoid fast pans.
 - Keep 70-80% overlap between accepted frames.

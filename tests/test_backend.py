@@ -2946,7 +2946,87 @@ class BackendTests(unittest.TestCase):
 
         self.assertIn("images=1", result.stdout)
         self.assertIn("video_metadata_entries=0", result.stdout)
+        self.assertIn("image_sources=legacy:1", result.stdout)
         self.assertIn("integrity_warnings=none", result.stdout)
+
+    def test_inspect_scan_cli_verifies_high_resolution_image_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            Image.new("RGB", (8, 6), (12, 34, 56)).save(
+                scan_dir / "images" / "frame_000001.jpg"
+            )
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0].update(
+                {
+                    "image_source": "arkit_high_resolution",
+                    "resolution": [8, 6],
+                }
+            )
+            frame_path.write_text(json.dumps(frames))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update(
+                {
+                    "high_resolution_frame_capture_enabled": True,
+                    "configured_video_resolution": [4, 3],
+                    "high_resolution_image_count": 1,
+                    "fallback_image_count": 0,
+                }
+            )
+            session_path.write_text(json.dumps(session))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "inspect_scan.py"),
+                    str(scan_dir),
+                    "--verify-images",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertIn("image_sources=arkit_high_resolution:1", result.stdout)
+        self.assertIn(
+            "metadata_resolutions_by_source=arkit_high_resolution@8x6:1",
+            result.stdout,
+        )
+        self.assertIn(
+            "decoded_resolutions_by_source=arkit_high_resolution@8x6:1",
+            result.stdout,
+        )
+        self.assertIn("image_decode_and_dimension_check=passed", result.stdout)
+
+    def test_inspect_scan_cli_rejects_image_dimension_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            Image.new("RGB", (8, 6), (12, 34, 56)).save(
+                scan_dir / "images" / "frame_000001.jpg"
+            )
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["resolution"] = [9, 6]
+            frame_path.write_text(json.dumps(frames))
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "inspect_scan.py"),
+                    str(scan_dir),
+                    "--verify-images",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "metadata=9x6 actual=8x6",
+            result.stderr,
+        )
 
     def test_write_scan_report_marks_object_crop_alignment_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
