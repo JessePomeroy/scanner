@@ -37,6 +37,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     @Published private(set) var objectCenterIsSet = false
     @Published private(set) var sceneCoverage = SceneCoverageSnapshot.empty
     @Published private(set) var sceneCameraPath: [SIMD3<Float>] = []
+    @Published private(set) var sceneSurfaceSamples: [SceneSurfaceSample] = []
 
     private let arTrackingManager: ARTrackingManager
     private let cameraCaptureManager: CameraCaptureManager
@@ -137,7 +138,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             clearExportSummary: true,
             clearQualityMetrics: true,
             sceneCoverage: .empty,
-            sceneCameraPath: []
+            sceneCameraPath: [],
+            sceneSurfaceSamples: []
         )
 
         do {
@@ -202,13 +204,19 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 objectRadiusMeters: scanMode == .object ? objectRadiusPreset.rawValue : nil,
                 sceneCoverage: finalSceneCoverage.map {
                     SceneCoverageMetadata(
-                        schemaVersion: "1.0",
+                        schemaVersion: "1.1",
                         acceptedPoseCount: $0.acceptedPoseCount,
                         uniquePositionCellCount: $0.uniquePositionCellCount,
                         headingBinCount: $0.headingBinCount,
                         elevationBinCount: $0.elevationBinCount,
                         pathLengthMeters: $0.pathLengthMeters,
                         disconnectedJumpCount: $0.disconnectedJumpCount,
+                        surfaceHitCount: $0.surfaceHitCount,
+                        uniqueSurfaceCellCount: $0.uniqueSurfaceCellCount,
+                        multiAngleSurfaceCellCount: $0.multiAngleSurfaceCellCount,
+                        minimumSurfaceDistanceMeters: $0.minimumSurfaceDistanceMeters,
+                        maximumSurfaceDistanceMeters: $0.maximumSurfaceDistanceMeters,
+                        surfaceScore: $0.surfaceScore,
                         score: $0.score
                     )
                 },
@@ -235,6 +243,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                     "depth frames are optional and absent on non-LiDAR devices",
                     "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
                     "video capture is capped at 30 seconds to keep scan exports manageable",
+                    "scene surface coverage uses ARKit estimated raycasts and is capture guidance, not reconstruction proof",
                     "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
                     "dense reconstruction requires a CUDA-capable COLMAP build"
                 ]
@@ -426,8 +435,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         )
 
         qualityStats.recordAccepted(blurScore: blurScore, movementSpeed: decision.movementSpeedMetersPerSecond)
+        let surfacePoint = scanMode == .scene
+            ? estimatedSceneSurfacePoint(for: frame)
+            : nil
         let coverage = scanMode == .scene
-            ? sceneCoverageTracker.record(cameraTransform: frame.camera.transform)
+            ? sceneCoverageTracker.record(
+                cameraTransform: frame.camera.transform,
+                surfacePoint: surfacePoint
+            )
             : nil
         var cameraPath: [SIMD3<Float>]?
         if scanMode == .scene {
@@ -449,8 +464,30 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             lastBlurScore: blurScore,
             lastMovementSpeed: decision.movementSpeedMetersPerSecond,
             sceneCoverage: coverage,
-            sceneCameraPath: cameraPath
+            sceneCameraPath: cameraPath,
+            sceneSurfaceSamples: scanMode == .scene
+                ? sceneCoverageTracker.surfaceSamples
+                : nil
         )
+    }
+
+    private func estimatedSceneSurfacePoint(for frame: ARFrame) -> SIMD3<Float>? {
+        let transform = frame.camera.transform
+        let origin = transform.translation
+        let direction = simd_normalize(
+            -SIMD3<Float>(
+                transform.columns.2.x,
+                transform.columns.2.y,
+                transform.columns.2.z
+            )
+        )
+        let query = ARRaycastQuery(
+            origin: origin,
+            direction: direction,
+            allowing: .estimatedPlane,
+            alignment: .any
+        )
+        return arSession.raycast(query).first?.worldTransform.translation
     }
 
     private func recordVideoFrame(_ frame: ARFrame) {
@@ -535,7 +572,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         clearExportSummary: Bool = false,
         clearQualityMetrics: Bool = false,
         sceneCoverage: SceneCoverageSnapshot? = nil,
-        sceneCameraPath: [SIMD3<Float>]? = nil
+        sceneCameraPath: [SIMD3<Float>]? = nil,
+        sceneSurfaceSamples: [SceneSurfaceSample]? = nil
     ) {
         DispatchQueue.main.async {
             if let state {
@@ -571,6 +609,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             }
             if let sceneCameraPath {
                 self.sceneCameraPath = sceneCameraPath
+            }
+            if let sceneSurfaceSamples {
+                self.sceneSurfaceSamples = sceneSurfaceSamples
             }
             if clearZipURL {
                 self.lastZipURL = nil

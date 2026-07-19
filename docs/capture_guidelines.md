@@ -34,8 +34,10 @@ crop planner will not know the intended subject center.
   bridging frames. For very long captures, the overlay keeps the latest 300
   accepted positions so the live view stays responsive.
 - Aim the dashed Coverage brush at the scene area you are currently working
-  around. The brush is a movement/attention cue in this first version; it does
-  not yet paint verified surface visibility.
+  around. An ARKit surface hit appears amber; revisit it from a meaningfully
+  different side or diagonal angle to turn that surface cell green. The surface
+  paint is estimated capture evidence, not proof that photogrammetry will retain
+  the surface.
 - The percentage is a capture-motion heuristic, not proof that every surface is
   visible. Before stopping, still look for hidden backsides, door recesses,
   undersides, thin edges, and gaps behind foreground objects.
@@ -52,3 +54,7 @@ crop planner will not know the intended subject center.
   `low_scene_coverage` warning; unresolved jumps add a
   `disconnected_scene_passes` warning for later comparison with reconstruction
   quality.
+- Surface hit count, cell count, multi-angle cell count, distance range, and
+  surface score are saved with that evidence. The backend flags weak multi-angle
+  surface coverage and distance ranges wider than four meters for benchmark
+  comparison; these are guidance signals rather than automatic scan rejection.
