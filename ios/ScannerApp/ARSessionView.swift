@@ -62,7 +62,8 @@ struct ARSessionView: UIViewRepresentable {
 
         private func appendPath(_ newPoints: [SIMD3<Float>]) {
             for point in newPoints {
-                if let previous = renderedPath.last {
+                if let previous = renderedPath.last,
+                   simd_distance(previous, point) > 0.001 {
                     pathRoot.addChildNode(pathSegment(from: previous, to: point))
                 }
                 pathRoot.addChildNode(pathMarker(at: point))
@@ -82,7 +83,7 @@ struct ARSessionView: UIViewRepresentable {
 
         private func pathSegment(from start: SIMD3<Float>, to end: SIMD3<Float>) -> SCNNode {
             let delta = end - start
-            let length = max(0.001, simd_length(delta))
+            let length = simd_length(delta)
             let cylinder = SCNCylinder(radius: 0.006, height: CGFloat(length))
             cylinder.radialSegmentCount = 6
             cylinder.firstMaterial?.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.7)
