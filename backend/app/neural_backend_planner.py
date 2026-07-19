@@ -42,6 +42,7 @@ class NeuralBackendConfig:
     splat_method: str = "splatfacto"
     splat_matching_method: str = "sequential"
     splat_delivery_formats: tuple[str, ...] = DEFAULT_SPLAT_DELIVERY_FORMATS
+    splat_cleanup_recipe: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,8 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
     if config.backend not in SUPPORTED_NEURAL_BACKENDS:
         supported = ", ".join(SUPPORTED_NEURAL_BACKENDS)
         raise ValueError(f"Unsupported neural backend '{config.backend}'. Supported backends: {supported}")
+    if config.splat_cleanup_recipe is not None and config.backend != "gaussian_splatting":
+        raise ValueError("A splat cleanup recipe is only valid for gaussian_splatting")
 
     scan_root = scan_root.resolve()
     image_dir = scan_root / "images"
@@ -140,6 +143,7 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
         nerfstudio_data = workspace / "nerfstudio"
         export_dir = workspace / "exports" / "splat"
         splat_ply = export_dir / "splat.ply"
+        publication_ply = splat_ply
         delivery_dir = workspace / "delivery"
         config_path = (
             workspace
@@ -194,6 +198,33 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
             "splat_export": export_dir,
             "splat_ply": splat_ply,
         }
+        if config.splat_cleanup_recipe is not None:
+            cleanup_recipe_candidate = config.splat_cleanup_recipe
+            if cleanup_recipe_candidate.is_symlink() or not cleanup_recipe_candidate.is_file():
+                raise ValueError(
+                    f"Gaussian cleanup recipe is missing or unsafe: {cleanup_recipe_candidate}"
+                )
+            cleanup_recipe = cleanup_recipe_candidate.resolve()
+            cleanup_dir = workspace / "cleanup"
+            publication_ply = cleanup_dir / "splat.cleaned.ply"
+            cleanup_report = cleanup_dir / "gaussian_cleanup_report.json"
+            cleanup_script = Path(__file__).resolve().parents[2] / "scripts" / "cleanup_gaussian_ply.py"
+            commands.append(
+                [
+                    "python3",
+                    str(cleanup_script),
+                    str(splat_ply),
+                    str(publication_ply),
+                    "--recipe",
+                    str(cleanup_recipe),
+                    "--report",
+                    str(cleanup_report),
+                    "--overwrite",
+                ]
+            )
+            inputs["splat_cleanup_recipe"] = str(cleanup_recipe)
+            outputs["splat_cleaned_ply"] = publication_ply
+            outputs["splat_cleanup_report"] = cleanup_report
         for delivery_format in delivery_formats:
             output_name, filename = _SPLAT_DELIVERY_TARGETS[delivery_format]
             target = delivery_dir / filename
@@ -201,7 +232,7 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 [
                     "splat-transform",
                     "--overwrite",
-                    str(splat_ply),
+                    str(publication_ply),
                     "--filter-nan",
                     str(target),
                 ]
@@ -242,6 +273,7 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 hardware_note,
                 "Prefer the exported image keyframes for complete-scene training; the iPhone support video is capped at 30 seconds.",
                 "The Nerfstudio export is the editable source splat.ply; preserve it as the master artifact.",
+                "When a cleanup recipe is supplied, every delivery conversion consumes the separately verified destructive cleanup PLY.",
                 "PlayCanvas splat-transform creates compact web/share artifacts and requires Node.js 22 or newer.",
                 "SOG is the preferred R2/browser delivery format; HTML is a self-contained local viewer.",
                 "A gaussian-glb uses KHR_gaussian_splatting and is not a conventional Blender-ready mesh GLB.",

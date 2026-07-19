@@ -22,6 +22,9 @@ Current entry points:
   splatting. Gaussian plans prefer full-session image keyframes over the
   30-second support video, preserve an editable PLY master, and default to SOG
   plus a standalone HTML viewer.
+- `cleanup_gaussian_ply.py`: preserve the master Gaussian PLY while applying a
+  strict destructive crop/primitive-index recipe to a publication PLY, then
+  stream-verify its retained count and bounds before delivery conversion.
 - `benchmark_evidence.py`: verify the frozen input hash, record scanner and
   evidence-tool commits, probe tool versions, wrap named stages with logs,
   elapsed time and peak VRAM sampling, classify daytime/overnight estimates,

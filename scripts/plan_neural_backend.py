@@ -38,6 +38,12 @@ def main() -> None:
     parser.add_argument("--splat-method", default="splatfacto")
     parser.add_argument("--splat-matching-method", default="sequential")
     parser.add_argument(
+        "--splat-cleanup-recipe",
+        type=Path,
+        default=None,
+        help="Optional destructive Gaussian crop/primitive-selection recipe used before delivery conversion.",
+    )
+    parser.add_argument(
         "--splat-delivery-format",
         action="append",
         choices=SUPPORTED_SPLAT_DELIVERY_FORMATS,
@@ -75,6 +81,7 @@ def main() -> None:
             splat_delivery_formats=tuple(
                 args.splat_delivery_formats or DEFAULT_SPLAT_DELIVERY_FORMATS
             ),
+            splat_cleanup_recipe=args.splat_cleanup_recipe,
         ),
     )
 
