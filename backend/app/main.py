@@ -30,6 +30,11 @@ from app.job_recovery import reconcile_interrupted_jobs
 from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
 from app.mask_generator import MaskGenerationError, generate_mask_proposals
+from app.mask_alignment import (
+    MaskAlignmentCheckpointError,
+    load_mask_alignment_checkpoint,
+    publish_mask_alignment_checkpoint,
+)
 from app.mask_processor import stage_colmap_fusion_masks, validate_openmvs_masks
 from app.mask_profiles import MaskProfileName, mask_stage_profile
 from app.mask_review import (
@@ -263,9 +268,14 @@ def get_scan_mask_review(scan_id: str) -> dict[str, object]:
 
 
 @app.post("/scans/{scan_id}/mask-review/approve", response_model=JobRecord)
-def approve_scan_mask_review(scan_id: str) -> JobRecord:
+def approve_scan_mask_review(
+    scan_id: str,
+    background_tasks: BackgroundTasks,
+) -> JobRecord:
     record = get_scan_status(scan_id)
-    if record.status != "processing" or record.stage != "awaiting_scope":
+    if record.status != "processing" or record.stage not in {
+        "awaiting_masks", "awaiting_scope"
+    }:
         raise HTTPException(status_code=409, detail="The scan is not awaiting review.")
     scan_root = _active_scan_root(scan_id)
     try:
@@ -280,19 +290,40 @@ def approve_scan_mask_review(scan_id: str) -> JobRecord:
     report_path = outputs.pop("mask_generation_report", None)
     if report_path is not None:
         outputs["mask_review_report"] = report_path
-    return jobs.update(
+    reviewed = jobs.update(
         scan_id,
         status="processing",
-        stage="awaiting_scope",
-        message="Mask review approved. Set or confirm the 3D region, then continue.",
+        stage=record.stage,
+        message=(
+            "Masks approved. Starting foreground-only camera alignment."
+            if record.stage == "awaiting_masks"
+            else "Mask review approved. Set or confirm the 3D region, then continue."
+        ),
         outputs=outputs,
     )
+    if record.stage == "awaiting_masks":
+        try:
+            claimed = jobs.claim(
+                scan_id,
+                expected_status="processing",
+                expected_stage="awaiting_masks",
+                status="processing",
+                stage="reconstructing",
+                message="Masks approved. Running foreground-only COLMAP alignment.",
+            )
+        except JobClaimError as error:
+            raise HTTPException(status_code=409, detail="This scan has already resumed.") from error
+        background_tasks.add_task(resume_masked_alignment, scan_id)
+        return claimed
+    return reviewed
 
 
 @app.post("/scans/{scan_id}/mask-review/reject", response_model=JobRecord)
 def reject_scan_mask_review(scan_id: str) -> JobRecord:
     record = get_scan_status(scan_id)
-    if record.status != "processing" or record.stage != "awaiting_scope":
+    if record.status != "processing" or record.stage not in {
+        "awaiting_masks", "awaiting_scope"
+    }:
         raise HTTPException(status_code=409, detail="The scan is not awaiting review.")
     scan_root = _active_scan_root(scan_id)
     try:
@@ -302,7 +333,7 @@ def reject_scan_mask_review(scan_id: str) -> JobRecord:
     return jobs.update(
         scan_id,
         status="processing",
-        stage="awaiting_scope",
+        stage=record.stage,
         message="Mask proposals rejected. Correct the saved scan masks and upload a new job.",
     )
 
@@ -453,6 +484,48 @@ def process_scan(
             proposal_outputs["mask_generation_report"] = str(mask_generation.report_path)
             for review_number, review_path in enumerate(mask_generation.review_masks):
                 proposal_outputs[f"mask_review_{review_number}"] = str(scan_root / review_path)
+
+        capture_masks_available = report.reconstruction_scope is not None
+        if profile.colmap_features and not capture_masks_available:
+            if mask_generation is None:
+                raise MaskGenerationError(
+                    "object_foreground requires a complete reviewed capture-mask set "
+                    "or post-capture mask authoring."
+                )
+            alignment_checkpoint = publish_mask_alignment_checkpoint(
+                scan_root,
+                run_dense=run_dense,
+                run_openmvs=run_openmvs,
+                scope_mode=scope_mode,
+                use_masks=use_masks,
+                review_scope=review_scope,
+                mask_profile=profile.name,
+            )
+            proposal_outputs["mask_alignment_checkpoint"] = str(alignment_checkpoint)
+            proposal_outputs["scan_report"] = str(package.report_path)
+            proposal_outputs["package_dir"] = str(processing_dir)
+            package.record_processing_step(
+                "mask_alignment_checkpoint",
+                {
+                    "state": "awaiting_masks",
+                    "mask_profile": profile.name,
+                    "checkpoint": str(alignment_checkpoint),
+                },
+            )
+            jobs.update(
+                scan_id,
+                status="processing",
+                stage="awaiting_masks",
+                message=(
+                    "Mask proposals need correction before foreground alignment."
+                    if mask_generation.state == "needs_correction"
+                    else "Review masks before foreground-only camera alignment."
+                ),
+                image_count=report.image_count,
+                frame_count=report.frame_count,
+                outputs=proposal_outputs,
+            )
+            return
 
         jobs.update(
             scan_id,
@@ -662,6 +735,87 @@ def process_scan(
             image_count=report.image_count,
             frame_count=report.frame_count,
             outputs=rebased_outputs,
+        )
+    except Exception as error:
+        fail_processing(scan_id, processing_dir)
+        jobs.update(scan_id, status="failed", message=str(error))
+
+
+def resume_masked_alignment(scan_id: str) -> None:
+    """Start object alignment after reviewed masks become authoritative."""
+    processing_dir = PROCESSING_DIR / scan_id
+    try:
+        scan_root = find_scan_root(processing_dir)
+        checkpoint = load_mask_alignment_checkpoint(scan_root)
+        package = validate_and_report_scan(scan_root)
+        report = package.validation
+        if report.reconstruction_scope is None:
+            raise MaskAlignmentCheckpointError(
+                "Approved capture masks are required before foreground alignment"
+            )
+        if not checkpoint.review_scope:
+            raise MaskAlignmentCheckpointError(
+                "Foreground mask alignment requires sparse scope review"
+            )
+        profile = mask_stage_profile(checkpoint.mask_profile)
+        capture_mask_path = scan_root / "masks" / "capture"
+        colmap_config = ColmapConfig(
+            use_gpu=True,
+            feature_mask_path=capture_mask_path,
+        )
+        started_at = perf_counter()
+        colmap_output = run_colmap_pipeline(
+            scan_root,
+            colmap_config,
+            include_dense=False,
+        )
+        package.record_processing_step(
+            "colmap",
+            {
+                "matcher": colmap_config.matcher,
+                "use_gpu": colmap_config.use_gpu,
+                "include_dense": False,
+                "review_scope": checkpoint.review_scope,
+                "elapsed_seconds": perf_counter() - started_at,
+                "output": str(colmap_output),
+                "mask_profile": profile.name,
+                "feature_masks": True,
+                "stereo_fusion_masks": False,
+                "resumed_after_mask_review": True,
+            },
+        )
+        checkpoint_outputs = publish_sparse_review_checkpoint(
+            scan_root,
+            run_dense=checkpoint.run_dense,
+            run_openmvs=checkpoint.run_openmvs,
+            scope_mode=checkpoint.scope_mode,
+            use_masks=checkpoint.use_masks,
+            mask_profile=profile.name,
+            colmap_executable=colmap_config.executable,
+        )
+        current = jobs.read(scan_id)
+        outputs = dict(current.outputs)
+        outputs.update({name: str(path) for name, path in checkpoint_outputs.items()})
+        outputs["package_dir"] = str(processing_dir)
+        outputs["scan_report"] = str(package.report_path)
+        package.record_processing_step(
+            "scope_review_checkpoint",
+            {
+                "state": "awaiting_scope",
+                "artifacts": {
+                    name: str(path) for name, path in checkpoint_outputs.items()
+                },
+                "masked_alignment": True,
+            },
+        )
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="awaiting_scope",
+            message="Foreground alignment is ready. Set or confirm the 3D region.",
+            image_count=report.image_count,
+            frame_count=report.frame_count,
+            outputs=outputs,
         )
     except Exception as error:
         fail_processing(scan_id, processing_dir)

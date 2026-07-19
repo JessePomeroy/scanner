@@ -127,9 +127,11 @@ final class MaskReviewStore: ObservableObject {
         defer { isDeciding = false }
         do {
             if approve {
-                _ = try await reviewClient.approve(scanID: scanID, baseURL: baseURL)
+                let job = try await reviewClient.approve(scanID: scanID, baseURL: baseURL)
                 approved = true
-                decisionMessage = "Masks approved. Next, confirm the 3D region and continue reconstruction."
+                decisionMessage = job.stage == .reconstructing
+                    ? "Masks approved. Foreground-only camera alignment is now running. Return to Jobs shortly to set the 3D region."
+                    : "Masks approved. Next, confirm the 3D region and continue reconstruction."
             } else {
                 _ = try await reviewClient.reject(scanID: scanID, baseURL: baseURL)
                 rejected = true
