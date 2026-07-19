@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "crop": {
+    "shape": "box",
+    "center": [0.0, 0.0, 0.0],
+    "size": [6.0, 6.0, 3.0],
+    "keep": "inside"
+  },
+  "loose_components": {
+    "keep_largest": 8,
+    "minimum_vertices": 100
+  }
+}

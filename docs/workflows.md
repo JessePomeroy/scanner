@@ -440,6 +440,28 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
 The helper supports Blender 4.x native OBJ/PLY import operators and falls back
 to the Blender 3.x legacy OBJ/PLY import operators when needed.
 
+For reversible mesh cleanup before GLB publication, start from the example
+recipe, adjust its world-space bounds and component thresholds, and require a
+cleanup evidence report:
+
+```bash
+cp docs/examples/mesh_cleanup_recipe.json ~/ScannerOutputs/scan_id/cleanup.json
+blender --background --python scripts/blender/prepare_scan_asset.py -- \
+  ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
+  ~/ScannerOutputs/scan_id/blender/scan_id-clean.blend \
+  --texture-dir ~/ScannerOutputs/scan_id/source/scan_id/dense \
+  --cleanup-recipe ~/ScannerOutputs/scan_id/cleanup.json \
+  --cleanup-report ~/ScannerOutputs/scan_id/blender/mesh_cleanup_report.json \
+  --export-glb ~/ScannerOutputs/scan_id/blender/scan_id-clean.glb
+```
+
+The `.blend` keeps hidden, unchanged source objects beside the retained cleanup
+copies. The GLB is selection-only and contains the retained copies. Box and
+world-Z cylinder crops can keep either inside or outside, followed by minimum
+and largest connected-component filtering. See
+[`mesh_cleanup_contract.md`](mesh_cleanup_contract.md) for the recipe and proof
+contract.
+
 To manually crop a point cloud in COLMAP/OpenMVS coordinates:
 
 ```bash
