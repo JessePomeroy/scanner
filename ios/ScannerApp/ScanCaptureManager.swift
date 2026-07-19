@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import CoreMotion
 import Foundation
+import ImageIO
 import UIKit
 
 enum ScanCaptureState: Equatable {
@@ -69,10 +70,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var reconstructionPolygon: [NormalizedMaskPoint] = []
     private var reconstructionPreviewSize: CGSize?
     private var captureMaskCount = 0
+    private var pendingKeyframeCapture: PendingKeyframeCapture?
+    private var highResolutionImageCount = 0
+    private var fallbackImageCount = 0
 
     private let minimumSharpnessScore: Float = 0.18
     private let fastMovementWarningMetersPerSecond: Float = 0.45
     private let maximumVideoDurationSeconds: Double = 30
+    private let maximumHighResolutionWaitSeconds: TimeInterval = 2
 
     var arSession: ARSession {
         arTrackingManager.session
@@ -122,6 +127,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             videoRecordingFailed = false
             videoDurationLimitMessageShown = false
             captureMaskCount = 0
+            pendingKeyframeCapture = nil
+            highResolutionImageCount = 0
+            fallbackImageCount = 0
             isScanning = true
         }
 
@@ -162,6 +170,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         arTrackingManager.stopTracking()
 
         let exportResult: (zipURL: URL, summary: ScanExportSummary) = try captureQueue.sync {
+            try finishPendingKeyframeWithFallback()
             isScanning = false
 
             guard let currentScanDirectory,
@@ -188,6 +197,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 scanMode: scanMode.rawValue,
                 usesLidar: usesLidar,
                 usesARKitMesh: usesARKitMesh,
+                highResolutionFrameCaptureEnabled: arTrackingManager
+                    .highResolutionFrameCaptureEnabled,
+                configuredVideoResolution: arTrackingManager.configuredVideoResolution,
+                highResolutionImageCount: highResolutionImageCount,
+                fallbackImageCount: fallbackImageCount,
                 imageCount: capturedFrames.count,
                 depthFrameCount: 0,
                 imuSampleCount: motionSamples.count,
@@ -241,6 +255,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 createdAt: createdAt,
                 limitations: [
                     "depth frames are optional and absent on non-LiDAR devices",
+                    "pose-synchronized ARKit high-resolution keyframes are preferred but individual captures may fall back to the triggering video frame",
                     "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
                     "video capture is capped at 30 seconds to keep scan exports manageable",
                     "scene surface coverage uses ARKit estimated raycasts and is capture guidance, not reconstruction proof",
@@ -277,6 +292,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 scanModeTitle: scanMode.title,
                 acceptedFrameCount: capturedFrames.count,
                 rejectedFrameCount: qualityStats.rejectedTotal,
+                highResolutionImageCount: highResolutionImageCount,
+                fallbackImageCount: fallbackImageCount,
                 videoCount: videoMetadata.count,
                 averageBlurScore: qualityStats.averageBlurScore,
                 minimumBlurScore: qualityStats.minimumBlurScore,
@@ -348,8 +365,28 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
     private func considerFrameForCapture(_ frame: ARFrame) {
         guard isScanning,
-              let currentScanDirectory else {
+              currentScanDirectory != nil else {
             return
+        }
+        if let pending = pendingKeyframeCapture {
+            guard frame.timestamp - pending.fallbackFrame.timestamp
+                    >= maximumHighResolutionWaitSeconds else {
+                return
+            }
+            pendingKeyframeCapture = nil
+            frameSelector.recordAcceptedFrame(pending.fallbackFrame)
+            do {
+                try packageAcceptedFrame(
+                    pending.fallbackFrame,
+                    decision: pending.decision,
+                    blurScore: pending.fallbackBlurScore,
+                    imageSource: .arkitVideoFrameFallback,
+                    highResolutionFailure: "high_resolution_capture_timeout"
+                )
+            } catch {
+                failFramePackaging(error)
+                return
+            }
         }
 
         let decision = frameSelector.decision(for: frame)
@@ -364,50 +401,125 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             return
         }
 
-        frameSelector.recordAcceptedFrame(frame)
+        let token = UUID()
+        pendingKeyframeCapture = PendingKeyframeCapture(
+            token: token,
+            fallbackFrame: frame,
+            decision: decision,
+            fallbackBlurScore: blurScore
+        )
+        cameraCaptureManager.captureKeyframe(
+            from: arSession,
+            fallbackFrame: frame,
+            completionQueue: captureQueue
+        ) { [weak self] captured in
+            self?.completePendingKeyframe(token: token, captured: captured)
+        }
+    }
+
+    private func completePendingKeyframe(
+        token: UUID,
+        captured: CapturedKeyframe
+    ) {
+        guard isScanning,
+              let pending = pendingKeyframeCapture,
+              pending.token == token else {
+            return
+        }
+        pendingKeyframeCapture = nil
+
+        let capturedBlurScore = imageWriter.estimateSharpnessScore(
+            from: captured.frame.capturedImage
+        )
+        let capturedDecision = frameSelector.decision(for: captured.frame)
+        if captured.source == .arkitHighResolution,
+           capturedBlurScore >= minimumSharpnessScore,
+           capturedDecision.accepted {
+            frameSelector.recordAcceptedFrame(captured.frame)
+            do {
+                try packageAcceptedFrame(
+                    captured.frame,
+                    decision: capturedDecision,
+                    blurScore: capturedBlurScore,
+                    imageSource: captured.source,
+                    highResolutionFailure: nil
+                )
+            } catch {
+                failFramePackaging(error)
+            }
+        } else {
+            frameSelector.recordAcceptedFrame(pending.fallbackFrame)
+            do {
+                try packageAcceptedFrame(
+                    pending.fallbackFrame,
+                    decision: pending.decision,
+                    blurScore: pending.fallbackBlurScore,
+                    imageSource: .arkitVideoFrameFallback,
+                    highResolutionFailure: captured.highResolutionFailure
+                        ?? "high_resolution_frame_blurry_or_pose_rejected"
+                )
+            } catch {
+                failFramePackaging(error)
+            }
+        }
+    }
+
+    private func finishPendingKeyframeWithFallback() throws {
+        guard let pending = pendingKeyframeCapture else { return }
+        pendingKeyframeCapture = nil
+        frameSelector.recordAcceptedFrame(pending.fallbackFrame)
+        try packageAcceptedFrame(
+            pending.fallbackFrame,
+            decision: pending.decision,
+            blurScore: pending.fallbackBlurScore,
+            imageSource: .arkitVideoFrameFallback,
+            highResolutionFailure: "scan_stopped_before_high_resolution_completion"
+        )
+    }
+
+    private func packageAcceptedFrame(
+        _ frame: ARFrame,
+        decision: FrameSelectionDecision,
+        blurScore: Float,
+        imageSource: KeyframeImageSource,
+        highResolutionFailure: String?
+    ) throws {
+        guard let currentScanDirectory else { return }
         frameCounter += 1
         let imagePath = "images/frame_\(String(format: "%06d", frameCounter)).jpg"
         let imageURL = currentScanDirectory.appendingPathComponent(imagePath)
 
-        let savedImage: SavedFrameImage
-        do {
-            savedImage = try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
-            if !reconstructionPolygon.isEmpty {
-                guard let reconstructionPreviewSize else {
-                    throw ScanCaptureMaskError.missingPreviewSize
-                }
-                let imagePolygon = try maskCoordinateMapper.imagePolygon(
-                    from: reconstructionPolygon,
-                    previewSize: reconstructionPreviewSize,
-                    imageWidth: savedImage.width,
-                    imageHeight: savedImage.height
-                )
-                let pngData = try maskRasterizer.pngData(
-                    for: imagePolygon,
-                    width: savedImage.width,
-                    height: savedImage.height
-                )
-                try packageWriter.saveCaptureMask(
-                    pngData,
-                    forImagePath: imagePath,
-                    in: currentScanDirectory
-                )
-                captureMaskCount += 1
+        let savedImage = try imageWriter.writeJPEG(from: frame.capturedImage, to: imageURL)
+        if !reconstructionPolygon.isEmpty {
+            guard let reconstructionPreviewSize else {
+                throw ScanCaptureMaskError.missingPreviewSize
             }
-        } catch {
-            cleanupCaptureAfterFailure()
-            arTrackingManager.stopTracking()
-            updatePublishedState(
-                state: .failed("Frame packaging failed"),
-                statusMessage: "Frame packaging failed: \(error.localizedDescription)"
+            let imagePolygon = try maskCoordinateMapper.imagePolygon(
+                from: reconstructionPolygon,
+                previewSize: reconstructionPreviewSize,
+                imageWidth: savedImage.width,
+                imageHeight: savedImage.height
             )
-            return
+            let pngData = try maskRasterizer.pngData(
+                for: imagePolygon,
+                width: savedImage.width,
+                height: savedImage.height
+            )
+            try packageWriter.saveCaptureMask(
+                pngData,
+                forImagePath: imagePath,
+                in: currentScanDirectory
+            )
+            captureMaskCount += 1
         }
 
+        let exposure = exposureMetadata(for: frame)
         capturedFrames.append(
             CapturedFrameMetadata(
                 id: frameCounter,
                 imagePath: imagePath,
+                imageSource: imageSource.rawValue,
+                highResolutionCaptureFailure: highResolutionFailure,
                 depthPath: nil,
                 timestamp: frame.timestamp,
                 cameraTransform: frame.camera.transform.rows,
@@ -420,8 +532,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 ],
                 trackingState: frame.camera.trackingState.description,
                 blurScore: blurScore,
-                exposureDuration: nil,
-                iso: nil,
+                exposureDuration: exposure.duration,
+                iso: exposure.iso,
                 exposureTargetOffset: nil,
                 ambientIntensity: frame.lightEstimate.map { Float($0.ambientIntensity) },
                 ambientColorTemperature: frame.lightEstimate.map { Float($0.ambientColorTemperature) },
@@ -434,6 +546,12 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             )
         )
 
+        switch imageSource {
+        case .arkitHighResolution:
+            highResolutionImageCount += 1
+        case .arkitVideoFrameFallback:
+            fallbackImageCount += 1
+        }
         qualityStats.recordAccepted(blurScore: blurScore, movementSpeed: decision.movementSpeedMetersPerSecond)
         let surfacePoint = scanMode == .scene
             ? estimatedSceneSurfacePoint(for: frame)
@@ -453,8 +571,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             cameraPath = sceneCameraPositions
         }
         let count = capturedFrames.count
+        let imageQualityLabel = imageSource == .arkitHighResolution
+            ? "high-res"
+            : "fallback"
         updatePublishedState(
-            statusMessage: "Accepted \(count) frames",
+            statusMessage: "Accepted \(count) \(imageQualityLabel)",
             guidanceMessage: guidance(
                 for: decision,
                 blurScore: blurScore,
@@ -469,6 +590,33 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 ? sceneCoverageTracker.surfaceSamples
                 : nil
         )
+    }
+
+    private func failFramePackaging(_ error: Error) {
+        cleanupCaptureAfterFailure()
+        arTrackingManager.stopTracking()
+        updatePublishedState(
+            state: .failed("Frame packaging failed"),
+            statusMessage: "Frame packaging failed: \(error.localizedDescription)"
+        )
+    }
+
+    private func exposureMetadata(for frame: ARFrame) -> (duration: Double?, iso: Float?) {
+        let metadata = frame.exifData
+        let nested = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]
+        let exposure = (
+            metadata[kCGImagePropertyExifExposureTime as String]
+                ?? nested?[kCGImagePropertyExifExposureTime as String]
+        ) as? NSNumber
+        let isoValue = metadata[kCGImagePropertyExifISOSpeedRatings as String]
+            ?? nested?[kCGImagePropertyExifISOSpeedRatings as String]
+        let iso: Float?
+        if let values = isoValue as? [NSNumber] {
+            iso = values.first?.floatValue
+        } else {
+            iso = (isoValue as? NSNumber)?.floatValue
+        }
+        return (exposure?.doubleValue, iso)
     }
 
     private func estimatedSceneSurfacePoint(for frame: ARFrame) -> SIMD3<Float>? {
@@ -531,6 +679,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
     private func cleanupCaptureAfterFailure() {
         isScanning = false
+        pendingKeyframeCapture = nil
         _ = motionRecorder.stop()
         videoRecorder.cancel()
     }
@@ -693,6 +842,13 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         let blur = summary.averageBlurScore.map { String(format: "%.2f", $0) } ?? "n/a"
         return "Frames \(summary.acceptedFrameCount), rejected \(summary.rejectedFrameCount), avg blur \(blur)"
     }
+}
+
+private struct PendingKeyframeCapture {
+    let token: UUID
+    let fallbackFrame: ARFrame
+    let decision: FrameSelectionDecision
+    let fallbackBlurScore: Float
 }
 
 private enum ScanCaptureMaskError: LocalizedError {

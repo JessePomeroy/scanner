@@ -75,9 +75,14 @@ dual-boot RTX 3070 PC.
      MASt3R-SLAM, Lingbot-style point-cloud generation, and future splat/NSR
      tests.
 
-6. Replace ARFrame JPEG capture with high-resolution still capture.
-   - Use `AVCapturePhotoOutput` for source images intended for photogrammetry.
-   - Keep ARFrame image capture available as a fallback/debug path.
+6. Replace ordinary ARFrame JPEG capture with high-resolution still capture.
+   Status: initial ARKit-native out-of-band high-resolution capture implemented;
+   physical iPhone resolution, cadence, thermal, and texture-quality validation
+   remain.
+   - Use `ARSession.captureHighResolutionFrame` with ARKit's recommended
+     high-resolution video format so the still keeps synchronized pose,
+     intrinsics, and frame semantics without competing with ARKit for the camera.
+   - Keep the triggering ARFrame image as a per-keyframe fallback/debug path.
    - Preserve ARKit pose, intrinsics, IMU, and lighting metadata for each
      accepted high-resolution photo.
 

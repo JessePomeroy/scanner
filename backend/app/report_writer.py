@@ -74,6 +74,12 @@ def capture_summary(
         "session_video_count": session.get("video_count"),
         "uses_lidar": session.get("uses_lidar"),
         "uses_arkit_mesh": session.get("uses_arkit_mesh"),
+        "high_resolution_frame_capture_enabled": session.get(
+            "high_resolution_frame_capture_enabled"
+        ),
+        "configured_video_resolution": session.get("configured_video_resolution"),
+        "high_resolution_image_count": session.get("high_resolution_image_count"),
+        "fallback_image_count": session.get("fallback_image_count"),
         "capture_duration_seconds": session.get("capture_duration_seconds"),
         "scene_coverage": session.get("scene_coverage"),
         "rejected_frame_count": session.get("rejected_frame_count"),
@@ -157,6 +163,9 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
     blur_min = capture.get("blur", {}).get("min")
     speed_max = capture.get("movement_speed_meters_per_second", {}).get("max")
     scene_coverage = capture.get("scene_coverage")
+    high_resolution_enabled = capture.get("high_resolution_frame_capture_enabled")
+    high_resolution_count = capture.get("high_resolution_image_count")
+    fallback_count = capture.get("fallback_image_count")
 
     if frame_count < 40:
         warnings.append("low_frame_count")
@@ -180,6 +189,18 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
         warnings.append("very_blurry_accepted_frames")
     if isinstance(speed_max, (int, float)) and speed_max > 0.75:
         warnings.append("fast_camera_motion")
+    if high_resolution_enabled is False:
+        warnings.append("high_resolution_capture_unavailable")
+    if (
+        high_resolution_enabled is True
+        and isinstance(high_resolution_count, int)
+        and not isinstance(high_resolution_count, bool)
+        and isinstance(fallback_count, int)
+        and not isinstance(fallback_count, bool)
+        and fallback_count > 0
+        and fallback_count > max(2, (high_resolution_count + fallback_count) // 10)
+    ):
+        warnings.append("many_high_resolution_capture_fallbacks")
     if capture.get("scan_mode") == "scene_scan" and isinstance(scene_coverage, dict):
         coverage_score = scene_coverage.get("score")
         disconnected_jump_count = scene_coverage.get("disconnected_jump_count")

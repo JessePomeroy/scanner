@@ -2797,6 +2797,30 @@ class BackendTests(unittest.TestCase):
         self.assertIn("weak_surface_view_coverage", payload["warnings"])
         self.assertIn("inconsistent_scene_distance", payload["warnings"])
 
+    def test_write_scan_report_preserves_high_resolution_capture_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update(
+                {
+                    "high_resolution_frame_capture_enabled": True,
+                    "configured_video_resolution": [1920, 1440],
+                    "high_resolution_image_count": 12,
+                    "fallback_image_count": 3,
+                }
+            )
+            session_path.write_text(json.dumps(session))
+
+            validation = validate_scan_package(scan_dir)
+            report_path = write_scan_report(scan_dir, validation)
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["capture"]["high_resolution_image_count"], 12)
+        self.assertEqual(payload["capture"]["fallback_image_count"], 3)
+        self.assertEqual(payload["capture"]["configured_video_resolution"], [1920, 1440])
+        self.assertIn("many_high_resolution_capture_fallbacks", payload["warnings"])
+
     def test_inspect_scan_cli_prints_integrity_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))

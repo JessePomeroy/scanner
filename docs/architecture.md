@@ -5,6 +5,14 @@ The project is split into two foundations:
 - `ios/ScannerApp`: captures images and AR metadata into a portable scan package.
 - `backend/app`: validates uploaded scan packages and runs reconstruction tools.
 
+Accepted iOS keyframe motion is first qualified against the live ARKit stream.
+On supported devices, ARKit then captures an out-of-band high-resolution
+`ARFrame` using its recommended still-capture video format. That returned frame
+owns the packaged image, timestamp, pose, intrinsics, EXIF exposure/ISO, and
+lighting evidence. Only one request is allowed in flight. The qualified live
+frame is retained temporarily and becomes the explicit fallback if the still is
+unsupported, fails, is blurry, or has not completed when the user stops.
+
 Raw JSON field parsing is owned by `scan_metadata`, which returns typed frame,
 session, and video records. `scan_validator` owns filesystem/reference
 integrity and exposes the existing `validate_scan_package` interface to backend
