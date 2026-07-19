@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,7 @@ def capture_summary(
         "uses_lidar": session.get("uses_lidar"),
         "uses_arkit_mesh": session.get("uses_arkit_mesh"),
         "capture_duration_seconds": session.get("capture_duration_seconds"),
+        "scene_coverage": session.get("scene_coverage"),
         "rejected_frame_count": session.get("rejected_frame_count"),
         "rejected_tracking_count": session.get("rejected_tracking_count"),
         "rejected_blur_count": session.get("rejected_blur_count"),
@@ -154,6 +156,7 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
     blur_mean = capture.get("blur", {}).get("mean")
     blur_min = capture.get("blur", {}).get("min")
     speed_max = capture.get("movement_speed_meters_per_second", {}).get("max")
+    scene_coverage = capture.get("scene_coverage")
 
     if frame_count < 40:
         warnings.append("low_frame_count")
@@ -177,6 +180,14 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
         warnings.append("very_blurry_accepted_frames")
     if isinstance(speed_max, (int, float)) and speed_max > 0.75:
         warnings.append("fast_camera_motion")
+    if capture.get("scan_mode") == "scene_scan" and isinstance(scene_coverage, dict):
+        coverage_score = scene_coverage.get("score")
+        if (
+            isinstance(coverage_score, (int, float))
+            and math.isfinite(coverage_score)
+            and coverage_score < 0.55
+        ):
+            warnings.append("low_scene_coverage")
     if object_scan["is_object_scan"] and not object_scan["ready_for_manual_radius_crop"]:
         warnings.append("object_scan_missing_subject_tap")
 

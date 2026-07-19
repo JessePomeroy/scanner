@@ -2581,6 +2581,29 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["capture"]["movement_delta_meters"]["max"], 0.12)
         self.assertIn("low_frame_count", payload["warnings"])
 
+    def test_write_scan_report_preserves_scene_coverage_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session["scene_coverage"] = {
+                "schema_version": "1.0",
+                "accepted_pose_count": 18,
+                "unique_position_cell_count": 4,
+                "heading_bin_count": 3,
+                "elevation_bin_count": 1,
+                "path_length_meters": 1.4,
+                "score": 0.48,
+            }
+            session_path.write_text(json.dumps(session))
+            report = validate_scan_package(scan_dir)
+
+            report_path = write_scan_report(scan_dir, report)
+            payload = json.loads(report_path.read_text())
+
+        self.assertEqual(payload["capture"]["scene_coverage"]["score"], 0.48)
+        self.assertIn("low_scene_coverage", payload["warnings"])
+
     def test_inspect_scan_cli_prints_integrity_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))

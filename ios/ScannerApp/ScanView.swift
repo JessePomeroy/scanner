@@ -94,6 +94,14 @@ struct ScanView: View {
                     systemImage: "speedometer"
                 )
 
+                if scanManager.scanMode == .scene {
+                    metricLabel(
+                        title: "Coverage",
+                        value: "\(scanManager.sceneCoverage.percent)%",
+                        systemImage: "square.grid.3x3.fill"
+                    )
+                }
+
                 Text(scanManager.guidanceMessage)
                     .font(.caption)
                     .lineLimit(1)
@@ -190,6 +198,13 @@ struct ScanView: View {
                         value: summary.captureDurationSeconds.map { String(format: "%.0fs", $0) } ?? "--",
                         systemImage: "timer"
                     )
+                    if let coverage = summary.sceneCoverageScore {
+                        summaryMetric(
+                            title: "Coverage",
+                            value: "\(Int((coverage * 100).rounded()))%",
+                            systemImage: "square.grid.3x3.fill"
+                        )
+                    }
                 }
 
                 if summary.objectRadiusMeters != nil || summary.objectCenterWasSet {

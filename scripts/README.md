@@ -161,3 +161,13 @@ xcrun swiftc -warnings-as-errors -parse-as-library \
   -o /tmp/verify_mask_review_client
 /tmp/verify_mask_review_client
 ```
+
+Run the scene coverage tracker verifier from the repo root:
+
+```bash
+xcrun swiftc -warnings-as-errors -parse-as-library \
+  ios/ScannerApp/SceneCoverageTracker.swift \
+  scripts/verify_scene_coverage_tracker.swift \
+  -o /tmp/verify_scene_coverage_tracker
+/tmp/verify_scene_coverage_tracker
+```

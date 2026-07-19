@@ -140,6 +140,7 @@ struct ScanSessionMetadata: Codable, Equatable {
     let captureDurationSeconds: Double?
     let objectCenterWorld: [Float]?
     let objectRadiusMeters: Float?
+    let sceneCoverage: SceneCoverageMetadata?
     let notes: String?
 
     enum CodingKeys: String, CodingKey {
@@ -165,7 +166,28 @@ struct ScanSessionMetadata: Codable, Equatable {
         case captureDurationSeconds = "capture_duration_seconds"
         case objectCenterWorld = "object_center_world"
         case objectRadiusMeters = "object_radius_meters"
+        case sceneCoverage = "scene_coverage"
         case notes
+    }
+}
+
+struct SceneCoverageMetadata: Codable, Equatable {
+    let schemaVersion: String
+    let acceptedPoseCount: Int
+    let uniquePositionCellCount: Int
+    let headingBinCount: Int
+    let elevationBinCount: Int
+    let pathLengthMeters: Float
+    let score: Float
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case acceptedPoseCount = "accepted_pose_count"
+        case uniquePositionCellCount = "unique_position_cell_count"
+        case headingBinCount = "heading_bin_count"
+        case elevationBinCount = "elevation_bin_count"
+        case pathLengthMeters = "path_length_meters"
+        case score
     }
 }
 
@@ -234,4 +256,5 @@ struct ScanExportSummary: Equatable {
     let captureDurationSeconds: Double?
     let objectRadiusMeters: Float?
     let objectCenterWasSet: Bool
+    let sceneCoverageScore: Float?
 }
