@@ -29,6 +29,13 @@ crop planner will not know the intended subject center.
 - Watch the live Coverage percentage and follow its movement prompts. It
   combines accepted viewpoints, connected travel, horizontal view directions,
   and high/low passes.
+- The cyan trail marks accepted camera positions. Keep it connected through
+  deliberate turns; a large empty jump means the intervening scene may lack
+  bridging frames. For very long captures, the overlay keeps the latest 300
+  accepted positions so the live view stays responsive.
+- Aim the dashed Coverage brush at the scene area you are currently working
+  around. The brush is a movement/attention cue in this first version; it does
+  not yet paint verified surface visibility.
 - The percentage is a capture-motion heuristic, not proof that every surface is
   visible. Before stopping, still look for hidden backsides, door recesses,
   undersides, thin edges, and gaps behind foreground objects.

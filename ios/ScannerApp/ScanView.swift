@@ -9,10 +9,23 @@ struct ScanView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ARSessionView(session: scanManager.arSession) { worldPosition in
+            ARSessionView(
+                session: scanManager.arSession,
+                cameraPath: scanManager.scanMode == .scene
+                    ? scanManager.sceneCameraPath
+                    : []
+            ) { worldPosition in
                 scanManager.setObjectCenter(worldPosition)
             }
                 .ignoresSafeArea()
+
+            if scanManager.scanMode == .scene,
+               scanManager.state == .scanning,
+               !isEditingReconstructionArea {
+                sceneCoverageReticle
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+            }
 
             if isEditingReconstructionArea {
                 CaptureMaskEditorView(
@@ -115,6 +128,36 @@ struct ScanView: View {
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var sceneCoverageReticle: some View {
+        VStack(spacing: 7) {
+            ZStack {
+                Circle()
+                    .stroke(
+                        scanManager.sceneCoverage.score >= 0.75 ? Color.green : Color.cyan,
+                        style: StrokeStyle(lineWidth: 3, dash: [7, 5])
+                    )
+                    .frame(width: 72, height: 72)
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .frame(width: 34, height: 34)
+                Circle()
+                    .fill(scanManager.sceneCoverage.score >= 0.75 ? Color.green : Color.cyan)
+                    .frame(width: 9, height: 9)
+            }
+
+            Text("Coverage brush · \(scanManager.sceneCoverage.percent)%")
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(.black.opacity(0.55))
+                .clipShape(Capsule())
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Scene coverage brush")
+        .accessibilityValue("\(scanManager.sceneCoverage.percent) percent")
     }
 
     private func metricLabel(title: String, value: String, systemImage: String) -> some View {
