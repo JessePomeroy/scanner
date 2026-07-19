@@ -6,8 +6,11 @@ dual-boot RTX 3070 PC.
 
 ## Current Baseline
 
-- iOS app captures ARFrame JPEG keyframes, camera transforms, intrinsics, blur
-  scores, motion deltas, movement speed, and object-scan tap metadata.
+- iOS app qualifies useful views from live ARFrames, then prefers
+  pose-synchronized ARKit high-resolution JPEG keyframes while retaining the
+  qualified live frame as an explicit fallback. It records camera transforms,
+  intrinsics, exposure/ISO, blur scores, motion deltas, movement speed, image
+  provenance, and object-scan tap metadata.
 - Scan packages export as ZIP files with `images/`, `metadata/`, `arkit/`,
   `depth/`, and `preview/`.
 - Mac validation writes `metadata/scan_report.json`.
@@ -38,8 +41,10 @@ dual-boot RTX 3070 PC.
      and timestamps.
    - Use this first for diagnostics; later it can help pose sanity checks.
 
-4. Add richer camera exposure metadata. Status: partially implemented.
-   - Capture exposure duration, ISO, exposure target/offset when available.
+4. Add richer camera exposure metadata. Status: exposure duration and ISO
+   implemented for packaged keyframes; broader camera-state scoring remains.
+   - Preserve exposure duration and ISO from the exact packaged high-resolution
+     or fallback ARFrame; add exposure target/offset when available.
    - Track focus/exposure/white-balance lock state more accurately.
    - Use these fields for texture-quality scoring and report warnings.
 
@@ -76,21 +81,28 @@ dual-boot RTX 3070 PC.
      tests.
 
 6. Replace ordinary ARFrame JPEG capture with high-resolution still capture.
-   Status: initial ARKit-native out-of-band high-resolution capture implemented;
-   physical iPhone resolution, cadence, thermal, and texture-quality validation
-   remain.
+   Status: software implementation and automated package audit complete;
+   physical iPhone resolution, cadence, thermal, pose, and texture-quality
+   validation remain.
    - Use `ARSession.captureHighResolutionFrame` with ARKit's recommended
      high-resolution video format so the still keeps synchronized pose,
      intrinsics, and frame semantics without competing with ARKit for the camera.
    - Keep the triggering ARFrame image as a per-keyframe fallback/debug path.
    - Preserve ARKit pose, intrinsics, IMU, and lighting metadata for each
      accepted high-resolution photo.
+   - Use `scripts/inspect_scan.py <scan-folder> --verify-images` to summarize
+     source/resolution evidence, decode every packaged image, and reject file
+     dimensions that disagree with frame metadata.
 
-7. Strengthen package metadata integrity. Status: implemented initial pass.
+7. Strengthen package metadata integrity. Status: implemented for the current
+   capture contract; extend only when new package fields require it.
    - Parse frame, session, and video metadata into typed records.
    - Reject duplicate, nested, symlinked, or escaping references; invalid scalar
      values; non-increasing frame timestamps; and declared file-count
      mismatches.
+   - Cross-check the per-frame High-Res/Fallback provenance against session
+     totals; require explicit fallback reasons and reject partial or
+     contradictory evidence while accepting legacy packages with no new fields.
    - Report legacy video files without `metadata/video.json` as a compatibility
      warning instead of silently ignoring the missing metadata.
 
