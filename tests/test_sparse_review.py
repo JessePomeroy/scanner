@@ -250,6 +250,113 @@ class SparseReviewTests(unittest.TestCase):
         export_blender.assert_not_called()
         self.assertEqual(record_step.call_args_list[-1].args[0], "scope_review_checkpoint")
 
+    def test_object_profile_pauses_for_masks_before_colmap_alignment(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "processing" / "scan-1"
+            scan_root = workspace / "scan"
+            report_path = scan_root / "metadata" / "scan_report.json"
+            mask_report = scan_root / "metadata" / "mask_generation.json"
+            alignment_checkpoint = scan_root / "metadata" / "mask_alignment_checkpoint.json"
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="queued")
+            record_step = Mock()
+            package = SimpleNamespace(
+                validation=SimpleNamespace(
+                    image_count=12,
+                    frame_count=12,
+                    mask_authoring=object(),
+                    reconstruction_scope=None,
+                ),
+                report_path=report_path,
+                record_processing_step=record_step,
+            )
+            generation = SimpleNamespace(
+                state="awaiting_review",
+                generator="polygon_interpolation_v1",
+                source_revision=1,
+                frames=tuple(range(12)),
+                report_path=mask_report,
+                review_masks=("masks/review/sample.png",),
+            )
+
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "prepare_processing_dir", return_value=workspace),
+                patch.object(backend_main, "find_scan_root", return_value=scan_root),
+                patch.object(backend_main, "validate_and_report_scan", return_value=package),
+                patch.object(
+                    backend_main,
+                    "load_scan_metadata",
+                    return_value=SimpleNamespace(frames=()),
+                ),
+                patch.object(
+                    backend_main,
+                    "generate_mask_proposals",
+                    return_value=generation,
+                ),
+                patch.object(
+                    backend_main,
+                    "publish_mask_alignment_checkpoint",
+                    return_value=alignment_checkpoint,
+                ),
+                patch.object(backend_main, "run_colmap_pipeline") as run_colmap,
+            ):
+                backend_main.process_scan(
+                    "scan-1",
+                    root / "incoming.zip",
+                    True,
+                    True,
+                    "auto_roi",
+                    False,
+                    True,
+                    "object_foreground",
+                )
+                paused = store.read("scan-1")
+
+        self.assertEqual(paused.stage, "awaiting_masks")
+        self.assertIn("mask_generation_report", paused.outputs)
+        self.assertIn("mask_alignment_checkpoint", paused.outputs)
+        run_colmap.assert_not_called()
+
+    def test_object_mask_approval_claims_alignment_resume(self) -> None:
+        if importlib.util.find_spec("fastapi") is None:
+            self.skipTest("FastAPI is not installed in the lightweight test environment")
+
+        from app import main as backend_main
+        from fastapi import BackgroundTasks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = JobStore(root / "jobs")
+            store.create("scan-1")
+            store.update("scan-1", status="processing", stage="validating")
+            store.update("scan-1", status="processing", stage="reconstructing")
+            store.update(
+                "scan-1",
+                status="processing",
+                stage="awaiting_masks",
+                outputs={"mask_generation_report": "/safe/mask_generation.json"},
+            )
+            background = BackgroundTasks()
+            with (
+                patch.object(backend_main, "jobs", store),
+                patch.object(backend_main, "_active_scan_root", return_value=root),
+                patch.object(backend_main, "approve_mask_review"),
+                patch.object(backend_main, "validate_and_report_scan"),
+            ):
+                resumed = backend_main.approve_scan_mask_review("scan-1", background)
+
+        self.assertEqual(resumed.stage, "reconstructing")
+        self.assertEqual(len(background.tasks), 1)
+        self.assertIn("mask_review_report", resumed.outputs)
+
     def test_scope_api_persists_and_reads_reviewed_region(self) -> None:
         if importlib.util.find_spec("fastapi") is None:
             self.skipTest("FastAPI is not installed in the lightweight test environment")
@@ -375,6 +482,7 @@ class SparseReviewTests(unittest.TestCase):
             self.skipTest("FastAPI is not installed in the lightweight test environment")
 
         from app import main as backend_main
+        from fastapi import BackgroundTasks
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -397,7 +505,9 @@ class SparseReviewTests(unittest.TestCase):
                 patch.object(backend_main, "approve_mask_review") as approve,
                 patch.object(backend_main, "validate_and_report_scan"),
             ):
-                updated = backend_main.approve_scan_mask_review("scan-1")
+                updated = backend_main.approve_scan_mask_review(
+                    "scan-1", BackgroundTasks()
+                )
 
         approve.assert_called_once_with(root)
         self.assertNotIn("mask_generation_report", updated.outputs)

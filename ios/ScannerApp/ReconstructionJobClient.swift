@@ -48,6 +48,7 @@ enum ReconstructionJobStage: Decodable, Equatable, Sendable {
     case queued
     case validating
     case reconstructing
+    case awaitingMasks
     case awaitingScope
     case meshing
     case exporting
@@ -61,6 +62,7 @@ enum ReconstructionJobStage: Decodable, Equatable, Sendable {
         case "queued": self = .queued
         case "validating": self = .validating
         case "reconstructing": self = .reconstructing
+        case "awaiting_masks": self = .awaitingMasks
         case "awaiting_scope": self = .awaitingScope
         case "meshing": self = .meshing
         case "exporting": self = .exporting
@@ -75,6 +77,7 @@ enum ReconstructionJobStage: Decodable, Equatable, Sendable {
         case .queued: return "Queued"
         case .validating: return "Validating"
         case .reconstructing: return "Reconstructing"
+        case .awaitingMasks: return "Review Masks"
         case .awaitingScope: return "Review Scope"
         case .meshing: return "Meshing"
         case .exporting: return "Exporting"

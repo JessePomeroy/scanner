@@ -39,8 +39,8 @@ def reconcile_interrupted_jobs(
             reconciled.append(_recover_completed_job(jobs, record, completed_path))
             continue
 
-        if record.stage == "awaiting_scope" and processing_path.is_dir():
-            # This is a durable user-review checkpoint, not an interrupted
+        if record.stage in {"awaiting_masks", "awaiting_scope"} and processing_path.is_dir():
+            # These are durable user-review checkpoints, not interrupted
             # background command. Leave its workspace in place for resume.
             reconciled.append(record)
             continue

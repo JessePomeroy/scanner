@@ -183,9 +183,9 @@ Implement the following as independently reviewable slices:
    - Flag abrupt area/centroid changes and require correction before upload.
 4. Add stage-specific mask profiles. Status: backend profiles, explicit iPhone
    scene default, per-stage reporting, masked COLMAP fusion/OpenMVS geometry,
-   and OpenMVS texture exclusion implemented. Object captures with an already
-   reviewed mask set can opt into masked COLMAP features; pausing new object
-   jobs before their first alignment remains.
+   and OpenMVS texture exclusion implemented. Object foreground jobs now pause
+   before COLMAP, resume masked feature alignment only after approval, and then
+   enter the existing sparse 3D-region review.
    - Scene default: full-image COLMAP alignment and reviewed dense-stage masks.
    - Object/turntable option: masks may also constrain COLMAP features when
      background alignment would be misleading.

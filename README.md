@@ -140,8 +140,10 @@ Mask use is explicit through `mask_profile`. The iPhone requests
 alignment, while reviewed masks constrain COLMAP fusion, OpenMVS
 densification, and texture selection. For a pre-masked object or turntable
 package, request `mask_profile=object_foreground` to constrain COLMAP features
-as well. Every processing report records the effective profile and each stage
-that consumed masks.
+as well. New authored masks pause the job at `awaiting_masks`; approval starts
+foreground-only alignment and the job then pauses at `awaiting_scope` for the
+3D region. Every processing report records the effective profile and each
+stage that consumed masks.
 
 The paintbrush beside a ZIP in the iPhone Scans tab opens the post-capture scene
 mask editor. It supports multiple green Keep and red Erase areas on five
