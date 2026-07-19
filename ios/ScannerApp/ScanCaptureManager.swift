@@ -36,6 +36,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     @Published var objectRadiusPreset: ObjectRadiusPreset = .medium
     @Published private(set) var objectCenterIsSet = false
     @Published private(set) var sceneCoverage = SceneCoverageSnapshot.empty
+    @Published private(set) var sceneCameraPath: [SIMD3<Float>] = []
 
     private let arTrackingManager: ARTrackingManager
     private let cameraCaptureManager: CameraCaptureManager
@@ -56,6 +57,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var objectCenterWorld: SIMD3<Float>?
     private var qualityStats = CaptureQualityStats()
     private var sceneCoverageTracker = SceneCoverageTracker()
+    private var sceneCameraPositions: [SIMD3<Float>] = []
     private var scanStartedAt: Date?
     private var lastRejectedStatusTimestamp: TimeInterval = 0
     private var videoOutputURL: URL?
@@ -110,6 +112,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             objectCenterWorld = nil
             qualityStats = CaptureQualityStats()
             sceneCoverageTracker.reset()
+            sceneCameraPositions.removeAll(keepingCapacity: true)
             scanStartedAt = Date()
             lastRejectedStatusTimestamp = 0
             videoRelativePath = "video/scan.mov"
@@ -133,7 +136,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             clearZipURL: true,
             clearExportSummary: true,
             clearQualityMetrics: true,
-            sceneCoverage: .empty
+            sceneCoverage: .empty,
+            sceneCameraPath: []
         )
 
         do {
@@ -424,6 +428,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         let coverage = scanMode == .scene
             ? sceneCoverageTracker.record(cameraTransform: frame.camera.transform)
             : nil
+        var cameraPath: [SIMD3<Float>]?
+        if scanMode == .scene {
+            sceneCameraPositions.append(frame.camera.transform.translation)
+            if sceneCameraPositions.count > 300 {
+                sceneCameraPositions.removeFirst(sceneCameraPositions.count - 300)
+            }
+            cameraPath = sceneCameraPositions
+        }
         let count = capturedFrames.count
         updatePublishedState(
             statusMessage: "Accepted \(count) frames",
@@ -435,7 +447,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             acceptedFrameCount: count,
             lastBlurScore: blurScore,
             lastMovementSpeed: decision.movementSpeedMetersPerSecond,
-            sceneCoverage: coverage
+            sceneCoverage: coverage,
+            sceneCameraPath: cameraPath
         )
     }
 
@@ -520,7 +533,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         clearZipURL: Bool = false,
         clearExportSummary: Bool = false,
         clearQualityMetrics: Bool = false,
-        sceneCoverage: SceneCoverageSnapshot? = nil
+        sceneCoverage: SceneCoverageSnapshot? = nil,
+        sceneCameraPath: [SIMD3<Float>]? = nil
     ) {
         DispatchQueue.main.async {
             if let state {
@@ -553,6 +567,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             }
             if let sceneCoverage {
                 self.sceneCoverage = sceneCoverage
+            }
+            if let sceneCameraPath {
+                self.sceneCameraPath = sceneCameraPath
             }
             if clearZipURL {
                 self.lastZipURL = nil
