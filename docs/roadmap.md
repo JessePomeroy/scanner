@@ -222,6 +222,10 @@ Implement the following as independently reviewable slices:
 ### Track D: Mesh and Gaussian cleanup contracts
 
 1. Add reversible mesh cleanup before GLB publication.
+   Status: versioned Blender box/cylinder crop, inside/outside inversion,
+   loose-component filtering, preserved source objects, retained-only GLB
+   export, and final evidence report implemented. Physical reconstructed-asset
+   calibration remains.
    - Support box/cylinder crop, inside/outside inversion, loose-component
      selection, and a Blender-ready retained result.
    - Ensure discarded geometry does not remain in the exported GLB.

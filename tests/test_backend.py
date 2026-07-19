@@ -1071,6 +1071,176 @@ class BackendTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             module.parse_blender_args(["scan.obj", "scan.blend", "--decimate-ratio", "2"])
 
+    def test_blender_asset_parser_requires_cleanup_recipe_and_report_together(self) -> None:
+        module = load_blender_script_module()
+
+        with self.assertRaises(SystemExit):
+            module.parse_blender_args(
+                ["scan.obj", "scan.blend", "--cleanup-recipe", "cleanup.json"]
+            )
+
+    def test_blender_cleanup_recipe_parses_box_and_component_rules(self) -> None:
+        module = load_blender_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cleanup.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "crop": {
+                            "shape": "box",
+                            "center": [1, 2, 3],
+                            "size": [4, 6, 8],
+                            "keep": "inside",
+                        },
+                        "loose_components": {
+                            "keep_largest": 2,
+                            "minimum_vertices": 100,
+                        },
+                    }
+                )
+            )
+
+            recipe = module.load_cleanup_recipe(path)
+
+        self.assertEqual(recipe.crop.shape, "box")
+        self.assertEqual(recipe.crop.center, (1.0, 2.0, 3.0))
+        self.assertEqual(recipe.crop.size, (4.0, 6.0, 8.0))
+        self.assertEqual(recipe.loose_components.keep_largest, 2)
+        self.assertEqual(recipe.loose_components.minimum_vertices, 100)
+        self.assertTrue(module.point_is_retained((3, 5, 7), recipe.crop))
+        self.assertFalse(module.point_is_retained((3.01, 5, 7), recipe.crop))
+
+    def test_blender_cleanup_recipe_supports_inverted_z_axis_cylinder(self) -> None:
+        module = load_blender_script_module()
+        crop = module.MeshCrop(
+            shape="cylinder",
+            center=(0, 0, 0),
+            keep="outside",
+            radius=2,
+            height=4,
+        )
+
+        self.assertFalse(module.point_is_retained((1, 1, 1), crop))
+        self.assertTrue(module.point_is_retained((2.1, 0, 0), crop))
+        self.assertTrue(module.point_is_retained((0, 0, 2.1), crop))
+
+    def test_blender_cleanup_recipe_rejects_unknown_or_nonfinite_fields(self) -> None:
+        module = load_blender_script_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            unknown = Path(tmp) / "unknown.json"
+            unknown.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "crop": {
+                            "shape": "box",
+                            "center": [0, 0, 0],
+                            "size": [1, 1, 1],
+                            "keep": "inside",
+                            "rotation": [0, 0, 0],
+                        },
+                    }
+                )
+            )
+            nonfinite = Path(tmp) / "nonfinite.json"
+            nonfinite.write_text(
+                '{"schema_version":"1.0","crop":{"shape":"box",'
+                '"center":[0,0,0],"size":[1,1,NaN],"keep":"inside"}}'
+            )
+
+            with self.assertRaises(SystemExit):
+                module.load_cleanup_recipe(unknown)
+            with self.assertRaises(SystemExit):
+                module.load_cleanup_recipe(nonfinite)
+
+    def test_blender_prepare_cleanup_exports_retained_selection_and_report(self) -> None:
+        module = load_blender_script_module()
+        calls: list[tuple[str, object]] = []
+        source = SimpleNamespace(name="source")
+        retained = SimpleNamespace(name="retained")
+        recipe = module.MeshCleanupRecipe(
+            "1.0",
+            crop=module.MeshCrop(
+                shape="box",
+                center=(0, 0, 0),
+                keep="inside",
+                size=(2, 2, 2),
+            ),
+        )
+        evidence = {
+            "schema_version": "1.0",
+            "source_vertex_count": 10,
+            "retained_vertex_count": 6,
+            "objects": [],
+        }
+        fake_bpy = SimpleNamespace(
+            ops=SimpleNamespace(
+                wm=SimpleNamespace(
+                    save_as_mainfile=lambda filepath: calls.append(("save", filepath))
+                ),
+                export_scene=SimpleNamespace(
+                    gltf=lambda **kwargs: calls.append(("export", kwargs))
+                ),
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            sys.modules, {"bpy": fake_bpy}
+        ), patch.object(module, "load_cleanup_recipe", return_value=recipe), patch.object(
+            module, "clear_scene"
+        ), patch.object(
+            module, "import_asset", return_value=[source]
+        ), patch.object(
+            module, "normalize_scene_names"
+        ), patch.object(
+            module, "configure_units"
+        ), patch.object(
+            module, "apply_scale"
+        ), patch.object(
+            module, "set_origins"
+        ), patch.object(
+            module, "apply_reversible_cleanup", return_value=([retained], evidence)
+        ), patch.object(
+            module, "finalize_cleanup_evidence", return_value={**evidence, "final_verification_passed": True}
+        ), patch.object(
+            module, "select_only"
+        ) as select_only:
+            root = Path(tmp)
+            report = root / "mesh_cleanup_report.json"
+            module.prepare_asset(
+                module.BlenderAssetOptions(
+                    input_path=Path("scan.obj"),
+                    output_path=root / "scan.blend",
+                    export_glb=root / "scan.glb",
+                    cleanup_recipe=root / "cleanup.json",
+                    cleanup_report=report,
+                )
+            )
+            report_payload = json.loads(report.read_text())
+
+        select_only.assert_called_once_with(fake_bpy, [retained])
+        export = next(value for name, value in calls if name == "export")
+        self.assertTrue(export["use_selection"])
+        self.assertEqual(export["export_format"], "GLB")
+        self.assertTrue(report_payload["final_verification_passed"])
+        self.assertTrue(report_payload["blend_saved"])
+        self.assertTrue(report_payload["glb_exported"])
+        self.assertTrue(report_payload["glb_export_selection_only"])
+
+    def test_blender_cleanup_counts_loose_components(self) -> None:
+        module = load_blender_script_module()
+        mesh = SimpleNamespace(
+            vertices=[SimpleNamespace(index=index) for index in range(6)],
+            edges=[
+                SimpleNamespace(vertices=(0, 1)),
+                SimpleNamespace(vertices=(1, 2)),
+                SimpleNamespace(vertices=(3, 4)),
+            ],
+        )
+
+        self.assertEqual(module._mesh_component_sizes(mesh), [3, 2, 1])
+
     def test_blender_script_args_use_separator_payload(self) -> None:
         module = load_blender_script_module()
 
