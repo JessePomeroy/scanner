@@ -338,7 +338,28 @@ final class ScanGalleryStore: ObservableObject {
         else {
             return .sceneGeometry
         }
-        return session.scanMode == "object_scan" ? .objectForeground : .sceneGeometry
+        guard session.scanMode == "object_scan",
+              hasSafeMaskAuthoringPlan(for: archiveURL) else {
+            return .sceneGeometry
+        }
+        return .objectForeground
+    }
+
+    private func hasSafeMaskAuthoringPlan(for archiveURL: URL) -> Bool {
+        let authoringURL = archiveURL
+            .deletingPathExtension()
+            .appendingPathComponent("metadata", isDirectory: true)
+            .appendingPathComponent("mask_authoring.json", isDirectory: false)
+        guard let values = try? authoringURL.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        ),
+        values.isRegularFile == true,
+        values.isSymbolicLink != true,
+        let fileSize = values.fileSize
+        else {
+            return false
+        }
+        return (1...1_048_576).contains(fileSize)
     }
 
     private func delete(_ scan: ScanGalleryItem) throws {

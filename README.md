@@ -145,10 +145,11 @@ foreground-only alignment and the job then pauses at `awaiting_scope` for the
 3D region. Every processing report records the effective profile and each
 stage that consumed masks.
 
-The Scans gallery reads the saved `scan_mode` from the editable package folder
-and chooses this automatically: Scene scans show **Scene**, while Object scans
-show **Object Foreground**. If the local metadata is missing or unsafe, upload
-falls back to the alignment-safe scene profile.
+The Scans gallery reads the saved package metadata and chooses this
+automatically. Scene scans and unmasked object scans show **Scene**; an Object
+scan shows **Object Foreground** after its mask draft has been saved. If the
+local metadata is missing or unsafe, upload falls back to the alignment-safe
+scene profile.
 
 The paintbrush beside a ZIP in the iPhone Scans tab opens the post-capture scene
 mask editor. It supports multiple green Keep and red Erase areas on five
