@@ -185,7 +185,9 @@ Implement the following as independently reviewable slices:
    scene default, per-stage reporting, masked COLMAP fusion/OpenMVS geometry,
    and OpenMVS texture exclusion implemented. Object foreground jobs now pause
    before COLMAP, resume masked feature alignment only after approval, and then
-   enter the existing sparse 3D-region review.
+   enter the existing sparse 3D-region review. The iPhone activates this
+   profile only for an object scan with a saved mask-authoring plan and displays
+   the choice before upload; unmasked objects retain safe scene alignment.
    - Scene default: full-image COLMAP alignment and reviewed dense-stage masks.
    - Object/turntable option: masks may also constrain COLMAP features when
      background alignment would be misleading.

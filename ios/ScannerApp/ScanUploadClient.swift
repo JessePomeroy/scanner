@@ -1,7 +1,33 @@
 import Foundation
 
+enum ReconstructionMaskProfile: String, Equatable, Sendable {
+    case sceneGeometry = "scene_geometry"
+    case objectForeground = "object_foreground"
+
+    var title: String {
+        switch self {
+        case .sceneGeometry: return "Scene"
+        case .objectForeground: return "Object Foreground"
+        }
+    }
+}
+
 protocol ScanUploading {
-    func uploadScan(archiveURL: URL, baseURL: URL) async throws -> ReconstructionJob
+    func uploadScan(
+        archiveURL: URL,
+        baseURL: URL,
+        maskProfile: ReconstructionMaskProfile
+    ) async throws -> ReconstructionJob
+}
+
+extension ScanUploading {
+    func uploadScan(archiveURL: URL, baseURL: URL) async throws -> ReconstructionJob {
+        try await uploadScan(
+            archiveURL: archiveURL,
+            baseURL: baseURL,
+            maskProfile: .sceneGeometry
+        )
+    }
 }
 
 protocol ScanUploadTransport {
@@ -81,7 +107,11 @@ struct HTTPScanUploadClient: ScanUploading {
         self.transport = transport
     }
 
-    func uploadScan(archiveURL: URL, baseURL: URL) async throws -> ReconstructionJob {
+    func uploadScan(
+        archiveURL: URL,
+        baseURL: URL,
+        maskProfile: ReconstructionMaskProfile
+    ) async throws -> ReconstructionJob {
         try Self.validateArchive(archiveURL)
         let scansEndpoint = try ReconstructionBackendEndpoint.scansURL(baseURL: baseURL)
         guard var endpointComponents = URLComponents(
@@ -95,7 +125,7 @@ struct HTTPScanUploadClient: ScanUploading {
             URLQueryItem(name: "run_dense", value: "true"),
             URLQueryItem(name: "run_openmvs", value: "true"),
             URLQueryItem(name: "scope_mode", value: "auto_roi"),
-            URLQueryItem(name: "mask_profile", value: "scene_geometry"),
+            URLQueryItem(name: "mask_profile", value: maskProfile.rawValue),
             URLQueryItem(name: "review_scope", value: "true"),
         ]
         guard let endpoint = endpointComponents.url else {
@@ -185,7 +215,11 @@ struct HTTPScanUploadClient: ScanUploading {
 struct InMemoryScanUploadClient: ScanUploading {
     let handler: (URL, URL) async throws -> ReconstructionJob
 
-    func uploadScan(archiveURL: URL, baseURL: URL) async throws -> ReconstructionJob {
+    func uploadScan(
+        archiveURL: URL,
+        baseURL: URL,
+        maskProfile: ReconstructionMaskProfile
+    ) async throws -> ReconstructionJob {
         try await handler(archiveURL, baseURL)
     }
 }
