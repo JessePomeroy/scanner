@@ -252,6 +252,16 @@ struct ScanView: View {
                         systemImage: "xmark.circle"
                     )
                     summaryMetric(
+                        title: "High-Res",
+                        value: "\(summary.highResolutionImageCount)",
+                        systemImage: "camera.fill"
+                    )
+                    summaryMetric(
+                        title: "Fallback",
+                        value: "\(summary.fallbackImageCount)",
+                        systemImage: "arrow.uturn.backward.circle"
+                    )
+                    summaryMetric(
                         title: "Video",
                         value: "\(summary.videoCount)",
                         systemImage: "video"

@@ -18,6 +18,8 @@ enum ARTrackingManagerError: LocalizedError {
 /// reconstruction/depth features, and expose the current ARFrame to capture code.
 final class ARTrackingManager {
     let session: ARSession
+    private(set) var highResolutionFrameCaptureEnabled = false
+    private(set) var configuredVideoResolution: [Int]?
 
     var currentFrame: ARFrame? {
         session.currentFrame
@@ -39,6 +41,18 @@ final class ARTrackingManager {
 
         let configuration = ARWorldTrackingConfiguration()
         configuration.worldAlignment = .gravity
+
+        if let highResolutionFormat = ARWorldTrackingConfiguration
+            .recommendedVideoFormatForHighResolutionFrameCapturing {
+            configuration.videoFormat = highResolutionFormat
+            highResolutionFrameCaptureEnabled = true
+        } else {
+            highResolutionFrameCaptureEnabled = false
+        }
+        configuredVideoResolution = [
+            Int(configuration.videoFormat.imageResolution.width),
+            Int(configuration.videoFormat.imageResolution.height)
+        ]
 
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             configuration.sceneReconstruction = .mesh

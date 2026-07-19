@@ -38,6 +38,8 @@ enum ObjectRadiusPreset: Float, CaseIterable, Codable, Identifiable {
 struct CapturedFrameMetadata: Codable, Equatable {
     let id: Int
     let imagePath: String
+    let imageSource: String
+    let highResolutionCaptureFailure: String?
     let depthPath: String?
     let timestamp: Double
     let cameraTransform: [[Float]]
@@ -60,6 +62,8 @@ struct CapturedFrameMetadata: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case id
         case imagePath = "image"
+        case imageSource = "image_source"
+        case highResolutionCaptureFailure = "high_resolution_capture_failure"
         case depthPath = "depth"
         case timestamp
         case cameraTransform = "camera_transform"
@@ -126,6 +130,10 @@ struct ScanSessionMetadata: Codable, Equatable {
     let scanMode: String
     let usesLidar: Bool
     let usesARKitMesh: Bool
+    let highResolutionFrameCaptureEnabled: Bool
+    let configuredVideoResolution: [Int]?
+    let highResolutionImageCount: Int
+    let fallbackImageCount: Int
     let imageCount: Int
     let depthFrameCount: Int
     let imuSampleCount: Int
@@ -152,6 +160,10 @@ struct ScanSessionMetadata: Codable, Equatable {
         case scanMode = "scan_mode"
         case usesLidar = "uses_lidar"
         case usesARKitMesh = "uses_arkit_mesh"
+        case highResolutionFrameCaptureEnabled = "high_resolution_frame_capture_enabled"
+        case configuredVideoResolution = "configured_video_resolution"
+        case highResolutionImageCount = "high_resolution_image_count"
+        case fallbackImageCount = "fallback_image_count"
         case imageCount = "image_count"
         case depthFrameCount = "depth_frame_count"
         case imuSampleCount = "imu_sample_count"
@@ -263,6 +275,8 @@ struct ScanExportSummary: Equatable {
     let scanModeTitle: String
     let acceptedFrameCount: Int
     let rejectedFrameCount: Int
+    let highResolutionImageCount: Int
+    let fallbackImageCount: Int
     let videoCount: Int
     let averageBlurScore: Float?
     let minimumBlurScore: Float?

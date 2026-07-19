@@ -1,5 +1,24 @@
 # Capture Guidelines
 
+## High-Resolution Keyframes
+
+- On supported devices, the app configures ARKit's recommended high-resolution
+  still format and requests one out-of-band, pose-synchronized high-resolution
+  `ARFrame` for each accepted keyframe. Normal tracking and the support video
+  continue while that request completes.
+- Only one still request is active at a time. Keep moving slowly; useful-view
+  selection resumes as soon as the prior keyframe is saved. A request that has
+  not completed within two seconds falls back automatically so capture cannot
+  stall.
+- If a high-resolution request is unsupported, fails, is blurry, or is still
+  pending when Stop is tapped, the already-qualified triggering video frame is
+  packaged instead. The export summary shows **High-Res** and **Fallback**
+  counts, and each frame records its image source and fallback reason.
+- `metadata/session.json` records the configured AR video resolution and total
+  high-resolution/fallback counts. The backend warns when a supported session
+  falls back unusually often so the capture can be compared against texture
+  quality.
+
 - Move slowly and avoid fast pans.
 - Keep 70-80% overlap between accepted frames.
 - Capture surfaces from multiple angles and heights.
