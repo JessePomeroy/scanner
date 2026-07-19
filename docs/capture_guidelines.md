@@ -20,4 +20,21 @@
 - Circle the object from multiple angles and heights while keeping it in frame.
 - Background texture can help camera alignment, but later processing should prefer the tapped object region.
 - If you forget to tap the object, the scan can still reconstruct, but the object
-  crop planner will not know the intended subject center.
+crop planner will not know the intended subject center.
+
+## Scene Scans
+
+- Build one connected route through the scene. Do not capture isolated detail
+  islands without overlapping frames that bridge back to the main pass.
+- Watch the live Coverage percentage and follow its movement prompts. It
+  combines accepted viewpoints, connected travel, horizontal view directions,
+  and high/low passes.
+- The percentage is a capture-motion heuristic, not proof that every surface is
+  visible. Before stopping, still look for hidden backsides, door recesses,
+  undersides, thin edges, and gaps behind foreground objects.
+- If the app asks for side/diagonal views, keep recognizable structure from the
+  previous view in frame while changing angle. If it asks for a higher/lower
+  pass, preserve overlap rather than jumping to a disconnected viewpoint.
+- Coverage evidence is saved under `scene_coverage` in `metadata/session.json`
+  and copied into the backend scan report. Scores below 55% add a
+  `low_scene_coverage` warning for later comparison with reconstruction quality.

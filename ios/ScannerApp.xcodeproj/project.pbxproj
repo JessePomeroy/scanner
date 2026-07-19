@@ -39,6 +39,7 @@
 		A26C00000000000000000011 /* PostCaptureMaskEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26C00000000000000000001 /* PostCaptureMaskEditorView.swift */; };
 		A27C00000000000000000011 /* MaskReviewClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27C00000000000000000001 /* MaskReviewClient.swift */; };
 		A28C00000000000000000011 /* MaskReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28C00000000000000000001 /* MaskReviewView.swift */; };
+		A29C00000000000000000011 /* SceneCoverageTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A29C00000000000000000001 /* SceneCoverageTracker.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -76,6 +77,7 @@
 		A26C00000000000000000001 /* PostCaptureMaskEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostCaptureMaskEditorView.swift; sourceTree = "<group>"; };
 		A27C00000000000000000001 /* MaskReviewClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskReviewClient.swift; sourceTree = "<group>"; };
 		A28C00000000000000000001 /* MaskReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskReviewView.swift; sourceTree = "<group>"; };
+		A29C00000000000000000001 /* SceneCoverageTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneCoverageTracker.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -126,6 +128,7 @@
 				A26C00000000000000000001 /* PostCaptureMaskEditorView.swift */,
 				A27C00000000000000000001 /* MaskReviewClient.swift */,
 				A28C00000000000000000001 /* MaskReviewView.swift */,
+				A29C00000000000000000001 /* SceneCoverageTracker.swift */,
 				9E9E00CDB1AD45C0ADF14734 /* ARSessionView.swift */,
 				47A171A1C63A4CE6A6E6E3A5 /* ScanCaptureManager.swift */,
 				44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */,
@@ -220,6 +223,7 @@
 				A26C00000000000000000011 /* PostCaptureMaskEditorView.swift in Sources */,
 				A27C00000000000000000011 /* MaskReviewClient.swift in Sources */,
 				A28C00000000000000000011 /* MaskReviewView.swift in Sources */,
+				A29C00000000000000000011 /* SceneCoverageTracker.swift in Sources */,
 				E82260E9C3CC44FE87B3767D /* ARSessionView.swift in Sources */,
 				8FC8547323AA42859CA9B9E5 /* ScanCaptureManager.swift in Sources */,
 				F08270898A2D43E8AD613035 /* ARTrackingManager.swift in Sources */,

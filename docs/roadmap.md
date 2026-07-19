@@ -196,6 +196,9 @@ Implement the following as independently reviewable slices:
 ### Track C: Scene capture coverage guidance
 
 1. Add a scene-specific capture interaction inspired by area scanning.
+   Status: initial world-space camera-path, position-diversity, heading, and
+   elevation coverage tracker implemented with live actionable guidance and
+   package evidence; visual reticle/brush and path overlay remain.
    - Use a reticle/brush metaphor rather than forcing a centered object box.
    - Show camera path and captured surface/angle coverage while still on site.
 2. Add actionable coverage warnings.

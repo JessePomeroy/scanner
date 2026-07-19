@@ -35,6 +35,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     }
     @Published var objectRadiusPreset: ObjectRadiusPreset = .medium
     @Published private(set) var objectCenterIsSet = false
+    @Published private(set) var sceneCoverage = SceneCoverageSnapshot.empty
 
     private let arTrackingManager: ARTrackingManager
     private let cameraCaptureManager: CameraCaptureManager
@@ -54,6 +55,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var isScanning = false
     private var objectCenterWorld: SIMD3<Float>?
     private var qualityStats = CaptureQualityStats()
+    private var sceneCoverageTracker = SceneCoverageTracker()
     private var scanStartedAt: Date?
     private var lastRejectedStatusTimestamp: TimeInterval = 0
     private var videoOutputURL: URL?
@@ -107,6 +109,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             currentScanDirectory = scanDirectory
             objectCenterWorld = nil
             qualityStats = CaptureQualityStats()
+            sceneCoverageTracker.reset()
             scanStartedAt = Date()
             lastRejectedStatusTimestamp = 0
             videoRelativePath = "video/scan.mov"
@@ -129,7 +132,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             objectCenterIsSet: false,
             clearZipURL: true,
             clearExportSummary: true,
-            clearQualityMetrics: true
+            clearQualityMetrics: true,
+            sceneCoverage: .empty
         )
 
         do {
@@ -166,6 +170,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
             let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
             let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+            let finalSceneCoverage = scanMode == .scene
+                ? sceneCoverageTracker.snapshot
+                : nil
             let session = ScanSessionMetadata(
                 scanId: currentScanId,
                 createdAt: createdAt,
@@ -189,6 +196,17 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 captureDurationSeconds: scanStartedAt.map { Date().timeIntervalSince($0) },
                 objectCenterWorld: objectCenterWorld?.array,
                 objectRadiusMeters: scanMode == .object ? objectRadiusPreset.rawValue : nil,
+                sceneCoverage: finalSceneCoverage.map {
+                    SceneCoverageMetadata(
+                        schemaVersion: "1.0",
+                        acceptedPoseCount: $0.acceptedPoseCount,
+                        uniquePositionCellCount: $0.uniquePositionCellCount,
+                        headingBinCount: $0.headingBinCount,
+                        elevationBinCount: $0.elevationBinCount,
+                        pathLengthMeters: $0.pathLengthMeters,
+                        score: $0.score
+                    )
+                },
                 notes: scanMode == .object
                     ? "Object scan package with ARKit subject center metadata."
                     : "Scene scan package."
@@ -251,7 +269,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
                 captureDurationSeconds: session.captureDurationSeconds,
                 objectRadiusMeters: session.objectRadiusMeters,
-                objectCenterWasSet: session.objectCenterWorld != nil
+                objectCenterWasSet: session.objectCenterWorld != nil,
+                sceneCoverageScore: finalSceneCoverage?.score
             )
 
             return (zipURL, summary)
@@ -402,13 +421,21 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         )
 
         qualityStats.recordAccepted(blurScore: blurScore, movementSpeed: decision.movementSpeedMetersPerSecond)
+        let coverage = scanMode == .scene
+            ? sceneCoverageTracker.record(cameraTransform: frame.camera.transform)
+            : nil
         let count = capturedFrames.count
         updatePublishedState(
             statusMessage: "Accepted \(count) frames",
-            guidanceMessage: guidance(for: decision, blurScore: blurScore),
+            guidanceMessage: guidance(
+                for: decision,
+                blurScore: blurScore,
+                sceneCoverage: coverage
+            ),
             acceptedFrameCount: count,
             lastBlurScore: blurScore,
-            lastMovementSpeed: decision.movementSpeedMetersPerSecond
+            lastMovementSpeed: decision.movementSpeedMetersPerSecond,
+            sceneCoverage: coverage
         )
     }
 
@@ -492,7 +519,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         lastExportSummary: ScanExportSummary? = nil,
         clearZipURL: Bool = false,
         clearExportSummary: Bool = false,
-        clearQualityMetrics: Bool = false
+        clearQualityMetrics: Bool = false,
+        sceneCoverage: SceneCoverageSnapshot? = nil
     ) {
         DispatchQueue.main.async {
             if let state {
@@ -523,6 +551,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             if let objectCenterIsSet {
                 self.objectCenterIsSet = objectCenterIsSet
             }
+            if let sceneCoverage {
+                self.sceneCoverage = sceneCoverage
+            }
             if clearZipURL {
                 self.lastZipURL = nil
             }
@@ -545,7 +576,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         return "scan_\(formatter.string(from: Date()))"
     }
 
-    private func guidance(for decision: FrameSelectionDecision, blurScore: Float) -> String {
+    private func guidance(
+        for decision: FrameSelectionDecision,
+        blurScore: Float,
+        sceneCoverage: SceneCoverageSnapshot?
+    ) -> String {
         if scanMode == .object && !objectCenterIsSet {
             return "Tap the subject so the object radius can be saved"
         }
@@ -563,7 +598,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             return "Keep circling and vary your height"
         }
 
-        return "Capture overlapping angles, not just straight-on passes"
+        return sceneCoverage?.guidance
+            ?? "Capture overlapping angles, not just straight-on passes"
     }
 
     private func rejectionStatus(reason: FrameRejectionReason) -> String {
