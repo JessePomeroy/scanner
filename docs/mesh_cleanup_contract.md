@@ -8,8 +8,9 @@ exported from the retained selection only.
 
 ## Recipe
 
-Pass a JSON recipe with `schema_version: "1.0"`. Unknown fields and no-op
-recipes fail instead of being ignored. See
+Pass a JSON recipe with `schema_version: "1.0"` and a positive integer
+`revision`. Increment the revision whenever crop or component intent changes.
+Unknown fields and no-op recipes fail instead of being ignored. See
 [`examples/mesh_cleanup_recipe.json`](examples/mesh_cleanup_recipe.json).
 
 `crop` is optional and supports:
@@ -35,8 +36,10 @@ inclusive at the boundary.
 the normalized recipe, source and final retained vertex counts, removed count,
 retained ratio, per-object component counts, preservation of source objects in
 the `.blend`, whether a GLB was exported selection-only, and final verification
-status. The report is written only after Blender successfully saves the `.blend`
-and completes any requested GLB export.
+status. It also exposes `artifact_type`, `cleanup_revision`, and normalized
+`effective_bounds` independently of Gaussian cleanup evidence. The report is
+written only after Blender successfully saves the `.blend` and completes any
+requested GLB export.
 
 After optional decimation, the helper rechecks every retained vertex against
 the crop and verifies the component limits. An empty result or any excluded

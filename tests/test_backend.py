@@ -1094,6 +1094,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 3,
                         "crop": {
                             "shape": "box",
                             "center": [1, 2, 3],
@@ -1111,10 +1112,14 @@ class BackendTests(unittest.TestCase):
             recipe = module.load_cleanup_recipe(path)
 
         self.assertEqual(recipe.crop.shape, "box")
+        self.assertEqual(recipe.revision, 3)
         self.assertEqual(recipe.crop.center, (1.0, 2.0, 3.0))
         self.assertEqual(recipe.crop.size, (4.0, 6.0, 8.0))
         self.assertEqual(recipe.loose_components.keep_largest, 2)
         self.assertEqual(recipe.loose_components.minimum_vertices, 100)
+        normalized = module.cleanup_recipe_payload(recipe)
+        self.assertEqual(normalized["revision"], 3)
+        self.assertEqual(module.mesh_crop_payload(recipe.crop)["shape"], "box")
         self.assertTrue(module.point_is_retained((3, 5, 7), recipe.crop))
         self.assertFalse(module.point_is_retained((3.01, 5, 7), recipe.crop))
 
@@ -1140,6 +1145,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 1,
                         "crop": {
                             "shape": "box",
                             "center": [0, 0, 0],
@@ -1152,7 +1158,7 @@ class BackendTests(unittest.TestCase):
             )
             nonfinite = Path(tmp) / "nonfinite.json"
             nonfinite.write_text(
-                '{"schema_version":"1.0","crop":{"shape":"box",'
+                '{"schema_version":"1.0","revision":1,"crop":{"shape":"box",'
                 '"center":[0,0,0],"size":[1,1,NaN],"keep":"inside"}}'
             )
 
@@ -3149,6 +3155,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 2,
                         "crop": {
                             "shape": "box",
                             "center": [0, 0, 0],
@@ -3173,6 +3180,9 @@ class BackendTests(unittest.TestCase):
             self.assertIn(b"-1 0 0 0.2", output.read_bytes())
             self.assertEqual(evidence["source_primitive_count"], 5)
             self.assertEqual(evidence["retained_primitive_count"], 3)
+            self.assertEqual(evidence["artifact_type"], "gaussian_ply")
+            self.assertEqual(evidence["cleanup_revision"], 2)
+            self.assertEqual(evidence["effective_bounds"]["shape"], "box")
             self.assertTrue(evidence["destructive_output_verified"])
 
             cleanup_gaussian_ply(
@@ -3208,6 +3218,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 1,
                         "selection": {"mode": "discard", "ranges": [[1, 3]]},
                     }
                 )
@@ -3241,6 +3252,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 1,
                         "selection": {"mode": "keep", "ranges": [[0, 2]]},
                     }
                 )
@@ -3270,6 +3282,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 1,
                         "crop": {
                             "shape": "box",
                             "center": [0, 0, 0],
@@ -3324,6 +3337,7 @@ class BackendTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1.0",
+                        "revision": 4,
                         "crop": {
                             "shape": "box",
                             "center": [0, 0, 0],

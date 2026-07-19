@@ -238,6 +238,9 @@ Implement the following as independently reviewable slices:
    - Verify excluded splats are absent from the published SOG/PLY rather than
      merely hidden in the viewer.
 3. Record scope independently for mesh and Gaussian outputs.
+   Status: implemented with artifact-specific cleanup reports containing
+   positive recipe revisions, normalized effective bounds, retained/removed
+   counts, reduction ratios, verification state, and publication identity.
    - Store effective bounds, retained counts, reduction ratios, and cleanup
      revisions for each artifact.
 
