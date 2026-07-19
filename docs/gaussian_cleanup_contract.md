@@ -13,7 +13,9 @@ the neural backend plan inserts `scripts/cleanup_gaussian_ply.py` after
 
 ## Recipe
 
-The version 1.0 JSON recipe accepts `crop`, `selection`, or both. See
+The version 1.0 JSON recipe requires a positive integer `revision` and accepts
+`crop`, `selection`, or both. Increment the revision whenever destructive
+publication intent changes. See
 [`examples/gaussian_cleanup_recipe.json`](examples/gaussian_cleanup_recipe.json).
 
 `crop` matches the mesh contract:
@@ -49,4 +51,5 @@ verifies the exact retained count and zero crop violations, and writes an
 atomic report containing source/retained/removed counts, ratio, normalized
 recipe, output SHA-256, and destructive-verification status. If report writing
 fails, the new cleaned output is removed. The master `splat.ply` is never
-modified.
+modified. `artifact_type`, `cleanup_revision`, and normalized
+`effective_bounds` are stored independently from the mesh cleanup report.

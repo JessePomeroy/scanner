@@ -53,6 +53,7 @@ class LooseComponentRule:
 @dataclass(frozen=True)
 class MeshCleanupRecipe:
     schema_version: str
+    revision: int = 1
     crop: MeshCrop | None = None
     loose_components: LooseComponentRule | None = None
 
@@ -196,9 +197,16 @@ def load_cleanup_recipe(path: Path) -> MeshCleanupRecipe:
         raise SystemExit(f"Unable to read cleanup recipe {path}: {error}") from error
     if not isinstance(payload, dict):
         raise SystemExit("Cleanup recipe must be a JSON object")
-    _require_recipe_keys(payload, {"schema_version", "crop", "loose_components"}, "recipe")
+    _require_recipe_keys(
+        payload,
+        {"schema_version", "revision", "crop", "loose_components"},
+        "recipe",
+    )
     if payload.get("schema_version") != "1.0":
         raise SystemExit("Cleanup recipe schema_version must be 1.0")
+    revision = payload.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise SystemExit("Cleanup recipe revision must be a positive integer")
 
     crop_payload = payload.get("crop")
     crop = _parse_mesh_crop(crop_payload) if crop_payload is not None else None
@@ -210,7 +218,12 @@ def load_cleanup_recipe(path: Path) -> MeshCleanupRecipe:
     )
     if crop is None and components is None:
         raise SystemExit("Cleanup recipe must define crop or loose_components")
-    return MeshCleanupRecipe("1.0", crop=crop, loose_components=components)
+    return MeshCleanupRecipe(
+        "1.0",
+        revision=revision,
+        crop=crop,
+        loose_components=components,
+    )
 
 
 def _parse_mesh_crop(payload: Any) -> MeshCrop:
@@ -353,6 +366,9 @@ def apply_reversible_cleanup(
         raise SystemExit("Cleanup recipe removed every mesh vertex")
     return retained_objects, {
         "schema_version": "1.0",
+        "artifact_type": "mesh",
+        "cleanup_revision": recipe.revision,
+        "effective_bounds": mesh_crop_payload(recipe.crop),
         "recipe": cleanup_recipe_payload(recipe),
         "source_vertex_count": source_vertex_count,
         "retained_vertex_count": retained_vertex_count,
@@ -507,26 +523,35 @@ def _world_point(obj: Any, coordinate: Any) -> tuple[float, float, float]:
 
 
 def cleanup_recipe_payload(recipe: MeshCleanupRecipe) -> dict[str, Any]:
-    payload: dict[str, Any] = {"schema_version": recipe.schema_version}
+    payload: dict[str, Any] = {
+        "schema_version": recipe.schema_version,
+        "revision": recipe.revision,
+    }
     if recipe.crop is not None:
-        crop: dict[str, Any] = {
-            "shape": recipe.crop.shape,
-            "center": list(recipe.crop.center),
-            "keep": recipe.crop.keep,
-        }
-        if recipe.crop.size is not None:
-            crop["size"] = list(recipe.crop.size)
-        if recipe.crop.radius is not None:
-            crop["radius"] = recipe.crop.radius
-        if recipe.crop.height is not None:
-            crop["height"] = recipe.crop.height
-        payload["crop"] = crop
+        payload["crop"] = mesh_crop_payload(recipe.crop)
     if recipe.loose_components is not None:
         payload["loose_components"] = {
             "keep_largest": recipe.loose_components.keep_largest,
             "minimum_vertices": recipe.loose_components.minimum_vertices,
         }
     return payload
+
+
+def mesh_crop_payload(crop_recipe: MeshCrop | None) -> dict[str, Any] | None:
+    if crop_recipe is None:
+        return None
+    crop: dict[str, Any] = {
+        "shape": crop_recipe.shape,
+        "center": list(crop_recipe.center),
+        "keep": crop_recipe.keep,
+    }
+    if crop_recipe.size is not None:
+        crop["size"] = list(crop_recipe.size)
+    if crop_recipe.radius is not None:
+        crop["radius"] = crop_recipe.radius
+    if crop_recipe.height is not None:
+        crop["height"] = crop_recipe.height
+    return crop
 
 
 def clear_scene(bpy: Any) -> None:

@@ -37,6 +37,7 @@ class PrimitiveSelection:
 @dataclass(frozen=True)
 class GaussianCleanupRecipe:
     schema_version: str
+    revision: int = 1
     crop: GaussianCrop | None = None
     selection: PrimitiveSelection | None = None
 
@@ -65,9 +66,12 @@ def load_gaussian_cleanup_recipe(path: Path) -> GaussianCleanupRecipe:
         raise GaussianCleanupError(f"Unable to read Gaussian cleanup recipe: {path}") from error
     if not isinstance(payload, dict):
         raise GaussianCleanupError("Gaussian cleanup recipe must be an object")
-    _reject_unknown(payload, {"schema_version", "crop", "selection"}, "recipe")
+    _reject_unknown(payload, {"schema_version", "revision", "crop", "selection"}, "recipe")
     if payload.get("schema_version") != "1.0":
         raise GaussianCleanupError("Gaussian cleanup schema_version must be 1.0")
+    revision = payload.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise GaussianCleanupError("Gaussian cleanup revision must be a positive integer")
     crop = _parse_crop(payload.get("crop")) if payload.get("crop") is not None else None
     selection = (
         _parse_selection(payload.get("selection"))
@@ -76,7 +80,12 @@ def load_gaussian_cleanup_recipe(path: Path) -> GaussianCleanupRecipe:
     )
     if crop is None and selection is None:
         raise GaussianCleanupError("Gaussian cleanup must define crop or selection")
-    return GaussianCleanupRecipe("1.0", crop=crop, selection=selection)
+    return GaussianCleanupRecipe(
+        "1.0",
+        revision=revision,
+        crop=crop,
+        selection=selection,
+    )
 
 
 def cleanup_gaussian_ply(
@@ -163,6 +172,9 @@ def cleanup_gaussian_ply(
 
     report = {
         "schema_version": "1.0",
+        "artifact_type": "gaussian_ply",
+        "cleanup_revision": recipe.revision,
+        "effective_bounds": gaussian_crop_payload(recipe.crop),
         "method": "destructive_gaussian_ply_filter",
         "source_ply": str(source),
         "output_ply": str(output),
@@ -309,26 +321,35 @@ def point_is_retained(point: tuple[float, float, float], crop: GaussianCrop) -> 
 
 
 def gaussian_cleanup_recipe_payload(recipe: GaussianCleanupRecipe) -> dict[str, object]:
-    payload: dict[str, object] = {"schema_version": recipe.schema_version}
+    payload: dict[str, object] = {
+        "schema_version": recipe.schema_version,
+        "revision": recipe.revision,
+    }
     if recipe.crop is not None:
-        crop: dict[str, object] = {
-            "shape": recipe.crop.shape,
-            "center": list(recipe.crop.center),
-            "keep": recipe.crop.keep,
-        }
-        if recipe.crop.size is not None:
-            crop["size"] = list(recipe.crop.size)
-        if recipe.crop.radius is not None:
-            crop["radius"] = recipe.crop.radius
-        if recipe.crop.height is not None:
-            crop["height"] = recipe.crop.height
-        payload["crop"] = crop
+        payload["crop"] = gaussian_crop_payload(recipe.crop)
     if recipe.selection is not None:
         payload["selection"] = {
             "mode": recipe.selection.mode,
             "ranges": [list(item) for item in recipe.selection.ranges],
         }
     return payload
+
+
+def gaussian_crop_payload(crop_recipe: GaussianCrop | None) -> dict[str, object] | None:
+    if crop_recipe is None:
+        return None
+    crop: dict[str, object] = {
+        "shape": crop_recipe.shape,
+        "center": list(crop_recipe.center),
+        "keep": crop_recipe.keep,
+    }
+    if crop_recipe.size is not None:
+        crop["size"] = list(crop_recipe.size)
+    if crop_recipe.radius is not None:
+        crop["radius"] = crop_recipe.radius
+    if crop_recipe.height is not None:
+        crop["height"] = crop_recipe.height
+    return crop
 
 
 def _parse_crop(payload: object) -> GaussianCrop:
