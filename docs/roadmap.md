@@ -203,10 +203,15 @@ Implement the following as independently reviewable slices:
    - Use a reticle/brush metaphor rather than forcing a centered object box.
    - Show camera path and captured surface/angle coverage while still on site.
 2. Add actionable coverage warnings.
+   Status: initial weak-coverage stop review, recoverable disconnected-pass
+   detection, saved evidence, and backend warnings implemented. Surface-level
+   visibility and distance-to-subject evidence remain.
    - Identify gaps, weak viewing-angle diversity, excessive distance changes,
      and disconnected detail passes.
    - Let the user continue the same capture before packaging it.
 3. Keep object and scene guidance distinct.
+   Status: implemented in the capture UI and packaging defaults; continue
+   calibrating both profiles against benchmark reconstructions.
    - Object mode retains orbit/radius guidance and centered-subject masking.
    - Scene mode favors connected passes, bridging frames, and world-space
      coverage.

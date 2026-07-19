@@ -2593,6 +2593,7 @@ class BackendTests(unittest.TestCase):
                 "heading_bin_count": 3,
                 "elevation_bin_count": 1,
                 "path_length_meters": 1.4,
+                "disconnected_jump_count": 1,
                 "score": 0.48,
             }
             session_path.write_text(json.dumps(session))
@@ -2603,6 +2604,7 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual(payload["capture"]["scene_coverage"]["score"], 0.48)
         self.assertIn("low_scene_coverage", payload["warnings"])
+        self.assertIn("disconnected_scene_passes", payload["warnings"])
 
     def test_inspect_scan_cli_prints_integrity_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

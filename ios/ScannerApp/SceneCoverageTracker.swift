@@ -7,6 +7,7 @@ struct SceneCoverageSnapshot: Equatable, Sendable {
     let headingBinCount: Int
     let elevationBinCount: Int
     let pathLengthMeters: Float
+    let disconnectedJumpCount: Int
     let score: Float
     let guidance: String
 
@@ -16,12 +17,21 @@ struct SceneCoverageSnapshot: Equatable, Sendable {
         headingBinCount: 0,
         elevationBinCount: 0,
         pathLengthMeters: 0,
+        disconnectedJumpCount: 0,
         score: 0,
         guidance: "Begin with a slow connected pass across the scene"
     )
 
     var percent: Int {
         Int((score * 100).rounded())
+    }
+
+    var shouldWarnBeforeFinish: Bool {
+        acceptedPoseCount < 24
+            || headingBinCount < 4
+            || elevationBinCount < 2
+            || score < 0.7
+            || disconnectedJumpCount > 0
     }
 }
 
@@ -36,6 +46,7 @@ struct SceneCoverageTracker {
     private var elevationBins: Set<Int> = []
     private var previousPosition: SIMD3<Float>?
     private var pathLengthMeters: Float = 0
+    private var disconnectedJumpAnchors: [SIMD3<Float>] = []
 
     mutating func record(cameraTransform: simd_float4x4) -> SceneCoverageSnapshot {
         let position = SIMD3<Float>(
@@ -50,9 +61,17 @@ struct SceneCoverageTracker {
         )
         acceptedPoseCount += 1
         if let previousPosition {
-            pathLengthMeters += simd_distance(previousPosition, position)
+            let stepDistance = simd_distance(previousPosition, position)
+            if stepDistance > 1.25 {
+                disconnectedJumpAnchors.append(previousPosition)
+            } else {
+                pathLengthMeters += stepDistance
+            }
         }
         previousPosition = position
+        disconnectedJumpAnchors.removeAll {
+            simd_distance($0, position) <= positionCellSizeMeters * 1.5
+        }
         positionCells.insert(PositionCell(position, cellSize: positionCellSizeMeters))
 
         let yaw = atan2(forward.x, forward.z)
@@ -80,6 +99,7 @@ struct SceneCoverageTracker {
         elevationBins.removeAll()
         previousPosition = nil
         pathLengthMeters = 0
+        disconnectedJumpAnchors.removeAll()
     }
 
     var snapshot: SceneCoverageSnapshot {
@@ -91,7 +111,7 @@ struct SceneCoverageTracker {
         let positionProgress = min(1, Float(positionCells.count) / 6)
         let headingProgress = min(1, Float(headingBins.count) / 5)
         let elevationProgress = min(1, Float(elevationBins.count) / 2)
-        let score = min(
+        let baseScore = min(
             1,
             frameProgress * 0.2
                 + pathProgress * 0.2
@@ -99,18 +119,24 @@ struct SceneCoverageTracker {
                 + headingProgress * 0.25
                 + elevationProgress * 0.15
         )
+        let disconnectedJumpCount = disconnectedJumpAnchors.count
+        let score = max(0, baseScore - min(0.4, Float(disconnectedJumpCount) * 0.12))
         return SceneCoverageSnapshot(
             acceptedPoseCount: acceptedPoseCount,
             uniquePositionCellCount: positionCells.count,
             headingBinCount: headingBins.count,
             elevationBinCount: elevationBins.count,
             pathLengthMeters: pathLengthMeters,
+            disconnectedJumpCount: disconnectedJumpCount,
             score: score,
             guidance: guidance(score: score)
         )
     }
 
     private func guidance(score: Float) -> String {
+        if !disconnectedJumpAnchors.isEmpty {
+            return "Bridge the path gap with overlapping frames before moving on"
+        }
         if acceptedPoseCount < 8 {
             return "Build a slow connected pass with overlapping views"
         }

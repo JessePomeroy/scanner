@@ -6,6 +6,7 @@ struct ScanView: View {
     @State private var reconstructionPolygon: [NormalizedMaskPoint] = []
     @State private var polygonBeforeEditing: [NormalizedMaskPoint] = []
     @State private var isEditingReconstructionArea = false
+    @State private var confirmIncompleteScene = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -68,6 +69,21 @@ struct ScanView: View {
             if let shareURL {
                 ShareSheet(items: [shareURL])
             }
+        }
+        .confirmationDialog(
+            "Scene coverage may be incomplete",
+            isPresented: $confirmIncompleteScene,
+            titleVisibility: .visible
+        ) {
+            Button("Continue Scanning", role: .cancel) {}
+            Button("Finish Anyway", role: .destructive) {
+                stopScan()
+            }
+        } message: {
+            Text(
+                "Coverage is \(scanManager.sceneCoverage.percent)%. "
+                    + scanManager.sceneCoverage.guidance
+            )
         }
     }
 
@@ -393,7 +409,12 @@ struct ScanView: View {
     private func primaryAction() {
         switch scanManager.state {
         case .scanning:
-            stopScan()
+            if scanManager.scanMode == .scene,
+               scanManager.sceneCoverage.shouldWarnBeforeFinish {
+                confirmIncompleteScene = true
+            } else {
+                stopScan()
+            }
         case .idle, .completed, .failed:
             startScan()
         case .exporting:
