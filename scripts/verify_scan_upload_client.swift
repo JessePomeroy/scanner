@@ -120,6 +120,32 @@ struct VerifyScanUploadClient {
             throw ScanUploadVerificationError.assertionFailed("Expected captured multipart body")
         }
 
+        let objectProfileTransport = StubScanUploadTransport { request, _ in
+            let queryItems = URLComponents(
+                url: request.url!,
+                resolvingAgainstBaseURL: false
+            )?.queryItems ?? []
+            let profile = queryItems.first(where: { $0.name == "mask_profile" })?.value
+            try require(
+                profile == "object_foreground",
+                "Expected object scans to request foreground-only alignment"
+            )
+            return (
+                successPayload,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        _ = try await HTTPScanUploadClient(transport: objectProfileTransport).uploadScan(
+            archiveURL: archiveURL,
+            baseURL: URL(string: "http://127.0.0.1:8000/api")!,
+            maskProfile: .objectForeground
+        )
+
         do {
             _ = try await client.uploadScan(
                 archiveURL: archiveURL,

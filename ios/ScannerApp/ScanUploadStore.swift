@@ -32,7 +32,11 @@ final class ScanUploadStore: ObservableObject {
         uploadingArchiveURL == archiveURL
     }
 
-    func upload(archiveURL: URL, baseURLString: String) async {
+    func upload(
+        archiveURL: URL,
+        baseURLString: String,
+        maskProfile: ReconstructionMaskProfile = .sceneGeometry
+    ) async {
         guard uploadingArchiveURL == nil else { return }
 
         let trimmedBaseURL = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -54,7 +58,8 @@ final class ScanUploadStore: ObservableObject {
         do {
             let job = try await client.uploadScan(
                 archiveURL: archiveURL,
-                baseURL: baseURL
+                baseURL: baseURL,
+                maskProfile: maskProfile
             )
             notice = Self.notice(for: job, archiveURL: archiveURL)
         } catch is CancellationError {

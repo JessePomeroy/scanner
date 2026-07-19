@@ -43,6 +43,15 @@ struct ScanGalleryView: View {
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.75)
+
+                                        Label(
+                                            scan.maskProfile.title,
+                                            systemImage: scan.maskProfile == .objectForeground
+                                                ? "cube.transparent"
+                                                : "building.2"
+                                        )
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(.blue)
                                     }
 
                                     Spacer(minLength: 0)
@@ -65,7 +74,8 @@ struct ScanGalleryView: View {
                                             Task {
                                                 await uploadStore.upload(
                                                     archiveURL: scan.url,
-                                                    baseURLString: backendURLString
+                                                    baseURLString: backendURLString,
+                                                    maskProfile: scan.maskProfile
                                                 )
                                             }
                                         } label: {
@@ -213,6 +223,7 @@ struct ScanGalleryItem: Identifiable, Equatable {
     let createdAt: Date?
     let fileSizeBytes: Int64?
     let hasEditableFolder: Bool
+    let maskProfile: ReconstructionMaskProfile
 
     var detailText: String {
         let dateText = createdAt.map(Self.dateFormatter.string(from:)) ?? "Unknown date"
@@ -297,7 +308,8 @@ final class ScanGalleryStore: ObservableObject {
             displayName: url.deletingPathExtension().lastPathComponent,
             createdAt: values.creationDate ?? values.contentModificationDate,
             fileSizeBytes: values.fileSize.map(Int64.init),
-            hasEditableFolder: editableFolderExists(for: url)
+            hasEditableFolder: editableFolderExists(for: url),
+            maskProfile: maskProfile(for: url)
         )
     }
 
@@ -307,6 +319,26 @@ final class ScanGalleryStore: ObservableObject {
             return false
         }
         return values.isDirectory == true && values.isSymbolicLink != true
+    }
+
+    private func maskProfile(for archiveURL: URL) -> ReconstructionMaskProfile {
+        let sessionURL = archiveURL
+            .deletingPathExtension()
+            .appendingPathComponent("metadata", isDirectory: true)
+            .appendingPathComponent("session.json", isDirectory: false)
+        guard let values = try? sessionURL.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        ),
+        values.isRegularFile == true,
+        values.isSymbolicLink != true,
+        let fileSize = values.fileSize,
+        (1...65_536).contains(fileSize),
+        let data = try? Data(contentsOf: sessionURL, options: [.mappedIfSafe]),
+        let session = try? JSONDecoder().decode(GallerySessionMetadata.self, from: data)
+        else {
+            return .sceneGeometry
+        }
+        return session.scanMode == "object_scan" ? .objectForeground : .sceneGeometry
     }
 
     private func delete(_ scan: ScanGalleryItem) throws {
@@ -321,6 +353,14 @@ final class ScanGalleryStore: ObservableObject {
            isDirectory.boolValue {
             try fileManager.removeItem(at: extractedScanDirectory)
         }
+    }
+}
+
+private struct GallerySessionMetadata: Decodable {
+    let scanMode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case scanMode = "scan_mode"
     }
 }
 
