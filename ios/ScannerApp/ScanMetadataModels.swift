@@ -179,6 +179,12 @@ struct SceneCoverageMetadata: Codable, Equatable {
     let elevationBinCount: Int
     let pathLengthMeters: Float
     let disconnectedJumpCount: Int
+    let surfaceHitCount: Int
+    let uniqueSurfaceCellCount: Int
+    let multiAngleSurfaceCellCount: Int
+    let minimumSurfaceDistanceMeters: Float?
+    let maximumSurfaceDistanceMeters: Float?
+    let surfaceScore: Float
     let score: Float
 
     enum CodingKeys: String, CodingKey {
@@ -189,6 +195,12 @@ struct SceneCoverageMetadata: Codable, Equatable {
         case elevationBinCount = "elevation_bin_count"
         case pathLengthMeters = "path_length_meters"
         case disconnectedJumpCount = "disconnected_jump_count"
+        case surfaceHitCount = "surface_hit_count"
+        case uniqueSurfaceCellCount = "unique_surface_cell_count"
+        case multiAngleSurfaceCellCount = "multi_angle_surface_cell_count"
+        case minimumSurfaceDistanceMeters = "minimum_surface_distance_meters"
+        case maximumSurfaceDistanceMeters = "maximum_surface_distance_meters"
+        case surfaceScore = "surface_score"
         case score
     }
 }

@@ -74,6 +74,49 @@ private enum SceneCoverageVerifier {
             reconnected.pathLengthMeters >= 2,
             "Expected the overlapping return pass to add connected path evidence"
         )
+
+        tracker.reset()
+        for index in 0..<8 {
+            _ = tracker.record(
+                cameraTransform: transform(
+                    position: SIMD3<Float>(Float(index) * 0.02, 0, 1),
+                    yaw: .pi
+                ),
+                surfacePoint: .zero
+            )
+        }
+        let narrowSurface = tracker.snapshot
+        try require(
+            narrowSurface.guidance.contains("Brush across more scene surfaces"),
+            "Expected guidance when the brush remains on one surface cell"
+        )
+        try require(narrowSurface.shouldWarnBeforeFinish, "Expected weak surface warning")
+
+        tracker.reset()
+        for x in stride(from: Float(0), through: Float(1.2), by: 0.4) {
+            _ = tracker.record(
+                cameraTransform: transform(position: SIMD3<Float>(x, 0, 1), yaw: .pi),
+                surfacePoint: SIMD3<Float>(x, 0, 0)
+            )
+        }
+        for x in stride(from: Float(1.2), through: Float(0), by: -0.4) {
+            _ = tracker.record(
+                cameraTransform: transform(position: SIMD3<Float>(x, 0, -1), yaw: 0),
+                surfacePoint: SIMD3<Float>(x, 0, 0)
+            )
+        }
+        let surface = tracker.snapshot
+        try require(surface.surfaceHitCount == 8, "Expected every valid surface hit")
+        try require(surface.uniqueSurfaceCellCount == 4, "Expected four surface cells")
+        try require(
+            surface.multiAngleSurfaceCellCount == 4,
+            "Expected opposite views to cover every surface cell from multiple angles"
+        )
+        try require(surface.surfaceScore > 0.6, "Expected strong surface coverage")
+        try require(
+            tracker.surfaceSamples.allSatisfy(\.isWellCovered),
+            "Expected green multi-angle surface samples"
+        )
         print("Verified scene coverage tracker")
     }
 

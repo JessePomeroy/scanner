@@ -7,6 +7,7 @@ import simd
 struct ARSessionView: UIViewRepresentable {
     let session: ARSession
     var cameraPath: [SIMD3<Float>] = []
+    var surfaceSamples: [SceneSurfaceSample] = []
     var onWorldTap: ((SIMD3<Float>) -> Void)?
 
     func makeUIView(context: Context) -> ARSCNView {
@@ -29,6 +30,7 @@ struct ARSessionView: UIViewRepresentable {
         }
         context.coordinator.onWorldTap = onWorldTap
         context.coordinator.updateCameraPath(cameraPath, in: uiView)
+        context.coordinator.updateSurfaceSamples(surfaceSamples, in: uiView)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -38,7 +40,9 @@ struct ARSessionView: UIViewRepresentable {
     final class Coordinator: NSObject {
         var onWorldTap: ((SIMD3<Float>) -> Void)?
         private let pathRoot = SCNNode()
+        private let surfaceRoot = SCNNode()
         private var renderedPath: [SIMD3<Float>] = []
+        private var renderedSurfaceSamples: [SceneSurfaceSample] = []
 
         init(onWorldTap: ((SIMD3<Float>) -> Void)?) {
             self.onWorldTap = onWorldTap
@@ -60,15 +64,39 @@ struct ARSessionView: UIViewRepresentable {
             appendPath(Array(points.dropFirst(renderedPath.count)))
         }
 
+        func updateSurfaceSamples(_ samples: [SceneSurfaceSample], in view: ARSCNView) {
+            if surfaceRoot.parent == nil {
+                surfaceRoot.name = "scene-surface-coverage"
+                view.scene.rootNode.addChildNode(surfaceRoot)
+            }
+            guard samples != renderedSurfaceSamples else { return }
+            surfaceRoot.childNodes.forEach { $0.removeFromParentNode() }
+            samples.forEach { surfaceRoot.addChildNode(surfaceMarker(for: $0)) }
+            renderedSurfaceSamples = samples
+        }
+
         private func appendPath(_ newPoints: [SIMD3<Float>]) {
             for point in newPoints {
                 if let previous = renderedPath.last,
-                   simd_distance(previous, point) > 0.001 {
+                   simd_distance(previous, point) > 0.001,
+                   simd_distance(previous, point) <= 1.25 {
                     pathRoot.addChildNode(pathSegment(from: previous, to: point))
                 }
                 pathRoot.addChildNode(pathMarker(at: point))
                 renderedPath.append(point)
             }
+        }
+
+        private func surfaceMarker(for sample: SceneSurfaceSample) -> SCNNode {
+            let sphere = SCNSphere(radius: sample.isWellCovered ? 0.035 : 0.025)
+            sphere.segmentCount = 8
+            let color: UIColor = sample.isWellCovered ? .systemGreen : .systemOrange
+            sphere.firstMaterial?.diffuse.contents = color.withAlphaComponent(0.8)
+            sphere.firstMaterial?.emission.contents = color.withAlphaComponent(0.25)
+            let node = SCNNode(geometry: sphere)
+            node.name = "scene-surface-\(sample.id)"
+            node.simdPosition = sample.position
+            return node
         }
 
         private func pathMarker(at point: SIMD3<Float>) -> SCNNode {

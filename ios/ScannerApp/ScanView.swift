@@ -14,6 +14,9 @@ struct ScanView: View {
                 session: scanManager.arSession,
                 cameraPath: scanManager.scanMode == .scene
                     ? scanManager.sceneCameraPath
+                    : [],
+                surfaceSamples: scanManager.scanMode == .scene
+                    ? scanManager.sceneSurfaceSamples
                     : []
             ) { worldPosition in
                 scanManager.setObjectCenter(worldPosition)
@@ -151,7 +154,7 @@ struct ScanView: View {
             ZStack {
                 Circle()
                     .stroke(
-                        scanManager.sceneCoverage.score >= 0.75 ? Color.green : Color.cyan,
+                        sceneCoverageLooksGood ? Color.green : Color.cyan,
                         style: StrokeStyle(lineWidth: 3, dash: [7, 5])
                     )
                     .frame(width: 72, height: 72)
@@ -159,11 +162,11 @@ struct ScanView: View {
                     .fill(.ultraThinMaterial)
                     .frame(width: 34, height: 34)
                 Circle()
-                    .fill(scanManager.sceneCoverage.score >= 0.75 ? Color.green : Color.cyan)
+                    .fill(sceneCoverageLooksGood ? Color.green : Color.cyan)
                     .frame(width: 9, height: 9)
             }
 
-            Text("Coverage brush · \(scanManager.sceneCoverage.percent)%")
+            Text(sceneCoverageBrushLabel)
                 .font(.caption2.weight(.semibold).monospacedDigit())
                 .foregroundStyle(.white)
                 .padding(.horizontal, 9)
@@ -174,6 +177,22 @@ struct ScanView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Scene coverage brush")
         .accessibilityValue("\(scanManager.sceneCoverage.percent) percent")
+    }
+
+    private var sceneCoverageBrushLabel: String {
+        let coverage = scanManager.sceneCoverage
+        guard coverage.surfaceHitCount > 0 else {
+            return "Coverage brush · \(coverage.percent)%"
+        }
+        return "Surface \(Int((coverage.surfaceScore * 100).rounded()))% · "
+            + "Motion \(coverage.percent)%"
+    }
+
+    private var sceneCoverageLooksGood: Bool {
+        let coverage = scanManager.sceneCoverage
+        return coverage.score >= 0.75
+            && coverage.disconnectedJumpCount == 0
+            && (coverage.surfaceHitCount < 8 || coverage.surfaceScore >= 0.45)
     }
 
     private func metricLabel(title: String, value: String, systemImage: String) -> some View {

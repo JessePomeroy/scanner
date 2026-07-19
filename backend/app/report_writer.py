@@ -183,6 +183,10 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
     if capture.get("scan_mode") == "scene_scan" and isinstance(scene_coverage, dict):
         coverage_score = scene_coverage.get("score")
         disconnected_jump_count = scene_coverage.get("disconnected_jump_count")
+        surface_hit_count = scene_coverage.get("surface_hit_count")
+        surface_score = scene_coverage.get("surface_score")
+        minimum_surface_distance = scene_coverage.get("minimum_surface_distance_meters")
+        maximum_surface_distance = scene_coverage.get("maximum_surface_distance_meters")
         if (
             isinstance(coverage_score, (int, float))
             and math.isfinite(coverage_score)
@@ -195,6 +199,26 @@ def capture_warnings(capture: dict[str, Any], object_scan: dict[str, Any]) -> li
             and disconnected_jump_count > 0
         ):
             warnings.append("disconnected_scene_passes")
+        if (
+            isinstance(surface_hit_count, int)
+            and not isinstance(surface_hit_count, bool)
+            and surface_hit_count >= 8
+            and isinstance(surface_score, (int, float))
+            and math.isfinite(surface_score)
+            and surface_score < 0.45
+        ):
+            warnings.append("weak_surface_view_coverage")
+        if (
+            isinstance(surface_hit_count, int)
+            and not isinstance(surface_hit_count, bool)
+            and surface_hit_count >= 8
+            and isinstance(minimum_surface_distance, (int, float))
+            and isinstance(maximum_surface_distance, (int, float))
+            and math.isfinite(minimum_surface_distance)
+            and math.isfinite(maximum_surface_distance)
+            and maximum_surface_distance - minimum_surface_distance > 4
+        ):
+            warnings.append("inconsistent_scene_distance")
     if object_scan["is_object_scan"] and not object_scan["ready_for_manual_radius_crop"]:
         warnings.append("object_scan_missing_subject_tap")
 

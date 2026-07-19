@@ -2594,6 +2594,12 @@ class BackendTests(unittest.TestCase):
                 "elevation_bin_count": 1,
                 "path_length_meters": 1.4,
                 "disconnected_jump_count": 1,
+                "surface_hit_count": 12,
+                "unique_surface_cell_count": 3,
+                "multi_angle_surface_cell_count": 0,
+                "minimum_surface_distance_meters": 0.8,
+                "maximum_surface_distance_meters": 5.2,
+                "surface_score": 0.32,
                 "score": 0.48,
             }
             session_path.write_text(json.dumps(session))
@@ -2605,6 +2611,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["capture"]["scene_coverage"]["score"], 0.48)
         self.assertIn("low_scene_coverage", payload["warnings"])
         self.assertIn("disconnected_scene_passes", payload["warnings"])
+        self.assertIn("weak_surface_view_coverage", payload["warnings"])
+        self.assertIn("inconsistent_scene_distance", payload["warnings"])
 
     def test_inspect_scan_cli_prints_integrity_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

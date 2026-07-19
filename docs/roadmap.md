@@ -199,13 +199,16 @@ Implement the following as independently reviewable slices:
    Status: initial world-space camera-path, position-diversity, heading, and
    elevation coverage tracker implemented with live actionable guidance and
    package evidence. A center coverage-brush reticle and cyan accepted-camera
-   route are now rendered in the AR view; surface-level painted coverage remains.
+   route are now rendered in the AR view. The brush now paints ARKit-estimated
+   surface cells amber for one angle and green after multi-angle coverage;
+   denser mesh/depth visibility evaluation remains.
    - Use a reticle/brush metaphor rather than forcing a centered object box.
    - Show camera path and captured surface/angle coverage while still on site.
 2. Add actionable coverage warnings.
    Status: initial weak-coverage stop review, recoverable disconnected-pass
    detection, saved evidence, and backend warnings implemented. Surface-level
-   visibility and distance-to-subject evidence remain.
+   visibility and distance-to-surface evidence are now captured initially;
+   calibration against benchmark reconstruction gaps remains.
    - Identify gaps, weak viewing-angle diversity, excessive distance changes,
      and disconnected detail passes.
    - Let the user continue the same capture before packaging it.
