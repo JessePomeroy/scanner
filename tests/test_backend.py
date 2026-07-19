@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import threading
 import time
@@ -69,6 +70,12 @@ from app.mask_undistorter import (  # noqa: E402
     undistort_mask_file,
 )
 from app.jobs import JobStore, JobTransitionError  # noqa: E402
+from app.gaussian_cleanup import (  # noqa: E402
+    GaussianCleanupError,
+    cleanup_gaussian_ply,
+    load_gaussian_cleanup_recipe,
+    read_gaussian_ply_header,
+)
 from app.neural_backend_planner import (  # noqa: E402
     NeuralBackendConfig,
     SUPPORTED_SPLAT_DELIVERY_FORMATS,
@@ -3124,6 +3131,165 @@ class BackendTests(unittest.TestCase):
         self.assertIn("--encoder", plan.commands[0])
         self.assertIn("vits", plan.commands[0])
 
+    def test_gaussian_cleanup_filters_ascii_crop_and_preserves_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "splat.ply"
+            output = root / "splat.cleaned.ply"
+            report = root / "cleanup.json"
+            recipe_path = root / "recipe.json"
+            source.write_text(
+                "ply\nformat ascii 1.0\nelement vertex 5\n"
+                "property float x\nproperty float y\nproperty float z\n"
+                "property float opacity\nend_header\n"
+                "-2 0 0 0.1\n-1 0 0 0.2\n0 0 0 0.3\n1 0 0 0.4\n2 0 0 0.5\n"
+            )
+            source_before = source.read_bytes()
+            recipe_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "crop": {
+                            "shape": "box",
+                            "center": [0, 0, 0],
+                            "size": [2, 2, 2],
+                            "keep": "inside",
+                        },
+                    }
+                )
+            )
+
+            cleanup_gaussian_ply(
+                source,
+                output,
+                load_gaussian_cleanup_recipe(recipe_path),
+                report_path=report,
+            )
+            header = read_gaussian_ply_header(output, primitive_hard_limit=100)
+            evidence = json.loads(report.read_text())
+
+            self.assertEqual(source.read_bytes(), source_before)
+            self.assertEqual(header.vertex_count, 3)
+            self.assertIn(b"-1 0 0 0.2", output.read_bytes())
+            self.assertEqual(evidence["source_primitive_count"], 5)
+            self.assertEqual(evidence["retained_primitive_count"], 3)
+            self.assertTrue(evidence["destructive_output_verified"])
+
+            cleanup_gaussian_ply(
+                source,
+                output,
+                load_gaussian_cleanup_recipe(recipe_path),
+                report_path=report,
+                overwrite=True,
+            )
+            self.assertEqual(
+                read_gaussian_ply_header(output, primitive_hard_limit=100).vertex_count,
+                3,
+            )
+
+    def test_gaussian_cleanup_filters_binary_selection_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "splat.ply"
+            output = root / "splat.cleaned.ply"
+            report = root / "cleanup.json"
+            recipe_path = root / "recipe.json"
+            header = (
+                b"ply\nformat binary_little_endian 1.0\nelement vertex 4\n"
+                b"property float x\nproperty float y\nproperty float z\n"
+                b"property float opacity\nend_header\n"
+            )
+            records = b"".join(
+                struct.pack("<ffff", float(index), 0, 0, index / 10)
+                for index in range(4)
+            )
+            source.write_bytes(header + records)
+            recipe_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "selection": {"mode": "discard", "ranges": [[1, 3]]},
+                    }
+                )
+            )
+
+            cleanup_gaussian_ply(
+                source,
+                output,
+                load_gaussian_cleanup_recipe(recipe_path),
+                report_path=report,
+            )
+            output_header = read_gaussian_ply_header(output, primitive_hard_limit=100)
+            payload = output.read_bytes()[output_header.header_size :]
+
+            self.assertEqual(output_header.vertex_count, 2)
+            self.assertEqual(len(payload), struct.calcsize("<ffff") * 2)
+            self.assertEqual(struct.unpack("<ffff", payload[:16])[0], 0)
+            self.assertEqual(struct.unpack("<ffff", payload[16:])[0], 3)
+
+    def test_gaussian_cleanup_rejects_out_of_bounds_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "splat.ply"
+            source.write_text(
+                "ply\nformat ascii 1.0\nelement vertex 1\n"
+                "property float x\nproperty float y\nproperty float z\n"
+                "end_header\n0 0 0\n"
+            )
+            recipe_path = root / "recipe.json"
+            recipe_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "selection": {"mode": "keep", "ranges": [[0, 2]]},
+                    }
+                )
+            )
+
+            with self.assertRaises(GaussianCleanupError):
+                cleanup_gaussian_ply(
+                    source,
+                    root / "cleaned.ply",
+                    load_gaussian_cleanup_recipe(recipe_path),
+                    report_path=root / "report.json",
+                )
+
+    def test_gaussian_cleanup_overwrite_refuses_hardlink_to_master(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "splat.ply"
+            source.write_text(
+                "ply\nformat ascii 1.0\nelement vertex 1\n"
+                "property float x\nproperty float y\nproperty float z\n"
+                "end_header\n0 0 0\n"
+            )
+            output = root / "alias.ply"
+            os.link(source, output)
+            recipe_path = root / "recipe.json"
+            recipe_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "crop": {
+                            "shape": "box",
+                            "center": [0, 0, 0],
+                            "size": [2, 2, 2],
+                            "keep": "inside",
+                        },
+                    }
+                )
+            )
+
+            with self.assertRaisesRegex(GaussianCleanupError, "immutable source"):
+                cleanup_gaussian_ply(
+                    source,
+                    output,
+                    load_gaussian_cleanup_recipe(recipe_path),
+                    report_path=root / "report.json",
+                    overwrite=True,
+                )
+            self.assertIn(b"element vertex 1", source.read_bytes())
+
     def test_neural_backend_plan_uses_images_for_gaussian_splatting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
@@ -3148,6 +3314,41 @@ class BackendTests(unittest.TestCase):
         self.assertIn("--filter-nan", plan.commands[3])
         self.assertTrue(plan.commands[3][-1].endswith("scene.sog"))
         self.assertTrue(plan.commands[4][-1].endswith("scene.html"))
+
+    def test_neural_backend_plan_converts_only_verified_cleaned_splat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_dir = self._write_scan(root)
+            recipe = root / "gaussian_cleanup.json"
+            recipe.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "crop": {
+                            "shape": "box",
+                            "center": [0, 0, 0],
+                            "size": [2, 2, 2],
+                            "keep": "inside",
+                        },
+                    }
+                )
+            )
+            plan = build_neural_backend_plan(
+                scan_dir,
+                NeuralBackendConfig(
+                    backend="gaussian_splatting",
+                    splat_cleanup_recipe=recipe,
+                ),
+            )
+
+        cleanup = plan.commands[3]
+        cleaned_ply = str(plan.outputs["splat_cleaned_ply"])
+        self.assertEqual(cleanup[0], "python3")
+        self.assertTrue(cleanup[1].endswith("scripts/cleanup_gaussian_ply.py"))
+        self.assertEqual(cleanup[3], cleaned_ply)
+        self.assertEqual(plan.commands[4][2], cleaned_ply)
+        self.assertEqual(plan.commands[5][2], cleaned_ply)
+        self.assertIn("splat_cleanup_report", plan.outputs)
 
     def test_neural_backend_plan_supports_selected_splat_delivery_formats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

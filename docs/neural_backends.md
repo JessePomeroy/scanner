@@ -106,6 +106,23 @@ A `gaussian-glb` uses the emerging `KHR_gaussian_splatting` extension. It is
 not a conventional textured mesh GLB and should not be treated as the Blender
 mesh deliverable.
 
+To destructively crop or apply explicit primitive-index selection before
+delivery conversion, copy and edit the example recipe and pass it to the plan:
+
+```bash
+cp docs/examples/gaussian_cleanup_recipe.json gaussian_cleanup.json
+python3 scripts/plan_neural_backend.py scan.zip \
+  --backend gaussian_splatting \
+  --splat-cleanup-recipe gaussian_cleanup.json
+```
+
+The plan preserves the master PLY, creates and verifies
+`cleanup/splat.cleaned.ply`, writes `gaussian_cleanup_report.json`, and makes
+every `splat-transform` command consume the cleaned PLY. SuperSplat hiding is
+not enough: export or encode an explicit selection recipe so excluded
+primitives are absent from the destructive publication asset. See
+[`gaussian_cleanup_contract.md`](gaussian_cleanup_contract.md).
+
 Use the standard `splatfacto` profile first on the RTX 3070. Nerfstudio
 documents it around 6 GB VRAM; `splatfacto-big` is documented around 12 GB and
 is not the default for an 8 GB card.

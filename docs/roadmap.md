@@ -230,6 +230,10 @@ Implement the following as independently reviewable slices:
      selection, and a Blender-ready retained result.
    - Ensure discarded geometry does not remain in the exported GLB.
 2. Add Gaussian primitive selection and cropping.
+   Status: versioned box/cylinder and source-index selection recipe,
+   byte-preserving destructive PLY filter, full output verification/report,
+   and cleaned-only SOG/delivery planning implemented. SuperSplat selection
+   export ergonomics and real benchmark calibration remain.
    - Treat viewer hiding and destructive export cropping as different states.
    - Verify excluded splats are absent from the published SOG/PLY rather than
      merely hidden in the viewer.
