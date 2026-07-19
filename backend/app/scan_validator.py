@@ -28,6 +28,10 @@ class ScanValidationError(ValueError):
 
 SUPPORTED_VIDEO_SUFFIXES = {".mov", ".mp4", ".m4v"}
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".heic", ".png"}
+SUPPORTED_KEYFRAME_IMAGE_SOURCES = {
+    "arkit_high_resolution",
+    "arkit_video_frame_fallback",
+}
 OPTIONAL_CAPTURE_DIRECTORIES = ("video", "depth", "arkit", "preview")
 
 
@@ -44,6 +48,10 @@ class ScanValidationReport:
     object_radius_meters: float | None
     session_image_count: int | None
     session_video_count: int | None
+    high_resolution_frame_capture_enabled: bool | None
+    configured_video_resolution: tuple[int, int] | None
+    high_resolution_image_count: int | None
+    fallback_image_count: int | None
     integrity_warnings: tuple[str, ...]
     reconstruction_scope: dict[str, object] | None
     capture_mask_count: int
@@ -135,6 +143,7 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         session_image_count=metadata.session.image_count,
         session_video_count=metadata.session.video_count,
     )
+    _validate_image_capture_evidence(metadata)
     video_references = _validate_video_references(scan_dir, metadata.videos)
     actual_video_paths = {path.resolve() for path in video_files}
     integrity_warnings: list[str] = []
@@ -165,6 +174,12 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
         object_radius_meters=metadata.session.object_radius_meters,
         session_image_count=metadata.session.image_count,
         session_video_count=metadata.session.video_count,
+        high_resolution_frame_capture_enabled=(
+            metadata.session.high_resolution_frame_capture_enabled
+        ),
+        configured_video_resolution=metadata.session.configured_video_resolution,
+        high_resolution_image_count=metadata.session.high_resolution_image_count,
+        fallback_image_count=metadata.session.fallback_image_count,
         integrity_warnings=tuple(integrity_warnings),
         reconstruction_scope=(
             {
@@ -182,6 +197,65 @@ def validate_scan_package(scan_dir: Path) -> ScanValidationReport:
             mask_authoring_plan.as_dict() if mask_authoring_plan is not None else None
         ),
     )
+
+
+def _validate_image_capture_evidence(metadata: ScanMetadata) -> None:
+    session = metadata.session
+    session_values = (
+        session.high_resolution_frame_capture_enabled,
+        session.configured_video_resolution,
+        session.high_resolution_image_count,
+        session.fallback_image_count,
+    )
+    frame_has_evidence = any(
+        frame.image_source is not None
+        or frame.high_resolution_capture_failure is not None
+        for frame in metadata.frames
+    )
+    if not frame_has_evidence and all(value is None for value in session_values):
+        return
+    if any(value is None for value in session_values):
+        raise ScanValidationError(
+            "High-resolution capture session evidence is incomplete"
+        )
+    if any(frame.image_source is None for frame in metadata.frames):
+        raise ScanValidationError(
+            "Every frame must declare image_source when high-resolution evidence is present"
+        )
+
+    high_resolution_count = 0
+    fallback_count = 0
+    for index, frame in enumerate(metadata.frames):
+        if frame.image_source not in SUPPORTED_KEYFRAME_IMAGE_SOURCES:
+            raise ScanValidationError(
+                f"frames.json[{index}].image_source is unsupported"
+            )
+        if frame.image_source == "arkit_high_resolution":
+            high_resolution_count += 1
+            if frame.high_resolution_capture_failure is not None:
+                raise ScanValidationError(
+                    f"frames.json[{index}] high-resolution image cannot declare a fallback reason"
+                )
+        else:
+            fallback_count += 1
+            if frame.high_resolution_capture_failure is None:
+                raise ScanValidationError(
+                    f"frames.json[{index}] fallback image must declare a reason"
+                )
+
+    if (
+        high_resolution_count != session.high_resolution_image_count
+        or fallback_count != session.fallback_image_count
+    ):
+        raise ScanValidationError(
+            "Per-frame image_source counts do not match session high-resolution/fallback counts"
+        )
+    if high_resolution_count + fallback_count != len(metadata.frames):
+        raise ScanValidationError("High-resolution/fallback counts do not cover every frame")
+    if session.high_resolution_frame_capture_enabled is False and high_resolution_count:
+        raise ScanValidationError(
+            "High-resolution images cannot be declared when capture support is disabled"
+        )
 
 
 def _validate_capture_masks(

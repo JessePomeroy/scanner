@@ -28,6 +28,13 @@ def main() -> None:
     print(f"frames={report.frame_count}")
     print(f"videos={report.video_count}")
     print(f"video_metadata_entries={report.video_metadata_count}")
+    print(
+        "high_resolution_capture_enabled="
+        f"{report.high_resolution_frame_capture_enabled}"
+    )
+    print(f"configured_video_resolution={report.configured_video_resolution}")
+    print(f"high_resolution_images={report.high_resolution_image_count}")
+    print(f"fallback_images={report.fallback_image_count}")
     print(f"integrity_warnings={','.join(report.integrity_warnings) or 'none'}")
     print(f"object_center_world={report.object_center_world}")
     print(f"object_radius_meters={report.object_radius_meters}")

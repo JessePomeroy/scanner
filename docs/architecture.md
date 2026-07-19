@@ -16,8 +16,12 @@ unsupported, fails, is blurry, or has not completed when the user stops.
 Raw JSON field parsing is owned by `scan_metadata`, which returns typed frame,
 session, and video records. `scan_validator` owns filesystem/reference
 integrity and exposes the existing `validate_scan_package` interface to backend
-and script callers. This keeps metadata-shape compatibility rules out of
-reconstruction planners.
+and script callers. New high-resolution packages are accepted only when every
+frame declares a supported image source, every fallback records its reason, and
+the per-frame totals match the session totals; legacy packages with none of
+these fields remain valid. The inspection script prints the verified capture
+mode, configured video resolution, and high-resolution/fallback totals. This
+keeps metadata-shape compatibility rules out of reconstruction planners.
 
 Incoming upload persistence depends on a minimal async binary-reader contract.
 FastAPI's `UploadFile` is the production source, while focused fake readers

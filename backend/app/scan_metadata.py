@@ -20,6 +20,8 @@ class FrameMetadata:
     image: str
     timestamp: float
     resolution: tuple[int, int]
+    image_source: str | None = None
+    high_resolution_capture_failure: str | None = None
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,10 @@ class SessionMetadata:
     video_count: int | None
     object_center_world: tuple[float, float, float] | None
     object_radius_meters: float | None
+    high_resolution_frame_capture_enabled: bool | None = None
+    configured_video_resolution: tuple[int, int] | None = None
+    high_resolution_image_count: int | None = None
+    fallback_image_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -117,11 +123,21 @@ def _parse_frame(value: Any, index: int) -> FrameMetadata:
     item = _object(value, label)
     frame_id = _integer(item.get("id"), f"{label}.id", minimum=0)
     image = _non_empty_string(item.get("image"), f"{label}.image")
+    image_source = _optional_non_empty_string(
+        item.get("image_source"),
+        f"{label}.image_source",
+    )
+    capture_failure = _optional_non_empty_string(
+        item.get("high_resolution_capture_failure"),
+        f"{label}.high_resolution_capture_failure",
+    )
     timestamp = _number(item.get("timestamp"), f"{label}.timestamp", minimum=0)
     resolution = _resolution(item.get("resolution"), f"{label}.resolution")
     return FrameMetadata(
         id=frame_id,
         image=image,
+        image_source=image_source,
+        high_resolution_capture_failure=capture_failure,
         timestamp=timestamp,
         resolution=resolution,
     )
@@ -132,6 +148,24 @@ def _parse_session(value: dict[str, Any]) -> SessionMetadata:
     scan_mode = _optional_non_empty_string(value.get("scan_mode"), "scan_mode")
     image_count = _optional_integer(value.get("image_count"), "image_count", minimum=0)
     video_count = _optional_integer(value.get("video_count"), "video_count", minimum=0)
+    high_resolution_enabled = _optional_boolean(
+        value.get("high_resolution_frame_capture_enabled"),
+        "high_resolution_frame_capture_enabled",
+    )
+    configured_video_resolution = _optional_resolution(
+        value.get("configured_video_resolution"),
+        "configured_video_resolution",
+    )
+    high_resolution_image_count = _optional_integer(
+        value.get("high_resolution_image_count"),
+        "high_resolution_image_count",
+        minimum=0,
+    )
+    fallback_image_count = _optional_integer(
+        value.get("fallback_image_count"),
+        "fallback_image_count",
+        minimum=0,
+    )
     object_center = _optional_number_tuple(
         value.get("object_center_world"),
         "object_center_world",
@@ -152,6 +186,10 @@ def _parse_session(value: dict[str, Any]) -> SessionMetadata:
         scan_mode=scan_mode,
         image_count=image_count,
         video_count=video_count,
+        high_resolution_frame_capture_enabled=high_resolution_enabled,
+        configured_video_resolution=configured_video_resolution,
+        high_resolution_image_count=high_resolution_image_count,
+        fallback_image_count=fallback_image_count,
         object_center_world=object_center,
         object_radius_meters=object_radius,
     )
@@ -233,6 +271,14 @@ def _optional_integer(value: Any, label: str, *, minimum: int) -> int | None:
     if value is None:
         return None
     return _integer(value, label, minimum=minimum)
+
+
+def _optional_boolean(value: Any, label: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ScanMetadataError(f"{label} must be a boolean")
+    return value
 
 
 def _number(
