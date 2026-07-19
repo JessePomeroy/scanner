@@ -436,6 +436,10 @@ class BackendTests(unittest.TestCase):
             report = validate_scan_package(scan_dir)
 
         self.assertEqual(report.image_count, 1)
+        self.assertIsNone(report.high_resolution_frame_capture_enabled)
+        self.assertIsNone(report.configured_video_resolution)
+        self.assertIsNone(report.high_resolution_image_count)
+        self.assertIsNone(report.fallback_image_count)
         self.assertEqual(report.frame_count, 1)
         self.assertEqual(report.video_count, 0)
         self.assertEqual(report.scan_id, "scan_test")
@@ -924,6 +928,97 @@ class BackendTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ScanValidationError, f"{key} .* does not match"):
                     validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_accepts_high_resolution_capture_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image_source"] = "arkit_high_resolution"
+            frame_path.write_text(json.dumps(frames))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update(
+                {
+                    "high_resolution_frame_capture_enabled": True,
+                    "configured_video_resolution": [1920, 1440],
+                    "high_resolution_image_count": 1,
+                    "fallback_image_count": 0,
+                }
+            )
+            session_path.write_text(json.dumps(session))
+
+            report = validate_scan_package(scan_dir)
+
+        self.assertEqual(report.image_count, 1)
+        self.assertTrue(report.high_resolution_frame_capture_enabled)
+        self.assertEqual(report.configured_video_resolution, (1920, 1440))
+        self.assertEqual(report.high_resolution_image_count, 1)
+        self.assertEqual(report.fallback_image_count, 0)
+
+    def test_validate_scan_package_rejects_high_resolution_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image_source"] = "arkit_high_resolution"
+            frame_path.write_text(json.dumps(frames))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update(
+                {
+                    "high_resolution_frame_capture_enabled": True,
+                    "configured_video_resolution": [1920, 1440],
+                    "high_resolution_image_count": 0,
+                    "fallback_image_count": 1,
+                }
+            )
+            session_path.write_text(json.dumps(session))
+
+            with self.assertRaisesRegex(
+                ScanValidationError,
+                "Per-frame image_source counts do not match",
+            ):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_fallback_without_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image_source"] = "arkit_video_frame_fallback"
+            frame_path.write_text(json.dumps(frames))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session.update(
+                {
+                    "high_resolution_frame_capture_enabled": True,
+                    "configured_video_resolution": [1920, 1440],
+                    "high_resolution_image_count": 0,
+                    "fallback_image_count": 1,
+                }
+            )
+            session_path.write_text(json.dumps(session))
+
+            with self.assertRaisesRegex(
+                ScanValidationError,
+                "fallback image must declare a reason",
+            ):
+                validate_scan_package(scan_dir)
+
+    def test_validate_scan_package_rejects_partial_capture_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = self._write_scan(Path(tmp))
+            session_path = scan_dir / "metadata" / "session.json"
+            session = json.loads(session_path.read_text())
+            session["high_resolution_frame_capture_enabled"] = True
+            session_path.write_text(json.dumps(session))
+
+            with self.assertRaisesRegex(
+                ScanValidationError,
+                "High-resolution capture session evidence is incomplete",
+            ):
+                validate_scan_package(scan_dir)
 
     def test_validate_scan_package_rejects_invalid_video_scalar_contract(self) -> None:
         invalid_values = {
@@ -2800,13 +2895,31 @@ class BackendTests(unittest.TestCase):
     def test_write_scan_report_preserves_high_resolution_capture_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan_dir = self._write_scan(Path(tmp))
+            frame_path = scan_dir / "metadata" / "frames.json"
+            frames = json.loads(frame_path.read_text())
+            frames[0]["image_source"] = "arkit_high_resolution"
+            for frame_id in range(2, 5):
+                image_name = f"frame_{frame_id:06d}.jpg"
+                (scan_dir / "images" / image_name).write_bytes(b"not a real jpeg")
+                fallback = dict(frames[0])
+                fallback.update(
+                    {
+                        "id": frame_id,
+                        "image": f"images/{image_name}",
+                        "timestamp": float(frame_id - 1),
+                        "image_source": "arkit_video_frame_fallback",
+                        "high_resolution_capture_failure": "high_resolution_capture_timeout",
+                    }
+                )
+                frames.append(fallback)
+            frame_path.write_text(json.dumps(frames))
             session_path = scan_dir / "metadata" / "session.json"
             session = json.loads(session_path.read_text())
             session.update(
                 {
                     "high_resolution_frame_capture_enabled": True,
                     "configured_video_resolution": [1920, 1440],
-                    "high_resolution_image_count": 12,
+                    "high_resolution_image_count": 1,
                     "fallback_image_count": 3,
                 }
             )
@@ -2816,7 +2929,7 @@ class BackendTests(unittest.TestCase):
             report_path = write_scan_report(scan_dir, validation)
             payload = json.loads(report_path.read_text())
 
-        self.assertEqual(payload["capture"]["high_resolution_image_count"], 12)
+        self.assertEqual(payload["capture"]["high_resolution_image_count"], 1)
         self.assertEqual(payload["capture"]["fallback_image_count"], 3)
         self.assertEqual(payload["capture"]["configured_video_resolution"], [1920, 1440])
         self.assertIn("many_high_resolution_capture_fallbacks", payload["warnings"])

@@ -17,7 +17,8 @@
 - `metadata/session.json` records the configured AR video resolution and total
   high-resolution/fallback counts. The backend warns when a supported session
   falls back unusually often so the capture can be compared against texture
-  quality.
+  quality. It rejects partial or contradictory capture evidence, including a
+  fallback without a reason or totals that do not match the frame records.
 
 - Move slowly and avoid fast pans.
 - Keep 70-80% overlap between accepted frames.
