@@ -40,6 +40,7 @@ from app.benchmark_evidence import (  # noqa: E402
     artifact_fact,
     ensure_report_open,
     initialize_report,
+    probe_command,
     run_stage,
     runtime_guidance,
     sha256_file,
@@ -82,7 +83,11 @@ from app.neural_backend_planner import (  # noqa: E402
     build_neural_backend_plan,
     write_neural_backend_report,
 )
-from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands, run_openmvs_pipeline  # noqa: E402
+from app.openmvs_runner import (  # noqa: E402
+    OpenMVSConfig,
+    build_openmvs_commands,
+    run_openmvs_pipeline,
+)
 from app.open3d_cleanup import cleanup_outputs  # noqa: E402
 from app.point_cloud_processor import (  # noqa: E402
     PointCloudProcessingConfig,
@@ -1532,6 +1537,102 @@ class BackendTests(unittest.TestCase):
         )
         self.assertIn("sparse_point_cloud", plan.outputs)
 
+    def test_backend_plan_exposes_explicit_colmap_fused_openmvs_path(self) -> None:
+        scan_dir = Path("/tmp/scanner-colmap-fused-plan")
+        plan = build_backend_plan(
+            scan_dir,
+            BackendPlanConfig(
+                backend="colmap_openmvs",
+                openmvs_point_cloud_source="colmap_fused",
+                openmvs_scope_mode="unbounded",
+            ),
+        )
+
+        openmvs_commands = [
+            command
+            for command in plan.commands
+            if command[0]
+            in {"InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh"}
+        ]
+        self.assertEqual(
+            [command[0] for command in openmvs_commands],
+            ["InterfaceCOLMAP", "ReconstructMesh", "TextureMesh"],
+        )
+        for command in openmvs_commands:
+            self.assertEqual(
+                command[command.index("--working-folder") + 1],
+                str(scan_dir.resolve() / "dense"),
+            )
+        self.assertEqual(
+            plan.outputs["openmvs_dense_point_cloud"],
+            scan_dir.resolve() / "dense" / "scene.ply",
+        )
+        self.assertEqual(
+            plan.settings["openmvs"]["point_cloud_source"],
+            "colmap_fused",
+        )
+        self.assertTrue(any("DensifyPointCloud is skipped" in note for note in plan.notes))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "plan.json"
+            write_command_plan_report(plan, report_path)
+            report = json.loads(report_path.read_text())
+        self.assertEqual(
+            report["settings"]["openmvs"]["point_cloud_source"],
+            "colmap_fused",
+        )
+
+    def test_gpu_runner_dry_run_reports_colmap_fused_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_dir = self._write_scan(root)
+            output_root = root / "outputs"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "reconstruct_gpu.py"),
+                    str(scan_dir),
+                    "--output-root",
+                    str(output_root),
+                    "--openmvs-point-cloud-source",
+                    "colmap_fused",
+                    "--scope-mode",
+                    "unbounded",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((output_root / "scan_test" / "report.json").read_text())
+            processing = json.loads(
+                (
+                    output_root
+                    / "scan_test"
+                    / "source"
+                    / "scan_test"
+                    / "metadata"
+                    / "processing.json"
+                ).read_text()
+            )
+            processing_step = processing["steps"]["gpu_reconstruction"]
+
+        self.assertEqual(
+            report["openmvs_settings"]["point_cloud_source"],
+            "colmap_fused",
+        )
+        self.assertNotIn("DensifyPointCloud", [command[0] for command in report["commands"]])
+        self.assertEqual(
+            processing_step["state"],
+            "planned",
+        )
+        self.assertEqual(
+            processing_step["openmvs_settings"]["point_cloud_source"],
+            "colmap_fused",
+        )
+
     def test_openmvs_pipeline_runs_commands_from_dense_workspace(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-workspace").resolve()
 
@@ -1546,6 +1647,133 @@ class BackendTests(unittest.TestCase):
         for call in run_command_mock.call_args_list:
             self.assertEqual(call.kwargs["cwd"], scan_dir / "dense")
         inspect_mock.assert_called_once()
+
+    def test_openmvs_fused_cloud_pipeline_checks_budget_before_meshing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp).resolve()
+            events: list[str] = []
+
+            def record_command(command: list[str], cwd: Path | None = None) -> None:
+                self.assertEqual(cwd, scan_dir / "dense")
+                events.append(command[0])
+
+            def record_inspection(*_: object) -> None:
+                events.append("inspect_mesh_input")
+
+            config = OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+            )
+            with (
+                patch("app.openmvs_runner.run_command", side_effect=record_command),
+                patch(
+                    "app.openmvs_runner.inspect_openmvs_dense_cloud",
+                    side_effect=record_inspection,
+                ),
+            ):
+                run_openmvs_pipeline(scan_dir, config)
+
+        self.assertEqual(
+            events,
+            [
+                "InterfaceCOLMAP",
+                "inspect_mesh_input",
+                "ReconstructMesh",
+                "TextureMesh",
+            ],
+        )
+
+    def test_openmvs_fused_cloud_budget_failure_stops_before_meshing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp).resolve()
+            dense_dir = scan_dir / "dense"
+            dense_dir.mkdir()
+            commands_run: list[str] = []
+
+            def record_command(command: list[str], cwd: Path | None = None) -> None:
+                commands_run.append(command[0])
+                if command[0] == "InterfaceCOLMAP":
+                    (dense_dir / "scene.ply").write_bytes(
+                        b"ply\nformat ascii 1.0\nelement vertex 11\nend_header\n"
+                    )
+
+            config = OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                point_warning_limit=5,
+                point_hard_limit=10,
+            )
+            with (
+                patch("app.openmvs_runner.run_command", side_effect=record_command),
+                self.assertRaises(PointCloudBudgetError),
+            ):
+                run_openmvs_pipeline(scan_dir, config)
+
+        self.assertEqual(commands_run, ["InterfaceCOLMAP"])
+
+    def test_openmvs_fused_cloud_commands_keep_interface_scene_for_texturing(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-fused")
+        commands = build_openmvs_commands(
+            scan_dir,
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+            ),
+        )
+
+        self.assertEqual(
+            [command[0] for command in commands],
+            ["InterfaceCOLMAP", "ReconstructMesh", "TextureMesh"],
+        )
+        reconstruct = commands[1]
+        self.assertEqual(reconstruct[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            reconstruct[reconstruct.index("--pointcloud-file") + 1],
+            str(scan_dir / "dense" / "scene.ply"),
+        )
+        self.assertEqual(
+            reconstruct[reconstruct.index("--crop-to-roi") + 1],
+            "0",
+        )
+        texture = commands[2]
+        self.assertEqual(texture[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            texture[texture.index("-m") + 1],
+            str(scan_dir / "dense" / "scene_mesh.ply"),
+        )
+        for command in commands:
+            self.assertEqual(
+                command[command.index("--working-folder") + 1],
+                str(scan_dir / "dense"),
+            )
+
+    def test_openmvs_fused_cloud_refine_uses_explicit_mesh_files(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-fused-refine")
+        commands = build_openmvs_commands(
+            scan_dir,
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                include_refine=True,
+            ),
+        )
+
+        self.assertEqual(
+            [command[0] for command in commands],
+            ["InterfaceCOLMAP", "ReconstructMesh", "RefineMesh", "TextureMesh"],
+        )
+        refine = commands[2]
+        self.assertEqual(refine[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            refine[refine.index("--mesh-file") + 1],
+            str(scan_dir / "dense" / "scene_mesh.ply"),
+        )
+        texture = commands[3]
+        self.assertEqual(texture[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            texture[texture.index("-m") + 1],
+            str(scan_dir / "dense" / "scene_mesh_refined.ply"),
+        )
 
     def test_openmvs_commands_densify_with_explicit_scope_controls(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-scope")
@@ -1565,6 +1793,11 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--crop-to-roi") + 1], "1")
         self.assertEqual(densify[densify.index("--roi-border") + 1], "10.0")
         self.assertNotIn("-p", commands[2])
+        for command in commands:
+            self.assertEqual(
+                command[command.index("--working-folder") + 1],
+                str(scan_dir / "dense"),
+            )
 
     def test_openmvs_unbounded_mode_disables_roi_crop(self) -> None:
         commands = build_openmvs_commands(
@@ -1645,6 +1878,30 @@ class BackendTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             OpenMVSConfig(mask_ignore_label=256)
 
+    def test_openmvs_fused_cloud_rejects_unsupported_scope_and_masks(self) -> None:
+        with self.assertRaisesRegex(ValueError, "point-cloud source"):
+            OpenMVSConfig(point_cloud_source="invalid")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "scope_mode='unbounded'"):
+            OpenMVSConfig(point_cloud_source="colmap_fused")
+        with self.assertRaisesRegex(ValueError, "reviewed region"):
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                region_path=Path("/tmp/region.roi"),
+            )
+        with self.assertRaisesRegex(ValueError, "does not yet support OpenMVS masks"):
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                mask_path=Path("/tmp/masks"),
+            )
+        with self.assertRaisesRegex(ValueError, "does not yet support OpenMVS masks"):
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                texture_use_masks=True,
+            )
+
     def test_openmvs_config_reports_effective_scope_settings(self) -> None:
         settings = OpenMVSConfig(scope_mode="unbounded", roi_border=25).report_settings()
 
@@ -1654,12 +1911,53 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(settings["mask_path"])
         self.assertIsNone(settings["mask_ignore_label"])
 
+    def test_openmvs_fused_cloud_reports_only_effective_settings(self) -> None:
+        settings = OpenMVSConfig(
+            point_cloud_source="colmap_fused",
+            scope_mode="unbounded",
+        ).report_settings()
+
+        self.assertEqual(settings["point_cloud_source"], "colmap_fused")
+        self.assertFalse(settings["densification_enabled"])
+        self.assertEqual(settings["mesh_input_point_cloud"], "scene.ply")
+        self.assertIsNone(settings["resolution_level"])
+        self.assertIsNone(settings["number_views_fuse"])
+        self.assertEqual(settings["estimate_roi"], 0)
+        self.assertFalse(settings["crop_to_roi"])
+
     def test_openmvs_config_accepts_api_scope_modes(self) -> None:
         self.assertEqual(OpenMVSConfig(scope_mode="auto_roi").scope_mode, "auto_roi")
         self.assertEqual(OpenMVSConfig(scope_mode="unbounded").scope_mode, "unbounded")
 
+        positional = OpenMVSConfig(
+            "InterfaceCOLMAP",
+            "DensifyPointCloud",
+            "ReconstructMesh",
+            "RefineMesh",
+            "TextureMesh",
+            "unbounded",
+        )
+        self.assertEqual(positional.scope_mode, "unbounded")
+        self.assertEqual(positional.point_cloud_source, "openmvs_densify")
+
         with self.assertRaises(ValueError):
             OpenMVSConfig(scope_mode="invalid")  # type: ignore[arg-type]
+
+    def test_backend_plan_config_preserves_existing_positional_field_order(self) -> None:
+        sensor_database = Path("/tmp/sensors.db")
+        config = BackendPlanConfig(
+            "alicevision",
+            "sequential_matcher",
+            False,
+            False,
+            False,
+            "draft",
+            sensor_database,
+        )
+
+        self.assertEqual(config.meshroom_pipeline, "draft")
+        self.assertEqual(config.alicevision_sensor_database, sensor_database)
+        self.assertEqual(config.openmvs_point_cloud_source, "openmvs_densify")
 
     def test_ply_density_budget_reads_header_without_point_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3169,6 +3467,32 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(len(report["provenance"]["scanner_baseline_commit"]), 40)
         self.assertEqual(report["summary"]["status"], "initialized")
         self.assertEqual(report["provenance"]["tools"], {})
+
+    def test_benchmark_probe_accepts_openmvs_help_banner_nonzero_exit(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1,
+            stdout="OpenMVS x64 v2.4.0\nAvailable options:\n",
+        )
+        with (
+            patch("app.benchmark_evidence.shutil.which", return_value="/usr/bin/InterfaceCOLMAP"),
+            patch("app.benchmark_evidence.subprocess.run", return_value=completed),
+        ):
+            result = probe_command(["InterfaceCOLMAP", "--help"])
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["return_code"], 1)
+        self.assertTrue(result["accepted_nonzero_exit"])
+
+    def test_benchmark_probe_rejects_unrecognized_nonzero_help_output(self) -> None:
+        completed = SimpleNamespace(returncode=1, stdout="unexpected failure\n")
+        with (
+            patch("app.benchmark_evidence.shutil.which", return_value="/usr/bin/InterfaceCOLMAP"),
+            patch("app.benchmark_evidence.subprocess.run", return_value=completed),
+        ):
+            result = probe_command(["InterfaceCOLMAP", "--help"])
+
+        self.assertEqual(result["status"], "error")
+        self.assertFalse(result["accepted_nonzero_exit"])
 
     def test_benchmark_stage_records_log_time_vram_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

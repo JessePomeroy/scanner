@@ -1,6 +1,7 @@
 # Paired Mesh and Gaussian Benchmark Runbook
 
-Status: Mac-side preparation complete; CachyOS/RTX execution pending.
+Status: CachyOS/RTX toolchain verified and mesh feasibility recovered; the
+formal paired benchmark is incomplete.
 
 Prepare the workstation with [`cachyos_setup.md`](cachyos_setup.md). The base
 package script is not the entry gate: the pinned COLMAP/OpenMVS and isolated
@@ -17,6 +18,10 @@ The run is evidence, not a tuning contest. Do not silently replace the input,
 change quality profiles, omit failed stages, or repair one result beyond the
 agreed 15-minute preparation allowance.
 
+The July 2026 RTX work described below is preserved recovery evidence. It did
+not create the required `evidence.json` or Gaussian comparison result, so it
+must not be presented as a completed paired benchmark.
+
 ## Frozen Inputs
 
 - Scan ID: `scan_2026_07_15_00_41_09`
@@ -29,6 +34,8 @@ agreed 15-minute preparation allowance.
   `/Users/jessepomeroy/Downloads/scan_2026_07_15_00_41_09.zip`
 - Verified backup path:
   `/Users/jessepomeroy/Documents/scanner-benchmarks/official/scan_2026_07_15_00_41_09.zip`
+- Current canonical CachyOS path:
+  `/home/strayblackdog/Documents/work/scanner/backend/scans/incoming/966ec5a6-c763-4ce9-8e75-bf9e660368a8.zip`
 
 The evidence-tool commit is recorded separately from the scanner baseline. The
 tool may improve how measurements are collected, but it must not change the
@@ -49,14 +56,46 @@ Mac COLMAP build has no CUDA, so its timing must not be used to estimate the
 RTX 3070 run. Preserved evidence lives beside the durable ZIP under
 `preflight/mac-sparse/`.
 
+## Native RTX Recovery Evidence
+
+The preserved 2026-07-18 job completed CUDA COLMAP dense reconstruction in
+10,854.525 seconds (3:00:54.525). Its first automatic OpenMVS
+`DensifyPointCloud` launch ran from the backend directory, so relative image
+paths were incorrectly resolved under `backend/images/`; it failed before
+OpenMVS densification. The current runner fixes that old defect by running
+OpenMVS commands from the scan's dense workspace.
+
+A later manual retry from the correct dense workspace prepared all 254 images
+and selected neighbors, then failed inside OpenMVS CUDA with `invalid argument
+(code 1)` before producing `scene_dense.mvs`. The strict environment gate did
+not predict this: it verifies executable/install visibility (and a real
+PyTorch CUDA operation), but it does not exercise the OpenMVS densification
+CUDA kernel.
+
+Manual recovery skipped OpenMVS densification and used the
+`InterfaceCOLMAP`-imported `scene.ply`. `ReconstructMesh` consumed 9,343,817
+points and produced a cleaned mesh with 3,652,543 vertices and 7,297,100
+faces. `TextureMesh` then ran for 1:23:16.841 and produced:
+
+- `scene_textured.obj` (938,921,221 bytes);
+- its MTL file;
+- two 8192-pixel JPEG texture atlases (68,818,422 and 29,846,777 bytes).
+
+The recovered files are under
+`/home/strayblackdog/ScannerOutputs/scan_2026_07_15_00_41_09-recovered/`.
+There is still no reviewed `.blend`, conventional GLB, Gaussian `splat.ply`,
+SOG/HTML delivery, finalized `evidence.json`, or filled comparison record.
+This proves that the mesh path is feasible; it does not satisfy the canonical
+artifact or paired-comparison gates.
+
 ## Required Linux Layout
 
 Keep active files on a Linux-native filesystem:
 
 ```text
-~/scanner/                         current evidence-tool checkout
-~/scanner-baseline/                detached worktree at d5f19d9
-~/ScannerBenchmarks/input/         untouched ZIP copy
+~/Documents/work/scanner/          authoritative evidence-tool checkout
+~/Documents/work/scanner-baseline/ detached worktree at d5f19d9
+~/ScannerBenchmarks/input/          untouched ZIP copy
 ~/ScannerBenchmarks/run-001/
   evidence.json
   logs/
@@ -67,10 +106,15 @@ Keep active files on a Linux-native filesystem:
   comparison/
 ```
 
+On the recovered workstation, `~/scanner` is only a compatibility symlink for
+historical absolute paths. Run new work from
+`/home/strayblackdog/Documents/work/scanner`.
+
 Create the baseline worktree only after the repository and commit are present:
 
 ```bash
-git -C ~/scanner worktree add --detach ~/scanner-baseline d5f19d9
+git -C ~/Documents/work/scanner worktree add --detach \
+  ~/Documents/work/scanner-baseline d5f19d9
 ```
 
 ## Entry Gate
@@ -90,11 +134,12 @@ Do not begin the paired run until all of these are true:
 ## Initialize Evidence
 
 ```bash
+SCANNER_REPO=~/Documents/work/scanner
 SCAN=~/ScannerBenchmarks/input/scan_2026_07_15_00_41_09.zip
 RUN=~/ScannerBenchmarks/run-001
 mkdir -p "$RUN"/{logs,plans,mesh,gaussian,blender,comparison}
 
-python3 ~/scanner/scripts/benchmark_evidence.py init \
+python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" init \
   --scan "$SCAN" \
   --expected-sha256 ef9a6e0aefa564facf17357252e7fa2bd2cec55882a107461abad5c6459cb779 \
   --scanner-baseline-commit d5f19d9 \
@@ -112,13 +157,13 @@ Generate plans from the detached baseline worktree, never from an unrecorded
 working copy:
 
 ```bash
-python3 ~/scanner-baseline/scripts/plan_reconstruction_backend.py "$SCAN" \
+python3 ~/Documents/work/scanner-baseline/scripts/plan_reconstruction_backend.py "$SCAN" \
   --backend colmap_openmvs \
   --matcher sequential_matcher \
   --work-dir "$RUN/mesh/work" \
   --report "$RUN/plans/mesh.json"
 
-python3 ~/scanner-baseline/scripts/plan_neural_backend.py "$SCAN" \
+python3 ~/Documents/work/scanner-baseline/scripts/plan_neural_backend.py "$SCAN" \
   --backend gaussian_splatting \
   --splat-method splatfacto \
   --splat-matching-method sequential \
@@ -131,13 +176,61 @@ python3 ~/scanner-baseline/scripts/plan_neural_backend.py "$SCAN" \
 Review both JSON plans before execution. Paths may be rebased into the run
 folder, but command options and profiles must remain unchanged.
 
+## Explicit COLMAP-Fused Recovery Strategy
+
+The current development path makes the successful manual recovery explicit:
+`--openmvs-point-cloud-source colmap_fused --scope-mode unbounded` tells the
+planner and runner to mesh `InterfaceCOLMAP`'s view-aware `scene.ply` and skip
+`DensifyPointCloud`. The combination is deliberately fail-closed for automatic
+ROI, reviewed-region, and OpenMVS-mask workflows until those interactions are
+implemented and tested.
+
+Generated OpenMVS commands carry an explicit `--working-folder` pointing at
+the scan's dense workspace. Preserve that option when copying commands into the
+evidence wrapper; it is required for the relative image paths stored in
+`scene.mvs` and prevents recurrence of the original `backend/images` failure.
+
+That guarantee applies to plans generated by the current recovery code. The
+frozen `d5f19d9` baseline predates `--working-folder`; if its historical
+OpenMVS commands are replayed stage by stage, launch each one from that scan's
+`dense/` workspace and record the working directory in the evidence log.
+
+Preview the new path with the current evidence-tool checkout:
+
+```bash
+python3 "$SCANNER_REPO/scripts/plan_reconstruction_backend.py" "$SCAN" \
+  --backend colmap_openmvs \
+  --matcher sequential_matcher \
+  --openmvs-point-cloud-source colmap_fused \
+  --scope-mode unbounded \
+  --work-dir "$RUN/plans/mesh-colmap-fused-work" \
+  --report "$RUN/plans/mesh-colmap-fused.json"
+```
+
+The corresponding direct runner invocation is:
+
+```bash
+python3 "$SCANNER_REPO/scripts/reconstruct_gpu.py" "$SCAN" \
+  --output-root "$RUN/mesh-colmap-fused" \
+  --matcher sequential_matcher \
+  --openmvs-point-cloud-source colmap_fused \
+  --scope-mode unbounded
+```
+
+This strategy is new and has tests for planning, validation, reporting, and
+command construction, but it has not yet completed a fresh end-to-end run on
+the frozen ZIP. Treat that execution as a separately identified recovery
+variant (or a new formal run after an explicit benchmark decision), preserve
+the original failure logs, and do not rewrite the `d5f19d9` baseline
+provenance.
+
 ## Record Every Stage
 
 Wrap each real command from the plans separately so failures and timings remain
 visible:
 
 ```bash
-python3 ~/scanner/scripts/benchmark_evidence.py run \
+python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" run \
   --report "$RUN/evidence.json" \
   --stage mesh_colmap_feature_extractor \
   --log "$RUN/logs/mesh_colmap_feature_extractor.log" \
@@ -161,6 +254,11 @@ Mesh path:
 11. `mesh_openmvs_refine_mesh`
 12. `mesh_openmvs_texture_mesh`
 13. `mesh_blender_prepare_glb`
+
+For a separately labeled `colmap_fused` variant, stage 9 is intentionally
+skipped. Record `point_cloud_source=colmap_fused`, the inspected `scene.ply`
+point count, and the absence of `DensifyPointCloud` rather than manufacturing
+a successful densification stage.
 
 Gaussian path:
 
@@ -196,7 +294,7 @@ Gaussian path must end with:
 Finalize evidence and hash artifacts:
 
 ```bash
-python3 ~/scanner/scripts/benchmark_evidence.py finalize \
+python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" finalize \
   --report "$RUN/evidence.json" \
   --artifact mesh_glb="$RUN/blender/scene.glb" \
   --artifact mesh_blend="$RUN/blender/scene.blend" \

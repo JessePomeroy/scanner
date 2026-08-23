@@ -35,9 +35,32 @@ def main() -> None:
     parser.add_argument("--no-gpu", action="store_true", help="Plan COLMAP commands with GPU flags disabled.")
     parser.add_argument("--sparse-only", action="store_true", help="Plan only sparse COLMAP commands.")
     parser.add_argument("--skip-openmvs", action="store_true", help="Skip OpenMVS commands for COLMAP/OpenMVS plans.")
+    parser.add_argument(
+        "--openmvs-point-cloud-source",
+        choices=("openmvs_densify", "colmap_fused"),
+        default="openmvs_densify",
+        help="Densify in OpenMVS or mesh InterfaceCOLMAP's view-aware fused-cloud import.",
+    )
+    parser.add_argument(
+        "--scope-mode",
+        choices=("auto_roi", "unbounded"),
+        default="auto_roi",
+        help=(
+            "Use OpenMVS automatic ROI or retain the full point cloud; "
+            "colmap_fused requires unbounded."
+        ),
+    )
     parser.add_argument("--meshroom-pipeline", default="photogrammetry")
     parser.add_argument("--alicevision-sensor-database", type=Path, default=None)
     args = parser.parse_args()
+    if (
+        args.backend == "colmap_openmvs"
+        and not args.skip_openmvs
+        and not args.sparse_only
+        and args.openmvs_point_cloud_source == "colmap_fused"
+        and args.scope_mode != "unbounded"
+    ):
+        parser.error("colmap_fused requires --scope-mode unbounded")
 
     scan_id = scan_id_from_path(args.scan)
     work_dir = args.work_dir or Path("ScannerPlans") / scan_id / args.backend
@@ -53,6 +76,8 @@ def main() -> None:
             use_gpu=not args.no_gpu,
             include_dense=not args.sparse_only,
             include_openmvs=not args.skip_openmvs and not args.sparse_only,
+            openmvs_point_cloud_source=args.openmvs_point_cloud_source,
+            openmvs_scope_mode=args.scope_mode,
             meshroom_pipeline=args.meshroom_pipeline,
             alicevision_sensor_database=args.alicevision_sensor_database,
         ),

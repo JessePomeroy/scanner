@@ -8,7 +8,13 @@ from pathlib import Path
 from app.alicevision_runner import AliceVisionConfig, build_alicevision_plan
 from app.colmap_runner import ColmapConfig, build_colmap_dense_commands, build_colmap_sparse_commands
 from app.meshroom_runner import MeshroomConfig, build_meshroom_plan
-from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands
+from app.openmvs_runner import (
+    OpenMVSConfig,
+    OpenMVSPointCloudSource,
+    OpenMVSScopeMode,
+    build_openmvs_commands,
+    openmvs_mesh_input_cloud_path,
+)
 from app.reconstruction_plan import CommandPlan
 
 
@@ -24,6 +30,8 @@ class BackendPlanConfig:
     include_openmvs: bool = True
     meshroom_pipeline: str = "photogrammetry"
     alicevision_sensor_database: Path | None = None
+    openmvs_point_cloud_source: OpenMVSPointCloudSource = "openmvs_densify"
+    openmvs_scope_mode: OpenMVSScopeMode = "auto_roi"
 
 
 def build_backend_plan(scan_dir: Path, config: BackendPlanConfig | None = None) -> CommandPlan:
@@ -65,8 +73,13 @@ def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> Comm
     if config.include_dense:
         commands.extend(build_colmap_dense_commands(scan_dir, colmap_config))
 
+    openmvs_config: OpenMVSConfig | None = None
     if config.include_openmvs:
-        commands.extend(build_openmvs_commands(scan_dir, OpenMVSConfig()))
+        openmvs_config = OpenMVSConfig(
+            point_cloud_source=config.openmvs_point_cloud_source,
+            scope_mode=config.openmvs_scope_mode,
+        )
+        commands.extend(build_openmvs_commands(scan_dir, openmvs_config))
 
     outputs = {
         "sparse_model": scan_dir / "sparse" / "0",
@@ -75,8 +88,24 @@ def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> Comm
     if config.include_dense:
         outputs["dense_point_cloud"] = scan_dir / "dense" / "fused.ply"
     if config.include_openmvs:
-        outputs["openmvs_dense_point_cloud"] = scan_dir / "dense" / "scene_dense.ply"
+        assert openmvs_config is not None
+        outputs["openmvs_dense_point_cloud"] = openmvs_mesh_input_cloud_path(
+            scan_dir, openmvs_config
+        )
         outputs["textured_mesh"] = scan_dir / "dense" / "scene_textured.obj"
+
+    openmvs_note = (
+        "OpenMVS meshing explicitly reuses InterfaceCOLMAP's view-aware import "
+        "of the COLMAP fused cloud; DensifyPointCloud is skipped."
+        if openmvs_config is not None
+        and openmvs_config.point_cloud_source == "colmap_fused"
+        else (
+            "OpenMVS dense reconstruction uses explicit automatic ROI and "
+            "visibility filtering defaults."
+            if openmvs_config is not None
+            else "OpenMVS commands are omitted from this plan."
+        )
+    )
 
     return CommandPlan(
         backend="colmap_openmvs",
@@ -86,8 +115,17 @@ def build_colmap_openmvs_plan(scan_dir: Path, config: BackendPlanConfig) -> Comm
         notes=[
             "Primary production reconstruction path.",
             "Run dense COLMAP and OpenMVS on native Linux with CUDA-capable tools.",
-            "OpenMVS dense reconstruction uses explicit automatic ROI and visibility filtering defaults.",
+            openmvs_note,
         ],
+        settings={
+            "matcher": config.matcher,
+            "use_gpu": config.use_gpu,
+            "openmvs": (
+                openmvs_config.report_settings()
+                if openmvs_config is not None
+                else None
+            ),
+        },
     )
 
 

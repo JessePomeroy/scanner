@@ -19,7 +19,7 @@ The first working target is:
 - `tests`: Backend unit tests.
 
 See [docs/workflows.md](docs/workflows.md) for the current Mac capture workflow
-and the planned native Linux RTX 3070 reconstruction workflow. See
+and native Linux RTX 3070 reconstruction/recovery status. See
 [docs/roadmap.md](docs/roadmap.md) for the implementation roadmap. The frozen
 paired output experiment is specified in
 [docs/benchmark_runbook.md](docs/benchmark_runbook.md).
@@ -32,13 +32,16 @@ Open the app in Xcode:
 open ios/ScannerApp.xcodeproj
 ```
 
-The current capture path writes accepted `ARFrame.capturedImage` frames to JPEG
-files and records matching AR camera metadata. It now records blur scores,
-motion deltas, movement speed, rejected-frame counts, and an export summary in
-`metadata/session.json`. Scans also include an ARFrame-derived `video/scan.mov`
-and `metadata/video.json` when the device can encode the live camera stream.
-True high-resolution still capture via `AVCapturePhotoOutput` remains a later
-refinement after the package format is proven on a physical iPhone.
+The active capture path qualifies useful live AR frames, then requests a
+pose-synchronized JPEG with `ARSession.captureHighResolutionFrame`. If that
+request is unavailable or fails its qualification checks, the app packages the
+already-qualified live frame and records an explicit fallback reason. It also
+records source/resolution provenance, blur scores, motion deltas, movement
+speed, rejected-frame counts, and an export summary in
+`metadata/session.json`. Scans include an ARFrame-derived `video/scan.mov` and
+`metadata/video.json` when the device can encode the live camera stream. The
+software path and package audit are implemented; physical-iPhone resolution,
+cadence, thermal, pose, and texture-quality validation remain.
 
 The app requires a physical ARKit-capable device for scanning. The simulator
 build is useful for compile checks, but world tracking is unavailable there.
@@ -206,6 +209,27 @@ python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs --dry
 python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
 ```
 
+The native CachyOS/RTX 3070 toolchain has passed this install and visibility
+gate and completed CUDA COLMAP on the frozen iPhone benchmark. Strict mode does
+not execute a representative OpenMVS CUDA workload, so a passing check does not
+prove that `DensifyPointCloud` will complete on a real scan.
+
+The default workstation plan remains OpenMVS densification with automatic ROI.
+For the explicit recovery path that meshes COLMAP's fused cloud instead, use:
+
+```bash
+python3 scripts/reconstruct_gpu.py scan.zip \
+  --output-root ~/ScannerOutputs \
+  --openmvs-point-cloud-source colmap_fused \
+  --scope-mode unbounded
+```
+
+`InterfaceCOLMAP` imports COLMAP's `dense/fused.ply` as the view-aware
+`dense/scene.ply`; this option skips `DensifyPointCloud` and passes `scene.ply`
+to `ReconstructMesh`. It intentionally fails closed if automatic ROI, masks, or
+a reviewed reconstruction region would be required, because those paths are
+not yet supported with this source.
+
 The helper directory retains its historical `scripts/wsl/` name for
 compatibility, but native CachyOS is now the primary target. The setup script
 auto-detects CachyOS/Arch versus Ubuntu/Debian; see
@@ -213,10 +237,17 @@ auto-detects CachyOS/Arch versus Ubuntu/Debian; see
 is booted into Windows, the future cloud worker is offline and jobs remain
 safely queued until Linux starts again.
 
-Strict mode covers the complete paired benchmark gate: RTX visibility,
+Strict mode checks the complete paired benchmark tool inventory: RTX visibility,
 the CUDA toolkit and CUDA-capable PyTorch, CUDA-enabled COLMAP, the OpenMVS
 command suite, Blender, Nerfstudio, Node.js 22 or newer, Codex, and
-SplatTransform. Open3D remains optional.
+SplatTransform. Open3D remains optional. It is an installation/visibility gate,
+not an end-to-end reconstruction or OpenMVS CUDA runtime test.
+
+A July benchmark recovery manually reused the `InterfaceCOLMAP` cloud after an
+OpenMVS densification failure and produced a textured OBJ with about 3.65
+million vertices, 7.30 million faces, and two 8192-pixel texture atlases. That
+proves the recovered mesh/texturing route, but an automated rerun, a reviewed
+GLB, and the paired Gaussian output are still outstanding.
 
 Check job status:
 
