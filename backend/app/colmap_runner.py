@@ -135,10 +135,22 @@ def build_colmap_dense_commands(scan_dir: Path, config: ColmapConfig | None = No
     ]
 
 
+def prepare_colmap_output_directories(
+    scan_dir: Path,
+    *,
+    include_dense: bool = True,
+) -> None:
+    """Create the output directories required by generated COLMAP commands."""
+    scan_dir = scan_dir.resolve()
+    (scan_dir / "sparse").mkdir(parents=True, exist_ok=True)
+    if include_dense:
+        (scan_dir / "dense").mkdir(parents=True, exist_ok=True)
+
+
 def run_colmap_sparse_pipeline(scan_dir: Path, config: ColmapConfig | None = None) -> Path:
     """Run feature extraction, matching, and sparse mapping."""
     scan_dir = scan_dir.resolve()
-    (scan_dir / "sparse").mkdir(exist_ok=True)
+    prepare_colmap_output_directories(scan_dir, include_dense=False)
 
     for command in build_colmap_sparse_commands(scan_dir, config):
         run_command(command)
@@ -154,7 +166,7 @@ def run_colmap_dense_pipeline(
 ) -> Path:
     """Run image undistortion, dense stereo, and dense point cloud fusion."""
     scan_dir = scan_dir.resolve()
-    (scan_dir / "dense").mkdir(exist_ok=True)
+    prepare_colmap_output_directories(scan_dir)
 
     for index, command in enumerate(build_colmap_dense_commands(scan_dir, config)):
         run_command(command)

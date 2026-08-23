@@ -20,6 +20,7 @@ from app.colmap_runner import (  # noqa: E402
     ColmapConfig,
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
+    prepare_colmap_output_directories,
 )
 from app.openmvs_runner import (  # noqa: E402
     OpenMVSConfig,
@@ -111,6 +112,8 @@ def main() -> None:
             scan_root = find_scan_root(source_dir)
             package = validate_and_report_scan(scan_root)
             validation_report = package.validation
+
+    prepare_colmap_output_directories(scan_root, include_dense=not args.skip_dense)
 
     colmap_config = ColmapConfig(
         matcher=args.matcher,

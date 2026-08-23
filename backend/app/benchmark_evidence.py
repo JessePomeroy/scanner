@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,14 +160,16 @@ def probe_command(command: Sequence[str], *, timeout: float = 20) -> dict[str, A
     if executable is None:
         return {"status": "missing", "command": list(command), "detail": None}
     try:
-        completed = subprocess.run(
-            list(command),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-        )
+        with tempfile.TemporaryDirectory(prefix="scanner-tool-probe-") as probe_dir:
+            completed = subprocess.run(
+                list(command),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                cwd=probe_dir,
+            )
     except (OSError, subprocess.SubprocessError) as error:
         return {"status": "error", "command": list(command), "detail": str(error)}
     lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]

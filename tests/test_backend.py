@@ -50,6 +50,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
+    prepare_colmap_output_directories,
 )
 from app.density_budget import PointCloudBudgetError, inspect_ply_point_budget  # noqa: E402
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
@@ -1618,6 +1619,9 @@ class BackendTests(unittest.TestCase):
                 ).read_text()
             )
             processing_step = processing["steps"]["gpu_reconstruction"]
+            prepared_scan = output_root / "scan_test" / "source" / "scan_test"
+            self.assertTrue((prepared_scan / "sparse").is_dir())
+            self.assertTrue((prepared_scan / "dense").is_dir())
 
         self.assertEqual(
             report["openmvs_settings"]["point_cloud_source"],
@@ -1632,6 +1636,16 @@ class BackendTests(unittest.TestCase):
             processing_step["openmvs_settings"]["point_cloud_source"],
             "colmap_fused",
         )
+
+    def test_colmap_workspace_preparation_creates_requested_output_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp) / "scan"
+            prepare_colmap_output_directories(scan_dir, include_dense=False)
+            self.assertTrue((scan_dir / "sparse").is_dir())
+            self.assertFalse((scan_dir / "dense").exists())
+
+            prepare_colmap_output_directories(scan_dir)
+            self.assertTrue((scan_dir / "dense").is_dir())
 
     def test_openmvs_pipeline_runs_commands_from_dense_workspace(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-workspace").resolve()
@@ -3493,6 +3507,26 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertFalse(result["accepted_nonzero_exit"])
+
+    def test_benchmark_probe_uses_disposable_working_directory(self) -> None:
+        observed_cwd: Path | None = None
+
+        def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+            nonlocal observed_cwd
+            observed_cwd = Path(str(kwargs["cwd"]))
+            self.assertTrue(observed_cwd.is_dir())
+            return SimpleNamespace(returncode=0, stdout="tool 1.0\n")
+
+        with (
+            patch("app.benchmark_evidence.shutil.which", return_value="/usr/bin/tool"),
+            patch("app.benchmark_evidence.subprocess.run", side_effect=fake_run),
+        ):
+            result = probe_command(["tool", "--version"])
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIsNotNone(observed_cwd)
+        assert observed_cwd is not None
+        self.assertFalse(observed_cwd.exists())
 
     def test_benchmark_stage_records_log_time_vram_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
