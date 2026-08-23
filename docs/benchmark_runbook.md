@@ -268,6 +268,15 @@ Gaussian path:
 4. `splat_transform_sog`
 5. `splat_transform_html`
 
+The generated `splat_ns_process_data` command must contain the absolute path to
+the evidence-tool checkout's `scripts/nerfstudio_colmap_compat.py`. The strict
+gate probes that wrapper first. It preserves Nerfstudio's two legacy GPU flags
+when an older COLMAP supports them and translates only those flags for COLMAP
+4; do not patch the installed Nerfstudio package or substitute an unrecorded
+wrapper. The planned `ns-train` command must retain
+`--viewer.quit-on-train-completion True` and
+`--viewer.websocket-host 127.0.0.1` for safe unattended execution.
+
 For the Gaussian export, replace the planner's placeholder with the exact
 `config.yml` emitted by the completed Splatfacto run and record that resolved
 path in the command. Preserve `splat.ply` as the editable master.

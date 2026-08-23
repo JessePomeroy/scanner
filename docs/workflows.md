@@ -359,8 +359,11 @@ python3 scripts/wsl/check_reconstruction_env.py --strict
 ```
 
 This strict check is an installation and visibility gate. It verifies the GPU,
-CUDA and application inventory, but it does not run a representative OpenMVS
-CUDA workload and therefore does not prove `DensifyPointCloud` runtime success.
+CUDA and application inventory. It also requires a non-executing compatibility
+probe that proves the repository COLMAP wrapper can preserve legacy Nerfstudio
+GPU flags or translate the two renamed COLMAP 4 flags. It does not run a
+representative OpenMVS CUDA workload and therefore does not prove
+`DensifyPointCloud` runtime success.
 
 6. Create Linux-native workspace folders and dry-run the command plan:
 

@@ -240,8 +240,10 @@ safely queued until Linux starts again.
 Strict mode checks the complete paired benchmark tool inventory: RTX visibility,
 the CUDA toolkit and CUDA-capable PyTorch, CUDA-enabled COLMAP, the OpenMVS
 command suite, Blender, Nerfstudio, Node.js 22 or newer, Codex, and
-SplatTransform. Open3D remains optional. It is an installation/visibility gate,
-not an end-to-end reconstruction or OpenMVS CUDA runtime test.
+SplatTransform. It also requires the repository-local Nerfstudio/COLMAP
+compatibility probe for the two renamed GPU flags. Open3D remains optional. It
+is an installation/visibility gate, not an end-to-end reconstruction or
+OpenMVS CUDA runtime test.
 
 A July benchmark recovery manually reused the `InterfaceCOLMAP` cloud after an
 OpenMVS densification failure and produced a textured OBJ with about 3.65

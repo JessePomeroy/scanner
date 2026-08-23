@@ -29,7 +29,14 @@ Current entry points:
   Anything, Lingbot-style viewer experiments, and Nerfstudio Gaussian
   splatting. Gaussian plans prefer full-session image keyframes over the
   30-second support video, preserve an editable PLY master, and default to SOG
-  plus a standalone HTML viewer.
+  plus a standalone HTML viewer. They pass an absolute repository-local COLMAP
+  compatibility command to Nerfstudio and make unattended training exit with a
+  loopback-only viewer.
+- `nerfstudio_colmap_compat.py`: executable COLMAP proxy for Nerfstudio 1.1.5.
+  It capability-probes legacy versus COLMAP 4 GPU-option names, translates only
+  the two renamed flags (including `--flag=value`), and refuses missing,
+  recursive, ambiguous, or unsupported configurations. The strict workstation
+  checker runs its non-executing compatibility probe.
 - `cleanup_gaussian_ply.py`: preserve the master Gaussian PLY while applying a
   strict destructive crop/primitive-index recipe to a publication PLY, then
   stream-verify its retained count and bounds before delivery conversion.
@@ -81,7 +88,8 @@ See `docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
 rules, and the Blender comparison record.
 
 The native CachyOS/RTX 3070 environment passes the strict install/visibility
-gate, but that check does not prove OpenMVS CUDA runtime success. The preserved
+gate, including the Nerfstudio/COLMAP option-compatibility probe, but that check
+does not prove OpenMVS CUDA runtime success. The preserved
 July run completed CUDA COLMAP, and a manual `scene.ply` recovery produced a
 textured OBJ; an automated rerun, reviewed GLB, and Gaussian deliverables remain.
 

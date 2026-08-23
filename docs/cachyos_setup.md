@@ -154,7 +154,12 @@ NERFSTUDIO_PY=~/ScannerToolchains/envs/nerfstudio-1.1.5-py310/bin/python
 
 Strict mode requires the GPU and CUDA toolkit, CUDA-capable PyTorch, COLMAP,
 the OpenMVS command suite, Blender, Nerfstudio, Node.js 22 or newer, Codex, and
-SplatTransform. Open3D remains optional.
+SplatTransform. It also requires the repository-local Nerfstudio/COLMAP wrapper
+to resolve the real COLMAP binary and recognize both renamed GPU options. That
+probe reads command help only; it does not create reconstruction data. Open3D
+remains optional. OpenMVS writes logs even while displaying help, so the
+checker runs each OpenMVS help probe in a disposable working directory rather
+than polluting the repository or launch directory.
 
 ## 6. Recorded Workstation State — 2026-08-23
 
@@ -167,6 +172,11 @@ stack:
 - Nerfstudio 1.1.5, PyTorch `2.4.1+cu124`, and gsplat
   `1.4.0+pt24cu124`;
 - Node.js 24, Codex 0.147, and SplatTransform 3.1.2.
+
+Nerfstudio 1.1.5 still emits `SiftExtraction.use_gpu` and
+`SiftMatching.use_gpu`; the strict compatibility probe confirms that the
+repository wrapper translates exactly those options for COLMAP 4.0.4. Gaussian
+plans pass the wrapper to `ns-process-data` by absolute path.
 
 This result establishes tool visibility and exercises PyTorch CUDA. It does
 not run an OpenMVS CUDA reconstruction kernel and therefore is not proof that

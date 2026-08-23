@@ -79,6 +79,7 @@ from app.gaussian_cleanup import (  # noqa: E402
     read_gaussian_ply_header,
 )
 from app.neural_backend_planner import (  # noqa: E402
+    NERFSTUDIO_COLMAP_COMPAT_PATH,
     NeuralBackendConfig,
     SUPPORTED_SPLAT_DELIVERY_FORMATS,
     build_neural_backend_plan,
@@ -4080,7 +4081,26 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(plan.inputs["preferred_source_type"], "images")
         self.assertEqual(plan.commands[0][0:2], ["ns-process-data", "images"])
         self.assertIn("--matching-method", plan.commands[0])
+        self.assertEqual(
+            plan.commands[0][plan.commands[0].index("--colmap-cmd") + 1],
+            str(NERFSTUDIO_COLMAP_COMPAT_PATH),
+        )
+        self.assertTrue(NERFSTUDIO_COLMAP_COMPAT_PATH.is_absolute())
+        self.assertEqual(
+            plan.commands[0][plan.commands[0].index("--sfm-tool") + 1],
+            "colmap",
+        )
         self.assertEqual(plan.commands[1][0:2], ["ns-train", "splatfacto"])
+        self.assertEqual(
+            plan.commands[1][
+                plan.commands[1].index("--viewer.quit-on-train-completion") + 1
+            ],
+            "True",
+        )
+        self.assertEqual(
+            plan.commands[1][plan.commands[1].index("--viewer.websocket-host") + 1],
+            "127.0.0.1",
+        )
         self.assertEqual(plan.commands[2][0:2], ["ns-export", "gaussian-splat"])
         self.assertEqual(plan.inputs["delivery_formats"], ["sog", "html"])
         self.assertTrue(str(plan.outputs["splat_ply"]).endswith("exports/splat/splat.ply"))
@@ -4334,6 +4354,13 @@ class BackendTests(unittest.TestCase):
         self.assertIn("Backend: gaussian_splatting", result.stdout)
         self.assertIn("splatfacto-big", payload["commands"][1])
         self.assertIn("exhaustive", payload["commands"][0])
+        wrapper_index = payload["commands"][0].index("--colmap-cmd") + 1
+        self.assertEqual(
+            payload["commands"][0][wrapper_index],
+            str(ROOT / "scripts" / "nerfstudio_colmap_compat.py"),
+        )
+        self.assertIn("--viewer.quit-on-train-completion", payload["commands"][1])
+        self.assertIn("--viewer.websocket-host", payload["commands"][1])
         self.assertEqual(payload["inputs"]["preferred_source_type"], "images")
         self.assertEqual(payload["inputs"]["delivery_formats"], ["spz"])
         self.assertTrue(payload["commands"][3][-1].endswith("scene.spz"))
