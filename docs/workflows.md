@@ -461,7 +461,9 @@ To create a `.blend` file from an output asset:
 ```bash
 blender --background --python scripts/blender/prepare_scan_asset.py -- \
   ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
-  ~/ScannerOutputs/scan_id/blender/scan_id.blend
+  ~/ScannerOutputs/scan_id/blender/scan_id.blend \
+  --obj-forward-axis NEGATIVE_Z \
+  --obj-up-axis Y
 ```
 
 The Blender helper accepts OBJ, PLY, GLB, and GLTF. It can also apply a scale,
@@ -472,14 +474,19 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
   ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
   ~/ScannerOutputs/scan_id/blender/scan_id.blend \
   --texture-dir ~/ScannerOutputs/scan_id/source/scan_id/dense \
+  --obj-forward-axis NEGATIVE_Z \
+  --obj-up-axis Y \
   --scale 1.0 \
   --origin geometry \
   --decimate-ratio 0.5 \
   --export-glb ~/ScannerOutputs/scan_id/blender/scan_id.glb
 ```
 
-The helper supports Blender 4.x native OBJ/PLY import operators and falls back
-to the Blender 3.x legacy OBJ/PLY import operators when needed.
+The helper passes the OBJ forward/up axes explicitly to Blender instead of
+depending on importer defaults. The defaults are `NEGATIVE_Z` and `Y`; choose
+from `X`, `Y`, `Z`, `NEGATIVE_X`, `NEGATIVE_Y`, and `NEGATIVE_Z`, using two
+different dimensions. It supports Blender 4.x native OBJ/PLY import operators
+and maps the same choices to Blender 3.x legacy OBJ axis names when needed.
 
 For reversible mesh cleanup before GLB publication, start from the example
 recipe, adjust its world-space bounds and component thresholds, and require a
@@ -491,6 +498,8 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
   ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
   ~/ScannerOutputs/scan_id/blender/scan_id-clean.blend \
   --texture-dir ~/ScannerOutputs/scan_id/source/scan_id/dense \
+  --obj-forward-axis NEGATIVE_Z \
+  --obj-up-axis Y \
   --cleanup-recipe ~/ScannerOutputs/scan_id/cleanup.json \
   --cleanup-report ~/ScannerOutputs/scan_id/blender/mesh_cleanup_report.json \
   --export-glb ~/ScannerOutputs/scan_id/blender/scan_id-clean.glb

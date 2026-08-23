@@ -18,6 +18,16 @@ from typing import Any
 
 
 SUPPORTED_IMPORT_SUFFIXES = {".obj", ".ply", ".glb", ".gltf"}
+OBJ_AXIS_CHOICES = (
+    "X",
+    "Y",
+    "Z",
+    "NEGATIVE_X",
+    "NEGATIVE_Y",
+    "NEGATIVE_Z",
+)
+DEFAULT_OBJ_FORWARD_AXIS = "NEGATIVE_Z"
+DEFAULT_OBJ_UP_AXIS = "Y"
 
 
 @dataclass(frozen=True)
@@ -32,6 +42,8 @@ class BlenderAssetOptions:
     set_units: str = "METRIC"
     cleanup_recipe: Path | None = None
     cleanup_report: Path | None = None
+    obj_forward_axis: str = DEFAULT_OBJ_FORWARD_AXIS
+    obj_up_axis: str = DEFAULT_OBJ_UP_AXIS
 
 
 @dataclass(frozen=True)
@@ -93,6 +105,18 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         help="Required with --cleanup-recipe; records source/retained mesh evidence.",
     )
     parser.add_argument(
+        "--obj-forward-axis",
+        choices=OBJ_AXIS_CHOICES,
+        default=DEFAULT_OBJ_FORWARD_AXIS,
+        help="OBJ source forward axis passed explicitly to Blender (default: NEGATIVE_Z).",
+    )
+    parser.add_argument(
+        "--obj-up-axis",
+        choices=OBJ_AXIS_CHOICES,
+        default=DEFAULT_OBJ_UP_AXIS,
+        help="OBJ source up axis passed explicitly to Blender (default: Y).",
+    )
+    parser.add_argument(
         "--origin",
         choices=["geometry", "cursor", "none"],
         default="geometry",
@@ -114,6 +138,8 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         parser.error("--decimate-ratio must be greater than 0 and less than or equal to 1")
     if (parsed.cleanup_recipe is None) != (parsed.cleanup_report is None):
         parser.error("--cleanup-recipe and --cleanup-report must be provided together")
+    if _axis_dimension(parsed.obj_forward_axis) == _axis_dimension(parsed.obj_up_axis):
+        parser.error("--obj-forward-axis and --obj-up-axis must use different axes")
 
     return BlenderAssetOptions(
         input_path=parsed.input,
@@ -126,6 +152,8 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         set_units=parsed.set_units.upper(),
         cleanup_recipe=parsed.cleanup_recipe,
         cleanup_report=parsed.cleanup_report,
+        obj_forward_axis=parsed.obj_forward_axis,
+        obj_up_axis=parsed.obj_up_axis,
     )
 
 
@@ -148,7 +176,12 @@ def prepare_asset(options: BlenderAssetOptions) -> None:
     )
 
     clear_scene(bpy)
-    imported_objects = import_asset(bpy, options.input_path)
+    imported_objects = import_asset(
+        bpy,
+        options.input_path,
+        obj_forward_axis=options.obj_forward_axis,
+        obj_up_axis=options.obj_up_axis,
+    )
     normalize_scene_names(bpy, options.input_path.stem)
     configure_units(bpy, options.set_units)
     apply_scale(bpy, imported_objects, options.scale)
@@ -164,10 +197,12 @@ def prepare_asset(options: BlenderAssetOptions) -> None:
     if options.decimate_ratio is not None:
         apply_decimation(bpy, retained_objects, options.decimate_ratio)
     if cleanup_recipe is not None and cleanup_evidence is not None:
+        cleanup_evidence["import_settings"] = import_settings_payload(options)
         cleanup_evidence = finalize_cleanup_evidence(
             retained_objects,
             cleanup_recipe,
             cleanup_evidence,
+            decimate_ratio=options.decimate_ratio,
         )
     if options.texture_dir is not None:
         relink_textures(bpy, options.texture_dir)
@@ -353,6 +388,7 @@ def apply_reversible_cleanup(
             {
                 "object": retained.name,
                 "source_vertex_count": source_vertex_count,
+                "pre_decimation_vertex_count": retained_vertex_count,
                 "retained_vertex_count": retained_vertex_count,
                 "removed_vertex_count": source_vertex_count - retained_vertex_count,
             }
@@ -371,6 +407,7 @@ def apply_reversible_cleanup(
         "effective_bounds": mesh_crop_payload(recipe.crop),
         "recipe": cleanup_recipe_payload(recipe),
         "source_vertex_count": source_vertex_count,
+        "pre_decimation_vertex_count": retained_vertex_count,
         "retained_vertex_count": retained_vertex_count,
         "removed_vertex_count": source_vertex_count - retained_vertex_count,
         "retained_ratio": retained_vertex_count / source_vertex_count,
@@ -415,6 +452,8 @@ def finalize_cleanup_evidence(
     retained_objects: list[Any],
     recipe: MeshCleanupRecipe,
     evidence: dict[str, Any],
+    *,
+    decimate_ratio: float | None = None,
 ) -> dict[str, Any]:
     retained_by_name = {
         obj.name: obj
@@ -435,8 +474,9 @@ def finalize_cleanup_evidence(
                 raise SystemExit(
                     f"Final cleanup verification found {invalid_count} excluded vertices"
                 )
-        component_sizes = _mesh_component_sizes(obj.data)
+        component_sizes: list[int] | None = None
         if recipe.loose_components is not None:
+            component_sizes = _mesh_component_sizes(obj.data)
             if any(
                 size < recipe.loose_components.minimum_vertices
                 for size in component_sizes
@@ -448,18 +488,34 @@ def finalize_cleanup_evidence(
             ):
                 raise SystemExit("Final cleanup verification found too many components")
         retained_count = len(obj.data.vertices)
-        if retained_count > object_evidence["source_vertex_count"]:
+        pre_decimation_count = object_evidence.setdefault(
+            "pre_decimation_vertex_count",
+            object_evidence["retained_vertex_count"],
+        )
+        if retained_count > pre_decimation_count:
             raise SystemExit("Final cleanup result gained vertices unexpectedly")
+        object_evidence["final_vertex_count"] = retained_count
         object_evidence["retained_vertex_count"] = retained_count
         object_evidence["removed_vertex_count"] = (
             object_evidence["source_vertex_count"] - retained_count
         )
-        object_evidence["retained_component_count"] = len(component_sizes)
+        object_evidence["retained_component_count"] = (
+            len(component_sizes) if component_sizes is not None else None
+        )
         retained_total += retained_count
 
     if retained_total == 0:
         raise SystemExit("Final cleanup result contains no mesh vertices")
     source_total = evidence["source_vertex_count"]
+    pre_decimation_total = evidence.setdefault(
+        "pre_decimation_vertex_count",
+        evidence["retained_vertex_count"],
+    )
+    if retained_total > pre_decimation_total:
+        raise SystemExit("Final cleanup result gained vertices unexpectedly")
+    evidence["decimate_ratio"] = decimate_ratio
+    evidence["component_count_measured"] = recipe.loose_components is not None
+    evidence["final_vertex_count"] = retained_total
     evidence["retained_vertex_count"] = retained_total
     evidence["removed_vertex_count"] = source_total - retained_total
     evidence["retained_ratio"] = retained_total / source_total
@@ -559,15 +615,38 @@ def clear_scene(bpy: Any) -> None:
     bpy.ops.object.delete()
 
 
-def import_asset(bpy: Any, input_path: Path) -> list[Any]:
+def import_settings_payload(options: BlenderAssetOptions) -> dict[str, Any]:
+    is_obj = options.input_path.suffix.lower() == ".obj"
+    return {
+        "format": options.input_path.suffix.lower().lstrip("."),
+        "obj_forward_axis": options.obj_forward_axis if is_obj else None,
+        "obj_up_axis": options.obj_up_axis if is_obj else None,
+    }
+
+
+def import_asset(
+    bpy: Any,
+    input_path: Path,
+    *,
+    obj_forward_axis: str = DEFAULT_OBJ_FORWARD_AXIS,
+    obj_up_axis: str = DEFAULT_OBJ_UP_AXIS,
+) -> list[Any]:
     suffix = input_path.suffix.lower()
     before = set(bpy.context.scene.objects)
 
     if suffix == ".obj":
         if hasattr(bpy.ops.wm, "obj_import"):
-            bpy.ops.wm.obj_import(filepath=str(input_path))
+            bpy.ops.wm.obj_import(
+                filepath=str(input_path),
+                forward_axis=obj_forward_axis,
+                up_axis=obj_up_axis,
+            )
         else:
-            bpy.ops.import_scene.obj(filepath=str(input_path))
+            bpy.ops.import_scene.obj(
+                filepath=str(input_path),
+                axis_forward=_legacy_obj_axis(obj_forward_axis),
+                axis_up=_legacy_obj_axis(obj_up_axis),
+            )
     elif suffix == ".ply":
         if hasattr(bpy.ops.wm, "ply_import"):
             bpy.ops.wm.ply_import(filepath=str(input_path))
@@ -579,6 +658,16 @@ def import_asset(bpy: Any, input_path: Path) -> list[Any]:
         raise SystemExit(f"Unsupported input format: {input_path}")
 
     return [obj for obj in bpy.context.scene.objects if obj not in before]
+
+
+def _axis_dimension(axis: str) -> str:
+    return axis.removeprefix("NEGATIVE_")
+
+
+def _legacy_obj_axis(axis: str) -> str:
+    if axis.startswith("NEGATIVE_"):
+        return f"-{axis.removeprefix('NEGATIVE_')}"
+    return axis
 
 
 def normalize_scene_names(bpy: Any, base_name: str) -> None:

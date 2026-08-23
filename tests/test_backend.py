@@ -1160,6 +1160,10 @@ class BackendTests(unittest.TestCase):
                 "textures",
                 "--export-glb",
                 "scan.glb",
+                "--obj-forward-axis",
+                "NEGATIVE_Y",
+                "--obj-up-axis",
+                "Z",
                 "--origin",
                 "none",
             ]
@@ -1171,6 +1175,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(options.decimate_ratio, 0.25)
         self.assertEqual(options.texture_dir, Path("textures"))
         self.assertEqual(options.export_glb, Path("scan.glb"))
+        self.assertEqual(options.obj_forward_axis, "NEGATIVE_Y")
+        self.assertEqual(options.obj_up_axis, "Z")
         self.assertEqual(options.origin, "none")
 
     def test_blender_asset_parser_rejects_bad_decimate_ratio(self) -> None:
@@ -1178,6 +1184,21 @@ class BackendTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             module.parse_blender_args(["scan.obj", "scan.blend", "--decimate-ratio", "2"])
+
+    def test_blender_asset_parser_rejects_collinear_obj_axes(self) -> None:
+        module = load_blender_script_module()
+
+        with self.assertRaises(SystemExit):
+            module.parse_blender_args(
+                [
+                    "scan.obj",
+                    "scan.blend",
+                    "--obj-forward-axis",
+                    "NEGATIVE_Z",
+                    "--obj-up-axis",
+                    "Z",
+                ]
+            )
 
     def test_blender_asset_parser_requires_cleanup_recipe_and_report_together(self) -> None:
         module = load_blender_script_module()
@@ -1316,7 +1337,12 @@ class BackendTests(unittest.TestCase):
         ), patch.object(
             module, "apply_reversible_cleanup", return_value=([retained], evidence)
         ), patch.object(
-            module, "finalize_cleanup_evidence", return_value={**evidence, "final_verification_passed": True}
+            module,
+            "finalize_cleanup_evidence",
+            side_effect=lambda _objects, _recipe, current_evidence, **_kwargs: {
+                **current_evidence,
+                "final_verification_passed": True,
+            },
         ), patch.object(
             module, "select_only"
         ) as select_only:
@@ -1329,6 +1355,8 @@ class BackendTests(unittest.TestCase):
                     export_glb=root / "scan.glb",
                     cleanup_recipe=root / "cleanup.json",
                     cleanup_report=report,
+                    obj_forward_axis="NEGATIVE_Y",
+                    obj_up_axis="Z",
                 )
             )
             report_payload = json.loads(report.read_text())
@@ -1341,6 +1369,110 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(report_payload["blend_saved"])
         self.assertTrue(report_payload["glb_exported"])
         self.assertTrue(report_payload["glb_export_selection_only"])
+        self.assertEqual(
+            report_payload["import_settings"],
+            {
+                "format": "obj",
+                "obj_forward_axis": "NEGATIVE_Y",
+                "obj_up_axis": "Z",
+            },
+        )
+
+    def test_blender_crop_only_finalization_skips_component_graph_and_preserves_counts(self) -> None:
+        module = load_blender_script_module()
+        retained = SimpleNamespace(
+            name="retained",
+            type="MESH",
+            data=SimpleNamespace(
+                vertices=[
+                    SimpleNamespace(index=index, co=(0.0, 0.0, 0.0))
+                    for index in range(4)
+                ],
+                edges=[],
+            ),
+        )
+        recipe = module.MeshCleanupRecipe(
+            "1.0",
+            crop=module.MeshCrop(
+                shape="box",
+                center=(0, 0, 0),
+                keep="inside",
+                size=(2, 2, 2),
+            ),
+        )
+        evidence = {
+            "schema_version": "1.0",
+            "source_vertex_count": 10,
+            "pre_decimation_vertex_count": 6,
+            "retained_vertex_count": 6,
+            "objects": [
+                {
+                    "object": "retained",
+                    "source_vertex_count": 10,
+                    "pre_decimation_vertex_count": 6,
+                    "retained_vertex_count": 6,
+                }
+            ],
+        }
+
+        with patch.object(
+            module, "_world_point", return_value=(0.0, 0.0, 0.0)
+        ), patch.object(module, "_mesh_component_sizes") as component_sizes:
+            result = module.finalize_cleanup_evidence(
+                [retained],
+                recipe,
+                evidence,
+                decimate_ratio=0.5,
+            )
+
+        component_sizes.assert_not_called()
+        self.assertEqual(result["pre_decimation_vertex_count"], 6)
+        self.assertEqual(result["final_vertex_count"], 4)
+        self.assertEqual(result["retained_vertex_count"], 4)
+        self.assertEqual(result["decimate_ratio"], 0.5)
+        self.assertFalse(result["component_count_measured"])
+        self.assertIsNone(result["objects"][0]["retained_component_count"])
+
+    def test_blender_component_finalization_measures_requested_graph(self) -> None:
+        module = load_blender_script_module()
+        retained = SimpleNamespace(
+            name="retained",
+            type="MESH",
+            data=SimpleNamespace(
+                vertices=[SimpleNamespace(index=index) for index in range(4)],
+                edges=[],
+            ),
+        )
+        recipe = module.MeshCleanupRecipe(
+            "1.0",
+            loose_components=module.LooseComponentRule(
+                keep_largest=1,
+                minimum_vertices=2,
+            ),
+        )
+        evidence = {
+            "schema_version": "1.0",
+            "source_vertex_count": 4,
+            "pre_decimation_vertex_count": 4,
+            "retained_vertex_count": 4,
+            "objects": [
+                {
+                    "object": "retained",
+                    "source_vertex_count": 4,
+                    "pre_decimation_vertex_count": 4,
+                    "retained_vertex_count": 4,
+                }
+            ],
+        }
+
+        with patch.object(
+            module, "_mesh_component_sizes", return_value=[4]
+        ) as component_sizes:
+            result = module.finalize_cleanup_evidence([retained], recipe, evidence)
+
+        component_sizes.assert_called_once_with(retained.data)
+        self.assertTrue(result["component_count_measured"])
+        self.assertEqual(result["objects"][0]["retained_component_count"], 1)
 
     def test_blender_cleanup_counts_loose_components(self) -> None:
         module = load_blender_script_module()
@@ -1371,7 +1503,7 @@ class BackendTests(unittest.TestCase):
 
     def test_blender_import_asset_uses_legacy_obj_fallback(self) -> None:
         module = load_blender_script_module()
-        calls: list[tuple[str, str]] = []
+        calls: list[tuple[str, dict[str, str]]] = []
         scene = SimpleNamespace(objects=[])
 
         bpy = SimpleNamespace(
@@ -1379,15 +1511,63 @@ class BackendTests(unittest.TestCase):
             ops=SimpleNamespace(
                 wm=SimpleNamespace(),
                 import_scene=SimpleNamespace(
-                    obj=lambda filepath: calls.append(("legacy_obj", filepath))
+                    obj=lambda **kwargs: calls.append(("legacy_obj", kwargs))
                 ),
                 import_mesh=SimpleNamespace(),
             ),
         )
 
-        module.import_asset(bpy, Path("scan.obj"))
+        module.import_asset(
+            bpy,
+            Path("scan.obj"),
+            obj_forward_axis="NEGATIVE_Z",
+            obj_up_axis="Y",
+        )
 
-        self.assertEqual(calls, [("legacy_obj", "scan.obj")])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "legacy_obj",
+                    {
+                        "filepath": "scan.obj",
+                        "axis_forward": "-Z",
+                        "axis_up": "Y",
+                    },
+                )
+            ],
+        )
+
+    def test_blender_import_asset_forwards_native_obj_axes(self) -> None:
+        module = load_blender_script_module()
+        calls: list[dict[str, str]] = []
+        scene = SimpleNamespace(objects=[])
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=scene),
+            ops=SimpleNamespace(
+                wm=SimpleNamespace(obj_import=lambda **kwargs: calls.append(kwargs)),
+                import_scene=SimpleNamespace(),
+                import_mesh=SimpleNamespace(),
+            ),
+        )
+
+        module.import_asset(
+            bpy,
+            Path("scan.obj"),
+            obj_forward_axis="NEGATIVE_Y",
+            obj_up_axis="Z",
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "filepath": "scan.obj",
+                    "forward_axis": "NEGATIVE_Y",
+                    "up_axis": "Z",
+                }
+            ],
+        )
 
     def test_blender_import_asset_uses_legacy_ply_fallback(self) -> None:
         module = load_blender_script_module()
@@ -1460,8 +1640,8 @@ class BackendTests(unittest.TestCase):
         objects: list[FakeObject] = []
 
         class FakeWM:
-            def obj_import(self, filepath: str) -> None:
-                calls.append(("obj_import", filepath))
+            def obj_import(self, **kwargs: str) -> None:
+                calls.append(("obj_import", kwargs))
                 objects.append(fake_object)
 
             def save_as_mainfile(self, filepath: str) -> None:
@@ -1508,7 +1688,17 @@ class BackendTests(unittest.TestCase):
         bpy.ops.wm.save_as_mainfile(filepath=str(options.output_path))
         bpy.ops.export_scene.gltf(filepath=str(options.export_glb), export_format="GLB")
 
-        self.assertIn(("obj_import", "scan.obj"), calls)
+        self.assertIn(
+            (
+                "obj_import",
+                {
+                    "filepath": "scan.obj",
+                    "forward_axis": "NEGATIVE_Z",
+                    "up_axis": "Y",
+                },
+            ),
+            calls,
+        )
         self.assertIn(("transform_apply", (False, False, True)), calls)
         self.assertIn(("origin_set", ("ORIGIN_GEOMETRY", "BOUNDS")), calls)
         self.assertIn(("modifier_apply", "scanner_decimate"), calls)

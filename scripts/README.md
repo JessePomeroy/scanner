@@ -41,9 +41,10 @@ Current entry points:
   next manual crop command.
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.
 - `blender/prepare_scan_asset.py`: import and prepare mesh assets; optional
-  versioned cleanup recipes preserve source objects in the `.blend`, apply
-  box/cylinder and loose-component cleanup to copies, verify the retained
-  result, and export only those copies to GLB.
+  explicit OBJ axes make orientation reproducible, while versioned cleanup
+  recipes preserve source objects in the `.blend`, apply box/cylinder and
+  loose-component cleanup to copies, verify the retained result, and export
+  only those copies to GLB.
 - `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
   source to round-trip the custom ZIP writer through Python `zipfile`.
 - `verify_capture_mask_mapper.swift`: verify identity, aspect-fill crop, and
