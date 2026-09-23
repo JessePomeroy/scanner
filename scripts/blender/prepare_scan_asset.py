@@ -206,6 +206,7 @@ def prepare_asset(options: BlenderAssetOptions) -> None:
         )
     if options.texture_dir is not None:
         relink_textures(bpy, options.texture_dir)
+    pack_textures(bpy)
 
     bpy.ops.wm.save_as_mainfile(filepath=str(options.output_path))
     if options.export_glb is not None:
@@ -727,6 +728,19 @@ def relink_textures(bpy: Any, texture_dir: Path) -> None:
         replacement = candidates.get(current.name.lower())
         if replacement is not None:
             image.filepath = str(replacement)
+
+
+def pack_textures(bpy: Any) -> None:
+    """Keep imported textures available when the saved asset is moved elsewhere."""
+    for image in bpy.data.images:
+        if image.source != "FILE" or image.packed_file is not None:
+            continue
+        try:
+            image.pack()
+        except RuntimeError as error:
+            raise SystemExit(f"Unable to pack texture {image.filepath}: {error}") from error
+        if image.packed_file is None:
+            raise SystemExit(f"Unable to pack texture {image.filepath}")
 
 
 def select_only(bpy: Any, objects: list[Any]) -> None:

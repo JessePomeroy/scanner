@@ -1311,6 +1311,7 @@ class BackendTests(unittest.TestCase):
             "objects": [],
         }
         fake_bpy = SimpleNamespace(
+            data=SimpleNamespace(images=[]),
             ops=SimpleNamespace(
                 wm=SimpleNamespace(
                     save_as_mainfile=lambda filepath: calls.append(("save", filepath))
