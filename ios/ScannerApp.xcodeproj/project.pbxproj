@@ -40,6 +40,7 @@
 		A27C00000000000000000011 /* MaskReviewClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27C00000000000000000001 /* MaskReviewClient.swift */; };
 		A28C00000000000000000011 /* MaskReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28C00000000000000000001 /* MaskReviewView.swift */; };
 		A29C00000000000000000011 /* SceneCoverageTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A29C00000000000000000001 /* SceneCoverageTracker.swift */; };
+		A30C00000000000000000011 /* ScanGalleryMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30C00000000000000000001 /* ScanGalleryMetadata.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -78,6 +79,7 @@
 		A27C00000000000000000001 /* MaskReviewClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskReviewClient.swift; sourceTree = "<group>"; };
 		A28C00000000000000000001 /* MaskReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaskReviewView.swift; sourceTree = "<group>"; };
 		A29C00000000000000000001 /* SceneCoverageTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneCoverageTracker.swift; sourceTree = "<group>"; };
+		A30C00000000000000000001 /* ScanGalleryMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanGalleryMetadata.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -114,6 +116,7 @@
 				61B0E33553424B8FA491B1E3 /* ContentView.swift */,
 				0316065E51C34321A6AC46CC /* ScanView.swift */,
 				1741AE6950DA4309BB7732D3 /* ScanGalleryView.swift */,
+				A30C00000000000000000001 /* ScanGalleryMetadata.swift */,
 				A14C00000000000000000002 /* ProcessingHistoryView.swift */,
 				A14C00000000000000000001 /* ReconstructionJobClient.swift */,
 				A14C00000000000000000003 /* ReconstructionJobStore.swift */,
@@ -209,6 +212,7 @@
 				C6FCC3D338514E15BA12CFB5 /* ContentView.swift in Sources */,
 				0F2B300A6EFB40BEBCAA7743 /* ScanView.swift in Sources */,
 				82363B21E8F14443A7069C5C /* ScanGalleryView.swift in Sources */,
+				A30C00000000000000000011 /* ScanGalleryMetadata.swift in Sources */,
 				A14C00000000000000000012 /* ProcessingHistoryView.swift in Sources */,
 				A14C00000000000000000011 /* ReconstructionJobClient.swift in Sources */,
 				A14C00000000000000000013 /* ReconstructionJobStore.swift in Sources */,
