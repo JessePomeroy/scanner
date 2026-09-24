@@ -9,7 +9,7 @@ from PySide6.QtCore import QLockFile, QSettings, QStandardPaths, Qt, QThread, QT
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QLabel, QLineEdit, QMainWindow, QMenu,
+    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QStyle,
     QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
@@ -82,8 +82,8 @@ class Panel(QMainWindow):
         self.setMinimumWidth(380)
         root = QWidget()
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(20, 20, 20, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
         self.title = label("Checking reconstruction…")
         font = self.title.font()
         font.setPointSizeF(font.pointSizeF() * 1.45)
@@ -92,44 +92,63 @@ class Panel(QMainWindow):
         layout.addWidget(self.title)
         self.identity = label(f"{run.parent.name} / {run.name}")
         self.identity.setToolTip(str(run))
-        layout.addWidget(self.identity)
+        selection = QHBoxLayout()
+        selection.setSpacing(12)
+        selection.addWidget(self.identity, 1)
         self.choose_button = QPushButton('Choose run…')
         self.choose_button.clicked.connect(self.choose_run)
-        layout.addWidget(self.choose_button)
+        selection.addWidget(self.choose_button)
+        layout.addLayout(selection)
+        stage_layout = QVBoxLayout()
+        stage_layout.setSpacing(4)
         self.stage = label("Waiting for evidence")
         font = self.stage.font()
         font.setBold(True)
         self.stage.setFont(font)
-        layout.addWidget(self.stage)
+        stage_layout.addWidget(self.stage)
         self.progress = QProgressBar()
         self.progress.setAccessibleName("Current operation progress")
         self.progress.setRange(0, 0)
-        layout.addWidget(self.progress)
+        stage_layout.addWidget(self.progress)
         self.operation = label("Reading service state and logs…")
-        layout.addWidget(self.operation)
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form.setVerticalSpacing(8)
+        stage_layout.addWidget(self.operation)
+        layout.addLayout(stage_layout)
+        metrics = QHBoxLayout()
+        metrics.setSpacing(16)
         self.values = {}
-        for key, title in (("elapsed", "Attempt elapsed"), ("stage_elapsed", "Stage elapsed"),
-                           ("eta", "Estimated remaining"), ("memory", "Job memory"),
-                           ("gpu", "GPU memory")):
-            self.values[key] = label("Checking…")
-            form.addRow(title, self.values[key])
-        layout.addLayout(form)
+        for fields in ((("elapsed", "Attempt elapsed"), ("memory", "Job RAM")),
+                       (("stage_elapsed", "Stage elapsed"), ("gpu", "GPU (system)"))):
+            form = QFormLayout()
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+            form.setHorizontalSpacing(8)
+            form.setVerticalSpacing(4)
+            for key, title in fields:
+                self.values[key] = label("Checking…")
+                form.addRow(title, self.values[key])
+            metrics.addLayout(form, 1)
+        layout.addLayout(metrics)
+        eta = QHBoxLayout()
+        eta.setSpacing(8)
+        eta.addWidget(label("Estimated remaining"))
+        self.values["eta"] = label("Checking…")
+        eta.addWidget(self.values["eta"], 1)
+        layout.addLayout(eta)
+        completion = QHBoxLayout()
+        completion.setSpacing(8)
         self.completed = label()
         self.completed.setPalette(message_palette(self.palette(), GREEN))
         self.completed.setAutoFillBackground(True)
         self.completed.setMargin(6)
-        layout.addWidget(self.completed)
-        self.check_toggle = QPushButton('Show completion checklist')
+        completion.addWidget(self.completed, 1)
+        self.check_toggle = QPushButton('Checklist')
+        self.check_toggle.setAccessibleName('Show completion checklist')
         self.check_toggle.setCheckable(True)
         self.checklist = label()
         self.checklist.hide()
-        self.check_toggle.toggled.connect(self.checklist.setVisible)
-        self.check_toggle.toggled.connect(lambda checked: self.check_toggle.setText('Hide completion checklist' if checked else 'Show completion checklist'))
-        layout.addWidget(self.check_toggle)
+        self.check_toggle.toggled.connect(self.toggle_checklist)
+        completion.addWidget(self.check_toggle)
+        layout.addLayout(completion)
         layout.addWidget(self.checklist)
         self.activity = label()
         layout.addWidget(self.activity)
@@ -152,7 +171,7 @@ class Panel(QMainWindow):
         self.logs.setReadOnly(True)
         self.logs.setAccessibleName("Recent reconstruction log")
         self.logs.setMaximumBlockCount(200)
-        self.logs.setMinimumHeight(150)
+        self.logs.setFixedHeight(150)
         self.logs.hide()
         layout.addWidget(self.logs)
         buttons = QGridLayout()
@@ -170,7 +189,7 @@ class Panel(QMainWindow):
         self.copy_button.setEnabled(False)
         self.copy_button.clicked.connect(self.copy_diagnostics)
         buttons.addWidget(self.copy_button, 1, 1)
-        self.footer = label("Closing hides this panel when the tray is available. Reconstruction keeps running.")
+        self.footer = label("Closing leaves reconstruction running.")
         layout.addWidget(self.footer)
         layout.addStretch()
         scroll = QScrollArea()
@@ -237,8 +256,9 @@ class Panel(QMainWindow):
         self.operation.setText(value.progress.operation if value.status == "running" else
                                "Processing finished; visual quality still needs checking." if value.status == "succeeded" else
                                "Saved outputs are retained. Review the error and logs before recovery.")
-        for key in ("elapsed", "stage_elapsed", "memory", "gpu"):
+        for key in ("elapsed", "stage_elapsed", "memory"):
             self.values[key].setText(getattr(value, key))
+        self.values["gpu"].setText(value.gpu.removesuffix(" (whole GPU)"))
         self.values["eta"].setText(value.progress.eta if value.status == "running" else "Not applicable")
         self.completed.setText(value.completed)
         age = f"{duration(value.log_age)} ago" if value.log_age is not None else "unavailable"
@@ -248,11 +268,13 @@ class Panel(QMainWindow):
         self.error.setText(value.error)
         self.folder.setEnabled(value.output is not None and value.output.is_dir())
         self.logs.setPlainText(value.log)
-        self.footer.setText(f"Checked {value.sampled_at} · Closing or quitting this panel never stops reconstruction.")
+        self.footer.setText(f"Checked {value.sampled_at} · Closing leaves reconstruction running.")
         if self.previous_status is not None and value.status != self.previous_status and value.status in {"succeeded", "failed", "interrupted"}:
             if self.tray_enabled and QSystemTrayIcon.isSystemTrayAvailable():
                 kind = QSystemTrayIcon.MessageIcon.Information if value.status == "succeeded" else QSystemTrayIcon.MessageIcon.Warning
                 self.tray.showMessage("Scanner", titles[value.status] + ". Open the panel for details.", kind)
+        if value.status != self.previous_status:
+            QTimer.singleShot(0, self.fit_content_height)
         self.previous_status = value.status
         if not self.resume_task:
             allowed = value.status in {'failed', 'interrupted', 'stopped'} and value.stage == 'Texturing mesh'
@@ -394,7 +416,7 @@ class Panel(QMainWindow):
     def copy_diagnostics(self):
         if self.snapshot:
             QApplication.clipboard().setText(diagnostic_summary(self.snapshot, self.run_dir, self.unit, self.checks))
-            self.footer.setText('Diagnostic summary copied. It includes local paths; review before sharing.')
+            self.footer.setText('Summary copied · Includes local paths; review before sharing.')
 
     def resume_failed(self, message):
         self.recovery_note.setText(f'Resume blocked: {message}')
@@ -408,10 +430,33 @@ class Panel(QMainWindow):
         self.error.show()
         self.progress.hide()
         self.set_status_icon("unknown")
+        QTimer.singleShot(0, self.fit_content_height)
 
     def toggle_log(self, checked: bool):
         self.logs.setVisible(checked)
         self.log_toggle.setText("Hide recent log" if checked else "Show recent log")
+        QTimer.singleShot(0, lambda: self.fit_content_height(shrink=True))
+
+    def toggle_checklist(self, checked: bool):
+        self.checklist.setVisible(checked)
+        self.check_toggle.setText('Hide checklist' if checked else 'Checklist')
+        self.check_toggle.setAccessibleName('Hide completion checklist' if checked else 'Show completion checklist')
+        QTimer.singleShot(0, lambda: self.fit_content_height(shrink=True))
+
+    def fit_content_height(self, *, shrink: bool = False):
+        if self.isMaximized() or self.isMinimized():
+            return
+        scroll = self.centralWidget()
+        content = scroll.widget().layout()
+        content.activate()
+        needed = content.totalHeightForWidth(scroll.viewport().width()) + self.menuBar().height()
+        # Grow for details and state changes, retaining a scroll fallback for small
+        # screens or large system fonts. Never shrink text or hide overflowing data.
+        decoration = max(0, self.frameGeometry().height() - self.height())
+        available = self.screen().availableGeometry().height() - decoration - 32
+        height = min(available, max(600, needed))
+        if shrink or height > self.height():
+            self.resize(self.width(), height)
 
     def open_output(self):
         if self.snapshot and self.snapshot.output and self.snapshot.output.is_dir():

@@ -3,12 +3,14 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from pathlib import Path
+from dataclasses import replace
 import unittest
 from unittest.mock import patch
 
 try:
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
     from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtCore import QPoint, QRect
     from desktop.scanner_panel import Panel
     from desktop.theme import BLUE, GREEN, INK, RUST, SAGE, SURFACE, TEAL, scanner_palette
 except ImportError:
@@ -133,6 +135,7 @@ class PanelTests(unittest.TestCase):
                                {}, {'ActiveState': 'active'}, 'View assignment completed. ' * 10, 300,
                                '2.0 / 8 GiB (whole GPU)', 0)
         self.panel.render(value)
+        self.app.processEvents()
         self.panel.resize(380, 400)
         self.panel.show()
         self.app.processEvents()
@@ -142,6 +145,72 @@ class PanelTests(unittest.TestCase):
         scroll.ensureWidgetVisible(self.panel.recovery_note)
         self.assertGreaterEqual(self.panel.recovery_note.height(),
                                 self.panel.recovery_note.heightForWidth(self.panel.recovery_note.width()))
+
+    def assert_main_controls_fit(self):
+        self.app.processEvents()
+        scroll = self.panel.centralWidget()
+        viewport = scroll.viewport()
+        self.assertEqual(scroll.verticalScrollBar().maximum(), 0)
+        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+        for widget in (self.panel.title, self.panel.identity, self.panel.choose_button,
+                       self.panel.stage, *self.panel.values.values(), self.panel.completed,
+                       self.panel.check_toggle, self.panel.activity, self.panel.recovery_note,
+                       self.panel.resume_button, self.panel.log_toggle, self.panel.folder,
+                       self.panel.hide_button, self.panel.copy_button, self.panel.footer):
+            rect = QRect(widget.mapTo(viewport, QPoint()), widget.size())
+            self.assertTrue(viewport.rect().contains(rect), widget.text())
+            if widget.hasHeightForWidth():
+                self.assertGreaterEqual(widget.height(), widget.heightForWidth(widget.width()), widget.text())
+
+    def compact_snapshot(self, status='running'):
+        value = build_snapshot(Path('/tmp/test'), {'status': status, 'current_stage': 'texture_mesh'},
+                               {}, {'ActiveState': 'active' if status == 'running' else
+                                    'failed' if status == 'failed' else 'inactive'},
+                               '12:16:58 [Scn textr] Assigning the best view to each face completed: '
+                               '12513003 faces, 817175 patches (43m37s784ms)',
+                               12000, '2.0 / 8 GiB (whole GPU)', 0)
+        self.panel.identity.setText('object-scan-20260923-r001 / recovery-r003')
+        return replace(value, elapsed='4h 15m', stage_elapsed='4h 03m',
+                       memory='34.0 / 48 GiB limit', completed='1 of 2 stages completed in this attempt')
+
+    def test_main_view_fits_without_scrolling_for_running_and_terminal_states(self):
+        self.panel.show()
+        for status in ('running', 'failed', 'succeeded'):
+            with self.subTest(status=status):
+                self.panel.resize(520, 600)
+                self.panel.render(self.compact_snapshot(status))
+                self.assert_main_controls_fit()
+                self.assertEqual(self.panel.width(), 520)
+        self.panel.poll_failed('Service query timed out')
+        self.assert_main_controls_fit()
+        self.assertFalse(self.panel.resume_button.isEnabled())
+
+    def test_expanding_details_grows_window_and_keeps_actions_visible(self):
+        with patch.object(self.panel, 'screen') as screen:
+            screen.return_value.availableGeometry.return_value = QRect(0, 0, 2560, 1440)
+            self.panel.render(self.compact_snapshot())
+            self.panel.show()
+            self.assert_main_controls_fit()
+            initial_height = self.panel.height()
+            self.panel.log_toggle.click()
+            self.panel.check_toggle.click()
+            self.assert_main_controls_fit()
+            self.assertGreater(self.panel.height(), initial_height)
+            self.assertFalse(self.panel.logs.isHidden())
+            self.assertFalse(self.panel.checklist.isHidden())
+            self.panel.log_toggle.click()
+            self.panel.check_toggle.click()
+            self.assert_main_controls_fit()
+            self.assertEqual(self.panel.height(), initial_height)
+
+    def test_copy_feedback_keeps_all_actions_visible(self):
+        self.panel.render(self.compact_snapshot())
+        self.panel.show()
+        self.assert_main_controls_fit()
+        with patch.object(self.app.clipboard(), 'setText'):
+            self.panel.copy_button.click()
+        self.assertIn('review before sharing', self.panel.footer.text())
+        self.assert_main_controls_fit()
 
     def test_close_with_tray_hides_without_quitting(self):
         self.panel.tray_enabled = True
