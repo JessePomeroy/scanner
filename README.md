@@ -14,6 +14,8 @@ The first working target is:
 - `ios/ScannerApp`: Swift/SwiftUI capture app source.
 - `ios/ScannerApp.xcodeproj`: Xcode project for building the iOS app.
 - `backend/app`: FastAPI backend, scan validation, job status, and command runners.
+- `desktop`: Native KDE/Qt reconstruction monitor with guarded texture recovery;
+  see [desktop/README.md](desktop/README.md) for local usage.
 - `scripts`: Local inspection and reconstruction experiments.
 - `docs`: Architecture and capture notes.
 - `tests`: Backend unit tests.

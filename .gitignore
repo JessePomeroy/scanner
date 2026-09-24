@@ -16,3 +16,10 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 build/
+
+# Timestamped OpenMVS diagnostics written in the command's working directory.
+DensifyPointCloud-[0-9]*.log
+InterfaceCOLMAP-[0-9]*.log
+ReconstructMesh-[0-9]*.log
+RefineMesh-[0-9]*.log
+TextureMesh-[0-9]*.log
