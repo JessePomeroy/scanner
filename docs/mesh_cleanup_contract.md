@@ -33,13 +33,22 @@ inclusive at the boundary.
 ## Publication proof
 
 `--cleanup-report` is required whenever `--cleanup-recipe` is used. It records
-the normalized recipe, source and final retained vertex counts, removed count,
-retained ratio, per-object component counts, preservation of source objects in
-the `.blend`, whether a GLB was exported selection-only, and final verification
-status. It also exposes `artifact_type`, `cleanup_revision`, and normalized
-`effective_bounds` independently of Gaussian cleanup evidence. The report is
-written only after Blender successfully saves the `.blend` and completes any
-requested GLB export.
+the normalized recipe; source, pre-decimation, and final vertex counts; the
+requested decimation ratio; removed count; retained ratio; preservation of
+source objects in the `.blend`; whether a GLB was exported selection-only; and
+final verification status. It also records the input format and the explicit
+`--obj-forward-axis`/`--obj-up-axis` values for OBJ sources. The existing
+`retained_vertex_count` remains the final count for report compatibility, while
+`pre_decimation_vertex_count` and `final_vertex_count` make the two stages
+unambiguous.
+
+Connected-component verification runs only when the recipe defines
+`loose_components`. Each object's `retained_component_count` is `null`, and
+`component_count_measured` is false, for crop-only recipes; this avoids building
+an unnecessary full-mesh connectivity graph. It also exposes `artifact_type`,
+`cleanup_revision`, and normalized `effective_bounds` independently of Gaussian
+cleanup evidence. The report is written only after Blender successfully saves
+the `.blend` and completes any requested GLB export.
 
 After optional decimation, the helper rechecks every retained vertex against
 the crop and verifies the component limits. An empty result or any excluded

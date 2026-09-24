@@ -17,8 +17,13 @@ dual-boot RTX 3070 PC.
 - Mac sparse COLMAP reconstruction works.
 - Latest object scan test registered `97 / 98` frames and produced a sparse
   point cloud with `58,385` points.
-- Dense reconstruction and textured mesh generation are planned for the RTX
-  3070 PC while it is booted into native Linux.
+- The native CachyOS RTX 3070 toolchain passes the strict installation and
+  visibility gate, and the frozen iPhone benchmark completed CUDA COLMAP. That
+  gate does not prove OpenMVS CUDA runtime behavior.
+- A July manual recovery meshed the `InterfaceCOLMAP` import of COLMAP's fused
+  cloud and produced a textured OBJ with 3,652,543 vertices, 7,297,100 faces,
+  and two 8192-pixel texture atlases. Automated rerun, reviewed GLB, and paired
+  Gaussian output remain.
 
 ## Immediate Local Improvements
 
@@ -282,18 +287,27 @@ ARKit-to-COLMAP 3D ROI alignment.
    - Refresh `scan_report.json`.
 
 2. Native Linux RTX 3070 path.
-   - Verify CUDA-enabled COLMAP.
-   - Run dense COLMAP.
-   - Run OpenMVS mesh reconstruction, refinement, and texturing.
+   - Verify CUDA-enabled COLMAP. Status: installation/visibility gate passed;
+     the gate does not exercise OpenMVS CUDA runtime.
+   - Run dense COLMAP. Status: frozen benchmark completed.
+   - Run OpenMVS mesh reconstruction, refinement, and texturing. Status: a
+     manual fused-cloud mesh/texturing recovery produced the first OBJ;
+     automated benchmark completion remains.
+   - Keep OpenMVS densification plus automatic ROI as the default. The explicit
+     `--openmvs-point-cloud-source colmap_fused --scope-mode unbounded` path
+     skips `DensifyPointCloud`, meshes `InterfaceCOLMAP`'s `scene.ply`, and
+     fails closed for masks, automatic ROI, or a reviewed region until those
+     combinations are implemented.
    - Keep active databases, images, and reconstruction intermediates on a
      Linux-native filesystem.
    - Copy only finished artifacts to a shared partition when needed, or publish
      them through R2.
 
 3. Output formats.
-   - Keep OBJ first for Blender.
+   - Keep OBJ first for Blender. Status: recovered textured OBJ exists; physical
+     Blender review and an automated rerun remain.
    - Add PLY point cloud inspection outputs.
-   - Add GLB after textured OBJ is stable.
+   - Add GLB after textured OBJ is stable. Status: outstanding.
    - Add USDZ only after core reconstruction works.
 
 4. Blender automation.
@@ -312,8 +326,9 @@ one physical scan has produced a textured OBJ that opens cleanly in Blender.
 1. COLMAP/OpenMVS. Status: primary path.
    - Traditional image matching, sparse reconstruction, dense stereo, meshing,
      and texturing.
-   - First milestone: real iPhone scan to textured OBJ on the native Linux RTX
-     3070 workstation.
+   - First milestone: automate and review the fused-cloud textured-OBJ result
+     on the native Linux RTX 3070 workstation, then publish GLB. The July manual
+     recovery proves the underlying mesh/texturing route.
 
 2. Meshroom/AliceVision. Status: candidate alternate path.
    - Evaluate after COLMAP/OpenMVS is working.

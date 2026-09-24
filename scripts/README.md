@@ -9,19 +9,34 @@ move into `backend/app`.
 Current entry points:
 
 - `inspect_scan.py`: validate typed package metadata and file-reference
-  integrity, then print capture counts and compatibility warnings.
+  integrity, print capture counts and compatibility warnings, and optionally
+  decode images to audit high-resolution/fallback provenance and dimensions.
 - `reconstruct_local.py`: validate and optionally run local COLMAP/OpenMVS.
 - `reconstruct_gpu.py`: native Linux/RTX workstation command runner. The
   compatibility setup/check helpers still live under the historical
   `scripts/wsl/` path. The setup helper detects CachyOS/Arch and Ubuntu/Debian;
   its `--dry-run` option previews the package transaction, and it installs the
   Codex CLI alongside the scanner tools so work can continue from Linux. See
-  `docs/cachyos_setup.md` for the primary workstation path.
+  `docs/cachyos_setup.md` for the primary workstation path. Its default remains
+  OpenMVS densification with automatic ROI; the explicit
+  `--openmvs-point-cloud-source colmap_fused --scope-mode unbounded` mode skips
+  `DensifyPointCloud` and meshes `InterfaceCOLMAP`'s `scene.ply`. That mode
+  fails closed for masks, automatic ROI, or a reviewed region.
+- `plan_reconstruction_backend.py`: write inspectable backend command plans.
+  It exposes the same explicit COLMAP-fused OpenMVS source option as the native
+  workstation runner without changing the default plan.
 - `plan_neural_backend.py`: dry-run command planner for MASt3R-SLAM, Depth
   Anything, Lingbot-style viewer experiments, and Nerfstudio Gaussian
   splatting. Gaussian plans prefer full-session image keyframes over the
   30-second support video, preserve an editable PLY master, and default to SOG
-  plus a standalone HTML viewer.
+  plus a standalone HTML viewer. They pass an absolute repository-local COLMAP
+  compatibility command to Nerfstudio and make unattended training exit with a
+  loopback-only viewer.
+- `nerfstudio_colmap_compat.py`: executable COLMAP proxy for Nerfstudio 1.1.5.
+  It capability-probes legacy versus COLMAP 4 GPU-option names, translates only
+  the two renamed flags (including `--flag=value`), and refuses missing,
+  recursive, ambiguous, or unsupported configurations. The strict workstation
+  checker runs its non-executing compatibility probe.
 - `cleanup_gaussian_ply.py`: preserve the master Gaussian PLY while applying a
   strict destructive crop/primitive-index recipe to a publication PLY, then
   stream-verify its retained count and bounds before delivery conversion.
@@ -33,9 +48,10 @@ Current entry points:
   next manual crop command.
 - `crop_point_cloud.py`: crop a PLY point cloud by center and radius.
 - `blender/prepare_scan_asset.py`: import and prepare mesh assets; optional
-  versioned cleanup recipes preserve source objects in the `.blend`, apply
-  box/cylinder and loose-component cleanup to copies, verify the retained
-  result, and export only those copies to GLB.
+  explicit OBJ axes make orientation reproducible, while versioned cleanup
+  recipes preserve source objects in the `.blend`, apply box/cylinder and
+  loose-component cleanup to copies, verify the retained result, and export
+  only those copies to GLB.
 - `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
   source to round-trip the custom ZIP writer through Python `zipfile`.
 - `verify_capture_mask_mapper.swift`: verify identity, aspect-fill crop, and
@@ -70,6 +86,12 @@ python3 scripts/benchmark_evidence.py init \
 
 See `docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
 rules, and the Blender comparison record.
+
+The native CachyOS/RTX 3070 environment passes the strict install/visibility
+gate, including the Nerfstudio/COLMAP option-compatibility probe, but that check
+does not prove OpenMVS CUDA runtime success. The preserved
+July run completed CUDA COLMAP, and a manual `scene.ply` recovery produced a
+textured OBJ; an automated rerun, reviewed GLB, and Gaussian deliverables remain.
 
 Run the ZIP writer verifier from the repo root:
 

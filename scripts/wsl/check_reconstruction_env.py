@@ -9,8 +9,14 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+
+COLMAP_COMPAT_WRAPPER = (
+    Path(__file__).resolve().parents[2] / "scripts" / "nerfstudio_colmap_compat.py"
+)
 
 
 @dataclass
@@ -44,6 +50,10 @@ def main() -> None:
         check_openmvs_command("RefineMesh"),
         check_openmvs_command("TextureMesh"),
         check_command("blender", ["blender", "--version"]),
+        check_command(
+            "nerfstudio-colmap-compat",
+            [str(COLMAP_COMPAT_WRAPPER), "--scanner-compat-probe"],
+        ),
         check_command("ns-process-data", ["ns-process-data", "--help"]),
         check_command("ns-train", ["ns-train", "--help"]),
         check_command("ns-export", ["ns-export", "--help"]),
@@ -77,6 +87,7 @@ def is_required(name: str) -> bool:
         "RefineMesh",
         "TextureMesh",
         "blender",
+        "nerfstudio-colmap-compat",
         "ns-process-data",
         "ns-train",
         "ns-export",
@@ -105,7 +116,13 @@ def check_linux_distribution() -> CheckResult:
     return CheckResult("linux", True, f"{name}; kernel {platform.release()}")
 
 
-def check_command(name: str, command: list[str], *, required: bool = True) -> CheckResult:
+def check_command(
+    name: str,
+    command: list[str],
+    *,
+    required: bool = True,
+    cwd: Path | None = None,
+) -> CheckResult:
     executable = shutil.which(command[0])
     if executable is None:
         suffix = "required" if required else "optional"
@@ -119,6 +136,7 @@ def check_command(name: str, command: list[str], *, required: bool = True) -> Ch
             stderr=subprocess.STDOUT,
             text=True,
             timeout=20,
+            cwd=cwd,
         )
     except Exception as error:
         return CheckResult(name, False, str(error))
@@ -133,7 +151,14 @@ def check_command(name: str, command: list[str], *, required: bool = True) -> Ch
 
 def check_openmvs_command(name: str) -> CheckResult:
     """Accept OpenMVS's nonzero --help exit when its version banner is present."""
-    result = check_command(name, [name, "--help"])
+    # OpenMVS creates a timestamped log even for --help. Keep those probe-only
+    # logs out of the caller's worktree and remove them with the temporary cwd.
+    with tempfile.TemporaryDirectory(prefix="scanner-openmvs-probe-") as temporary_cwd:
+        result = check_command(
+            name,
+            [name, "--help"],
+            cwd=Path(temporary_cwd),
+        )
     if "OpenMVS" in result.detail:
         result.ok = True
     return result

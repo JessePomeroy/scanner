@@ -19,6 +19,7 @@ class CommandPlan:
     commands: list[list[str]]
     outputs: dict[str, Path] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    settings: dict[str, Any] = field(default_factory=dict)
 
     @property
     def command_count(self) -> int:
@@ -33,6 +34,7 @@ class CommandPlan:
             "command_lines": [shell_join(command) for command in self.commands],
             "outputs": {name: str(path) for name, path in self.outputs.items()},
             "notes": self.notes,
+            "settings": self.settings,
         }
 
 

@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,14 @@ DEFAULT_TOOL_PROBES: dict[str, list[str]] = {
     "nerfstudio": ["ns-train", "--help"],
     "node": ["node", "--version"],
     "splat_transform": ["splat-transform", "--help"],
+}
+
+OPENMVS_EXECUTABLES = {
+    "InterfaceCOLMAP",
+    "DensifyPointCloud",
+    "ReconstructMesh",
+    "RefineMesh",
+    "TextureMesh",
 }
 
 
@@ -151,21 +160,30 @@ def probe_command(command: Sequence[str], *, timeout: float = 20) -> dict[str, A
     if executable is None:
         return {"status": "missing", "command": list(command), "detail": None}
     try:
-        completed = subprocess.run(
-            list(command),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-        )
+        with tempfile.TemporaryDirectory(prefix="scanner-tool-probe-") as probe_dir:
+            completed = subprocess.run(
+                list(command),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                cwd=probe_dir,
+            )
     except (OSError, subprocess.SubprocessError) as error:
         return {"status": "error", "command": list(command), "detail": str(error)}
     lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    accepted_nonzero_exit = (
+        completed.returncode != 0
+        and Path(command[0]).name in OPENMVS_EXECUTABLES
+        and "--help" in command[1:]
+        and "OpenMVS" in completed.stdout
+    )
     return {
-        "status": "ok" if completed.returncode == 0 else "error",
+        "status": "ok" if completed.returncode == 0 or accepted_nonzero_exit else "error",
         "command": list(command),
         "return_code": completed.returncode,
+        "accepted_nonzero_exit": accepted_nonzero_exit,
         "detail": lines[0] if lines else executable,
     }
 

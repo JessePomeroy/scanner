@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CaptureMaskEditorView: View {
     @Binding var polygon: [NormalizedMaskPoint]
+    let controlSafeAreaInsets: EdgeInsets
     let onCancel: () -> Void
     let onConfirm: (CGSize) -> Void
 
@@ -65,6 +66,9 @@ struct CaptureMaskEditorView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
+                // Only inset controls. The drawing canvas and confirmed preview
+                // size must still match the edge-to-edge AR camera viewport.
+                .padding(controlSafeAreaInsets)
                 .foregroundStyle(.white)
             }
         }

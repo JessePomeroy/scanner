@@ -25,6 +25,10 @@ SUPPORTED_SPLAT_DELIVERY_FORMATS = (
 )
 DEFAULT_SPLAT_DELIVERY_FORMATS = ("sog", "html")
 
+NERFSTUDIO_COLMAP_COMPAT_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "nerfstudio_colmap_compat.py"
+)
+
 _SPLAT_DELIVERY_TARGETS = {
     "sog": ("splat_sog", "scene.sog"),
     "html": ("splat_html_viewer", "scene.html"),
@@ -172,6 +176,10 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 str(nerfstudio_data),
                 "--matching-method",
                 config.splat_matching_method,
+                "--sfm-tool",
+                "colmap",
+                "--colmap-cmd",
+                str(NERFSTUDIO_COLMAP_COMPAT_PATH),
             ],
             [
                 "ns-train",
@@ -180,6 +188,10 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
                 str(nerfstudio_data),
                 "--output-dir",
                 str(workspace / "outputs"),
+                "--viewer.quit-on-train-completion",
+                "True",
+                "--viewer.websocket-host",
+                "127.0.0.1",
             ],
             [
                 "ns-export",
@@ -269,6 +281,8 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
             notes=[
                 "Viewer-focused Gaussian splat path; this does not produce an editable textured mesh.",
                 "Run inside a CUDA-enabled Nerfstudio environment on the native Linux RTX workstation.",
+                "ns-process-data uses the repository COLMAP compatibility wrapper; the strict environment gate must pass its capability probe before launch.",
+                "Training exits when complete and binds its viewer websocket to loopback only.",
                 "The export command needs the real config.yml path printed by ns-train.",
                 hardware_note,
                 "Prefer the exported image keyframes for complete-scene training; the iPhone support video is capped at 30 seconds.",

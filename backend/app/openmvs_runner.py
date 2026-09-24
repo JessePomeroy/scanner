@@ -16,6 +16,7 @@ from app.mask_processor import (
 
 
 OpenMVSScopeMode = Literal["auto_roi", "unbounded"]
+OpenMVSPointCloudSource = Literal["openmvs_densify", "colmap_fused"]
 
 
 @dataclass(frozen=True)
@@ -40,8 +41,13 @@ class OpenMVSConfig:
     include_refine: bool = False
     point_warning_limit: int = 2_000_000
     point_hard_limit: int = 10_000_000
+    point_cloud_source: OpenMVSPointCloudSource = "openmvs_densify"
 
     def __post_init__(self) -> None:
+        if self.point_cloud_source not in {"openmvs_densify", "colmap_fused"}:
+            raise ValueError(
+                f"Unsupported OpenMVS point-cloud source: {self.point_cloud_source}"
+            )
         if self.scope_mode not in {"auto_roi", "unbounded"}:
             raise ValueError(f"Unsupported OpenMVS scope mode: {self.scope_mode}")
         if self.resolution_level < 0:
@@ -64,17 +70,41 @@ class OpenMVSConfig:
             raise ValueError("OpenMVS point_warning_limit must be positive")
         if self.point_hard_limit < self.point_warning_limit:
             raise ValueError("OpenMVS point_hard_limit must be at least point_warning_limit")
+        if self.point_cloud_source == "colmap_fused":
+            if self.scope_mode != "unbounded":
+                raise ValueError(
+                    "The colmap_fused OpenMVS source requires scope_mode='unbounded'; "
+                    "automatic ROI estimation belongs to DensifyPointCloud"
+                )
+            if self.region_path is not None:
+                raise ValueError(
+                    "The colmap_fused OpenMVS source does not yet support a reviewed region"
+                )
+            if self.mask_path is not None or self.texture_use_masks:
+                raise ValueError(
+                    "The colmap_fused OpenMVS source does not yet support OpenMVS masks"
+                )
 
     def report_settings(self) -> dict[str, Any]:
         """Return stable, JSON-safe settings for reconstruction reports."""
-        automatic_roi = self.scope_mode == "auto_roi" and self.region_path is None
+        densification_enabled = self.point_cloud_source == "openmvs_densify"
+        automatic_roi = (
+            densification_enabled
+            and self.scope_mode == "auto_roi"
+            and self.region_path is None
+        )
         return {
+            "point_cloud_source": self.point_cloud_source,
+            "densification_enabled": densification_enabled,
+            "mesh_input_point_cloud": (
+                "scene_dense.ply" if densification_enabled else "scene.ply"
+            ),
             "scope_mode": self.scope_mode,
-            "resolution_level": self.resolution_level,
-            "max_resolution": self.max_resolution,
-            "number_views": self.number_views,
-            "number_views_fuse": self.number_views_fuse,
-            "filter_point_cloud": self.filter_point_cloud,
+            "resolution_level": self.resolution_level if densification_enabled else None,
+            "max_resolution": self.max_resolution if densification_enabled else None,
+            "number_views": self.number_views if densification_enabled else None,
+            "number_views_fuse": self.number_views_fuse if densification_enabled else None,
+            "filter_point_cloud": self.filter_point_cloud if densification_enabled else None,
             "estimate_roi": self.estimate_roi if automatic_roi else 0,
             "crop_to_roi": automatic_roi or self.region_path is not None,
             "roi_border": self.roi_border if automatic_roi else 0,
@@ -96,8 +126,10 @@ def run_command(command: list[str], cwd: Path | None = None) -> None:
 def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) -> list[list[str]]:
     """Build an OpenMVS dense, scoped mesh, and texture command sequence."""
     config = config or OpenMVSConfig()
+    scan_dir = scan_dir.resolve()
     dense_dir = scan_dir / "dense"
     scene = dense_dir / "scene.mvs"
+    interface_cloud = dense_dir / "scene.ply"
     dense_scene = dense_dir / "scene_dense.mvs"
     unscoped_dense_scene = dense_dir / "scene_dense_unscoped.mvs"
     unscoped_dense_cloud = dense_dir / "scene_dense_unscoped.ply"
@@ -107,39 +139,6 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
     refined_mesh_file = dense_dir / "scene_mesh_refined.ply"
     textured_scene = dense_dir / "scene_textured.mvs"
 
-    densify_output = unscoped_dense_scene if config.region_path is not None else dense_scene
-    densify = [
-        config.densify_point_cloud,
-        str(scene),
-        "-o",
-        str(densify_output),
-        "--resolution-level",
-        str(config.resolution_level),
-        "--max-resolution",
-        str(config.max_resolution),
-        "--number-views",
-        str(config.number_views),
-        "--number-views-fuse",
-        str(config.number_views_fuse),
-        "--filter-point-cloud",
-        str(config.filter_point_cloud),
-        "--estimate-roi",
-        str(config.estimate_roi if config.scope_mode == "auto_roi" and config.region_path is None else 0),
-        "--crop-to-roi",
-        "1" if config.scope_mode == "auto_roi" and config.region_path is None else "0",
-        "--roi-border",
-        str(config.roi_border if config.scope_mode == "auto_roi" and config.region_path is None else 0),
-    ]
-    if config.mask_path is not None:
-        densify.extend(
-            [
-                "--mask-path",
-                str(config.mask_path.resolve()),
-                "--ignore-mask-label",
-                str(config.mask_ignore_label),
-            ]
-        )
-
     commands = [
         [
             config.interface_colmap,
@@ -148,77 +147,149 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
             "-o",
             str(scene),
         ],
-        densify,
     ]
-    if config.region_path is not None:
-        region_path = config.region_path.resolve()
-        commands.append(
-            [
-                config.densify_point_cloud,
-                str(unscoped_dense_scene),
-                "--pointcloud-file",
-                str(unscoped_dense_cloud),
-                "--crop-roi-file",
-                str(region_path),
-                "-o",
-                str(dense_scene),
-            ]
+
+    if config.point_cloud_source == "openmvs_densify":
+        densify_output = (
+            unscoped_dense_scene if config.region_path is not None else dense_scene
         )
+        densify = [
+            config.densify_point_cloud,
+            str(scene),
+            "-o",
+            str(densify_output),
+            "--resolution-level",
+            str(config.resolution_level),
+            "--max-resolution",
+            str(config.max_resolution),
+            "--number-views",
+            str(config.number_views),
+            "--number-views-fuse",
+            str(config.number_views_fuse),
+            "--filter-point-cloud",
+            str(config.filter_point_cloud),
+            "--estimate-roi",
+            str(
+                config.estimate_roi
+                if config.scope_mode == "auto_roi" and config.region_path is None
+                else 0
+            ),
+            "--crop-to-roi",
+            "1"
+            if config.scope_mode == "auto_roi" and config.region_path is None
+            else "0",
+            "--roi-border",
+            str(
+                config.roi_border
+                if config.scope_mode == "auto_roi" and config.region_path is None
+                else 0
+            ),
+        ]
+        if config.mask_path is not None:
+            densify.extend(
+                [
+                    "--mask-path",
+                    str(config.mask_path.resolve()),
+                    "--ignore-mask-label",
+                    str(config.mask_ignore_label),
+                ]
+            )
+        commands.append(densify)
+
+        if config.region_path is not None:
+            region_path = config.region_path.resolve()
+            commands.append(
+                [
+                    config.densify_point_cloud,
+                    str(unscoped_dense_scene),
+                    "--pointcloud-file",
+                    str(unscoped_dense_cloud),
+                    "--crop-roi-file",
+                    str(region_path),
+                    "-o",
+                    str(dense_scene),
+                ]
+            )
+            commands.append(
+                [
+                    config.reconstruct_mesh,
+                    str(unscoped_dense_scene),
+                    "--pointcloud-file",
+                    str(dense_dir / "scene_dense.ply"),
+                    "--import-roi-file",
+                    str(region_path),
+                    "--integrate-only-roi",
+                    "1",
+                    "--crop-to-roi",
+                    "1",
+                    "--roi-border",
+                    "0",
+                    "-o",
+                    str(mesh_scene),
+                ]
+            )
+        else:
+            commands.append(
+                [
+                    config.reconstruct_mesh,
+                    str(dense_scene),
+                    "-o",
+                    str(mesh_scene),
+                ]
+            )
+    else:
         commands.append(
             [
                 config.reconstruct_mesh,
-                str(unscoped_dense_scene),
+                str(scene),
                 "--pointcloud-file",
-                str(dense_dir / "scene_dense.ply"),
-                "--import-roi-file",
-                str(region_path),
-                "--integrate-only-roi",
-                "1",
+                str(interface_cloud),
                 "--crop-to-roi",
-                "1",
+                "0",
                 "--roi-border",
                 "0",
                 "-o",
                 str(mesh_scene),
             ]
         )
-    else:
-        commands.append(
-            [
-                config.reconstruct_mesh,
-                str(dense_scene),
-                "-o",
-                str(mesh_scene),
-            ]
-        )
 
-    texture_input_scene = mesh_scene
+    texture_input_scene = (
+        scene if config.point_cloud_source == "colmap_fused" else mesh_scene
+    )
     texture_input_mesh = mesh_file
     if config.include_refine:
-        commands.append(
-            [
-                config.refine_mesh,
-                str(mesh_scene),
-                "-o",
-                str(refined_scene),
-            ]
-        )
-        texture_input_scene = refined_scene
+        refine = [config.refine_mesh]
+        if config.point_cloud_source == "colmap_fused":
+            refine.extend(
+                [
+                    str(scene),
+                    "--mesh-file",
+                    str(mesh_file),
+                ]
+            )
+        else:
+            refine.append(str(mesh_scene))
+        refine.extend(["-o", str(refined_scene)])
+        commands.append(refine)
+        if config.point_cloud_source == "openmvs_densify":
+            texture_input_scene = refined_scene
         texture_input_mesh = refined_mesh_file
 
     texture = [
-            config.texture_mesh,
-            str(texture_input_scene),
-            "-m",
-            str(texture_input_mesh),
-            "-o",
-            str(textured_scene),
-            "--export-type",
-            "obj",
-        ]
+        config.texture_mesh,
+        str(texture_input_scene),
+        "-m",
+        str(texture_input_mesh),
+        "-o",
+        str(textured_scene),
+        "--export-type",
+        "obj",
+    ]
     if config.texture_use_masks:
         texture.extend(["--ignore-mask-label", str(config.mask_ignore_label)])
     commands.append(texture)
+    for command in commands:
+        command.extend(["--working-folder", str(dense_dir)])
     return commands
 
 
@@ -232,6 +303,8 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
     if config.region_path is not None:
         validate_openmvs_region_capabilities(config)
     for command in build_openmvs_commands(scan_dir, config):
+        if command[0] == config.reconstruct_mesh:
+            inspect_openmvs_dense_cloud(scan_dir, config)
         if command[0] == config.texture_mesh and config.texture_use_masks:
             if config.mask_path is None:
                 raise RuntimeError("OpenMVS texture masks require a validated mask path")
@@ -240,9 +313,6 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
         # workspace. Every later OpenMVS command must resolve those paths from
         # the same directory rather than from the backend process directory.
         run_command(command, cwd=dense_dir)
-        completed_densify = config.region_path is None or "--crop-roi-file" in command
-        if command[0] == config.densify_point_cloud and completed_densify:
-            inspect_openmvs_dense_cloud(scan_dir, config)
 
     return dense_dir / "scene_textured.obj"
 
@@ -276,10 +346,24 @@ def inspect_openmvs_dense_cloud(
     scan_dir: Path,
     config: OpenMVSConfig | None = None,
 ) -> PointCloudBudgetResult:
-    """Inspect the OpenMVS dense PLY without loading its point payload."""
+    """Inspect the configured mesh-input PLY without loading its point payload."""
     config = config or OpenMVSConfig()
     return inspect_ply_point_budget(
-        scan_dir.resolve() / "dense" / "scene_dense.ply",
+        openmvs_mesh_input_cloud_path(scan_dir, config),
         warning_limit=config.point_warning_limit,
         hard_limit=config.point_hard_limit,
     )
+
+
+def openmvs_mesh_input_cloud_path(
+    scan_dir: Path,
+    config: OpenMVSConfig | None = None,
+) -> Path:
+    """Return the view-aware PLY consumed by ReconstructMesh."""
+    config = config or OpenMVSConfig()
+    filename = (
+        "scene.ply"
+        if config.point_cloud_source == "colmap_fused"
+        else "scene_dense.ply"
+    )
+    return scan_dir.resolve() / "dense" / filename

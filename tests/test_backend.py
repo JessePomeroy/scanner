@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 BLENDER_SCRIPT = ROOT / "scripts" / "blender" / "prepare_scan_asset.py"
+RECONSTRUCT_GPU_SCRIPT = ROOT / "scripts" / "reconstruct_gpu.py"
 
 from app.artifacts import (  # noqa: E402
     ArtifactUnavailableError,
@@ -40,6 +41,7 @@ from app.benchmark_evidence import (  # noqa: E402
     artifact_fact,
     ensure_report_open,
     initialize_report,
+    probe_command,
     run_stage,
     runtime_guidance,
     sha256_file,
@@ -49,6 +51,7 @@ from app.colmap_runner import (  # noqa: E402
     build_colmap_commands,
     build_colmap_dense_commands,
     build_colmap_sparse_commands,
+    prepare_colmap_output_directories,
 )
 from app.density_budget import PointCloudBudgetError, inspect_ply_point_budget  # noqa: E402
 from app.job_recovery import reconcile_interrupted_jobs  # noqa: E402
@@ -77,12 +80,17 @@ from app.gaussian_cleanup import (  # noqa: E402
     read_gaussian_ply_header,
 )
 from app.neural_backend_planner import (  # noqa: E402
+    NERFSTUDIO_COLMAP_COMPAT_PATH,
     NeuralBackendConfig,
     SUPPORTED_SPLAT_DELIVERY_FORMATS,
     build_neural_backend_plan,
     write_neural_backend_report,
 )
-from app.openmvs_runner import OpenMVSConfig, build_openmvs_commands, run_openmvs_pipeline  # noqa: E402
+from app.openmvs_runner import (  # noqa: E402
+    OpenMVSConfig,
+    build_openmvs_commands,
+    run_openmvs_pipeline,
+)
 from app.open3d_cleanup import cleanup_outputs  # noqa: E402
 from app.point_cloud_processor import (  # noqa: E402
     PointCloudProcessingConfig,
@@ -190,6 +198,15 @@ def load_blender_script_module():
     spec = importlib.util.spec_from_file_location("prepare_scan_asset", BLENDER_SCRIPT)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load prepare_scan_asset.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_reconstruct_gpu_module():
+    spec = importlib.util.spec_from_file_location("reconstruct_gpu", RECONSTRUCT_GPU_SCRIPT)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -1101,6 +1118,95 @@ class BackendTests(unittest.TestCase):
         self.assertIn("--FeatureExtraction.use_gpu", commands[0])
         self.assertIn("--FeatureMatching.use_gpu", commands[1])
 
+    def test_colmap_can_share_intrinsics_per_image_folder(self) -> None:
+        from app.colmap_runner import ColmapConfig
+
+        commands = build_colmap_commands(
+            Path("/tmp/scan"),
+            ColmapConfig(single_camera=False, single_camera_per_folder=True),
+        )
+        feature_extractor = commands[0]
+
+        self.assertEqual(
+            feature_extractor[feature_extractor.index("--ImageReader.single_camera") + 1],
+            "0",
+        )
+        self.assertEqual(
+            feature_extractor[
+                feature_extractor.index("--ImageReader.single_camera_per_folder") + 1
+            ],
+            "1",
+        )
+
+    def test_colmap_rejects_conflicting_camera_sharing_modes(self) -> None:
+        from app.colmap_runner import ColmapConfig
+
+        with self.assertRaisesRegex(ValueError, "both single and per-folder"):
+            build_colmap_commands(
+                Path("/tmp/scan"),
+                ColmapConfig(single_camera=True, single_camera_per_folder=True),
+            )
+
+    def test_gpu_runner_groups_mixed_resolutions_for_per_folder_intrinsics(self) -> None:
+        module = load_reconstruct_gpu_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp) / "scan"
+            images_dir = scan_dir / "images"
+            metadata_dir = scan_dir / "metadata"
+            images_dir.mkdir(parents=True)
+            metadata_dir.mkdir()
+            Image.new("RGB", (4, 3), "red").save(images_dir / "high.jpg")
+            Image.new("RGB", (2, 2), "blue").save(images_dir / "fallback.jpg")
+            (metadata_dir / "frames.json").write_text(json.dumps([
+                {
+                    "id": 1,
+                    "image": "images/high.jpg",
+                    "timestamp": 1.0,
+                    "resolution": [4, 3],
+                },
+                {
+                    "id": 2,
+                    "image": "images/fallback.jpg",
+                    "timestamp": 2.0,
+                    "resolution": [2, 2],
+                },
+            ]))
+            (metadata_dir / "session.json").write_text("{}")
+
+            groups = module.group_images_by_resolution(scan_dir)
+
+            self.assertEqual(groups, {"2x2": 1, "4x3": 1})
+            self.assertTrue((images_dir / "4x3" / "high.jpg").is_file())
+            self.assertTrue((images_dir / "2x2" / "fallback.jpg").is_file())
+            self.assertFalse((images_dir / "high.jpg").exists())
+            self.assertFalse((images_dir / "fallback.jpg").exists())
+
+    def test_gpu_runner_rejects_capture_masks_before_grouping_images(self) -> None:
+        module = load_reconstruct_gpu_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp)
+            metadata_dir = scan_dir / "metadata"
+            metadata_dir.mkdir()
+            (metadata_dir / "frames.json").write_text("[]")
+            (metadata_dir / "session.json").write_text("{}")
+            (metadata_dir / "manifest.json").write_text(json.dumps({"reconstruction_scope": {
+                "schema_version": "1.0", "mode": "image_masks", "mask_space": "capture_image",
+                "mask_convention": "white_keep_black_exclude", "mask_count": 1,
+            }}))
+            with self.assertRaisesRegex(ValueError, "does not yet support capture masks"):
+                module.group_images_by_resolution(scan_dir)
+            self.assertFalse((scan_dir / "images").exists())
+
+    def test_gpu_runner_rejects_explicit_masks_before_preparing_workspace(self) -> None:
+        module = load_reconstruct_gpu_module()
+        with patch.object(sys, "argv", ["reconstruct_gpu.py", "unused.zip", "--camera-sharing",
+                                        "per-folder", "--use-masks"]), \
+             patch.object(module, "prepare_scan_source") as prepare, \
+             self.assertRaises(SystemExit) as error:
+            module.main()
+        self.assertEqual(error.exception.code, 2)
+        prepare.assert_not_called()
+
     def test_colmap_masks_are_forwarded_only_to_configured_stages(self) -> None:
         from app.colmap_runner import ColmapConfig
 
@@ -1154,6 +1260,10 @@ class BackendTests(unittest.TestCase):
                 "textures",
                 "--export-glb",
                 "scan.glb",
+                "--obj-forward-axis",
+                "NEGATIVE_Y",
+                "--obj-up-axis",
+                "Z",
                 "--origin",
                 "none",
             ]
@@ -1165,6 +1275,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(options.decimate_ratio, 0.25)
         self.assertEqual(options.texture_dir, Path("textures"))
         self.assertEqual(options.export_glb, Path("scan.glb"))
+        self.assertEqual(options.obj_forward_axis, "NEGATIVE_Y")
+        self.assertEqual(options.obj_up_axis, "Z")
         self.assertEqual(options.origin, "none")
 
     def test_blender_asset_parser_rejects_bad_decimate_ratio(self) -> None:
@@ -1172,6 +1284,21 @@ class BackendTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit):
             module.parse_blender_args(["scan.obj", "scan.blend", "--decimate-ratio", "2"])
+
+    def test_blender_asset_parser_rejects_collinear_obj_axes(self) -> None:
+        module = load_blender_script_module()
+
+        with self.assertRaises(SystemExit):
+            module.parse_blender_args(
+                [
+                    "scan.obj",
+                    "scan.blend",
+                    "--obj-forward-axis",
+                    "NEGATIVE_Z",
+                    "--obj-up-axis",
+                    "Z",
+                ]
+            )
 
     def test_blender_asset_parser_requires_cleanup_recipe_and_report_together(self) -> None:
         module = load_blender_script_module()
@@ -1283,6 +1410,7 @@ class BackendTests(unittest.TestCase):
             "objects": [],
         }
         fake_bpy = SimpleNamespace(
+            data=SimpleNamespace(images=[]),
             ops=SimpleNamespace(
                 wm=SimpleNamespace(
                     save_as_mainfile=lambda filepath: calls.append(("save", filepath))
@@ -1310,7 +1438,12 @@ class BackendTests(unittest.TestCase):
         ), patch.object(
             module, "apply_reversible_cleanup", return_value=([retained], evidence)
         ), patch.object(
-            module, "finalize_cleanup_evidence", return_value={**evidence, "final_verification_passed": True}
+            module,
+            "finalize_cleanup_evidence",
+            side_effect=lambda _objects, _recipe, current_evidence, **_kwargs: {
+                **current_evidence,
+                "final_verification_passed": True,
+            },
         ), patch.object(
             module, "select_only"
         ) as select_only:
@@ -1323,6 +1456,8 @@ class BackendTests(unittest.TestCase):
                     export_glb=root / "scan.glb",
                     cleanup_recipe=root / "cleanup.json",
                     cleanup_report=report,
+                    obj_forward_axis="NEGATIVE_Y",
+                    obj_up_axis="Z",
                 )
             )
             report_payload = json.loads(report.read_text())
@@ -1335,6 +1470,110 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(report_payload["blend_saved"])
         self.assertTrue(report_payload["glb_exported"])
         self.assertTrue(report_payload["glb_export_selection_only"])
+        self.assertEqual(
+            report_payload["import_settings"],
+            {
+                "format": "obj",
+                "obj_forward_axis": "NEGATIVE_Y",
+                "obj_up_axis": "Z",
+            },
+        )
+
+    def test_blender_crop_only_finalization_skips_component_graph_and_preserves_counts(self) -> None:
+        module = load_blender_script_module()
+        retained = SimpleNamespace(
+            name="retained",
+            type="MESH",
+            data=SimpleNamespace(
+                vertices=[
+                    SimpleNamespace(index=index, co=(0.0, 0.0, 0.0))
+                    for index in range(4)
+                ],
+                edges=[],
+            ),
+        )
+        recipe = module.MeshCleanupRecipe(
+            "1.0",
+            crop=module.MeshCrop(
+                shape="box",
+                center=(0, 0, 0),
+                keep="inside",
+                size=(2, 2, 2),
+            ),
+        )
+        evidence = {
+            "schema_version": "1.0",
+            "source_vertex_count": 10,
+            "pre_decimation_vertex_count": 6,
+            "retained_vertex_count": 6,
+            "objects": [
+                {
+                    "object": "retained",
+                    "source_vertex_count": 10,
+                    "pre_decimation_vertex_count": 6,
+                    "retained_vertex_count": 6,
+                }
+            ],
+        }
+
+        with patch.object(
+            module, "_world_point", return_value=(0.0, 0.0, 0.0)
+        ), patch.object(module, "_mesh_component_sizes") as component_sizes:
+            result = module.finalize_cleanup_evidence(
+                [retained],
+                recipe,
+                evidence,
+                decimate_ratio=0.5,
+            )
+
+        component_sizes.assert_not_called()
+        self.assertEqual(result["pre_decimation_vertex_count"], 6)
+        self.assertEqual(result["final_vertex_count"], 4)
+        self.assertEqual(result["retained_vertex_count"], 4)
+        self.assertEqual(result["decimate_ratio"], 0.5)
+        self.assertFalse(result["component_count_measured"])
+        self.assertIsNone(result["objects"][0]["retained_component_count"])
+
+    def test_blender_component_finalization_measures_requested_graph(self) -> None:
+        module = load_blender_script_module()
+        retained = SimpleNamespace(
+            name="retained",
+            type="MESH",
+            data=SimpleNamespace(
+                vertices=[SimpleNamespace(index=index) for index in range(4)],
+                edges=[],
+            ),
+        )
+        recipe = module.MeshCleanupRecipe(
+            "1.0",
+            loose_components=module.LooseComponentRule(
+                keep_largest=1,
+                minimum_vertices=2,
+            ),
+        )
+        evidence = {
+            "schema_version": "1.0",
+            "source_vertex_count": 4,
+            "pre_decimation_vertex_count": 4,
+            "retained_vertex_count": 4,
+            "objects": [
+                {
+                    "object": "retained",
+                    "source_vertex_count": 4,
+                    "pre_decimation_vertex_count": 4,
+                    "retained_vertex_count": 4,
+                }
+            ],
+        }
+
+        with patch.object(
+            module, "_mesh_component_sizes", return_value=[4]
+        ) as component_sizes:
+            result = module.finalize_cleanup_evidence([retained], recipe, evidence)
+
+        component_sizes.assert_called_once_with(retained.data)
+        self.assertTrue(result["component_count_measured"])
+        self.assertEqual(result["objects"][0]["retained_component_count"], 1)
 
     def test_blender_cleanup_counts_loose_components(self) -> None:
         module = load_blender_script_module()
@@ -1365,7 +1604,7 @@ class BackendTests(unittest.TestCase):
 
     def test_blender_import_asset_uses_legacy_obj_fallback(self) -> None:
         module = load_blender_script_module()
-        calls: list[tuple[str, str]] = []
+        calls: list[tuple[str, dict[str, str]]] = []
         scene = SimpleNamespace(objects=[])
 
         bpy = SimpleNamespace(
@@ -1373,15 +1612,63 @@ class BackendTests(unittest.TestCase):
             ops=SimpleNamespace(
                 wm=SimpleNamespace(),
                 import_scene=SimpleNamespace(
-                    obj=lambda filepath: calls.append(("legacy_obj", filepath))
+                    obj=lambda **kwargs: calls.append(("legacy_obj", kwargs))
                 ),
                 import_mesh=SimpleNamespace(),
             ),
         )
 
-        module.import_asset(bpy, Path("scan.obj"))
+        module.import_asset(
+            bpy,
+            Path("scan.obj"),
+            obj_forward_axis="NEGATIVE_Z",
+            obj_up_axis="Y",
+        )
 
-        self.assertEqual(calls, [("legacy_obj", "scan.obj")])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "legacy_obj",
+                    {
+                        "filepath": "scan.obj",
+                        "axis_forward": "-Z",
+                        "axis_up": "Y",
+                    },
+                )
+            ],
+        )
+
+    def test_blender_import_asset_forwards_native_obj_axes(self) -> None:
+        module = load_blender_script_module()
+        calls: list[dict[str, str]] = []
+        scene = SimpleNamespace(objects=[])
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=scene),
+            ops=SimpleNamespace(
+                wm=SimpleNamespace(obj_import=lambda **kwargs: calls.append(kwargs)),
+                import_scene=SimpleNamespace(),
+                import_mesh=SimpleNamespace(),
+            ),
+        )
+
+        module.import_asset(
+            bpy,
+            Path("scan.obj"),
+            obj_forward_axis="NEGATIVE_Y",
+            obj_up_axis="Z",
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "filepath": "scan.obj",
+                    "forward_axis": "NEGATIVE_Y",
+                    "up_axis": "Z",
+                }
+            ],
+        )
 
     def test_blender_import_asset_uses_legacy_ply_fallback(self) -> None:
         module = load_blender_script_module()
@@ -1454,8 +1741,8 @@ class BackendTests(unittest.TestCase):
         objects: list[FakeObject] = []
 
         class FakeWM:
-            def obj_import(self, filepath: str) -> None:
-                calls.append(("obj_import", filepath))
+            def obj_import(self, **kwargs: str) -> None:
+                calls.append(("obj_import", kwargs))
                 objects.append(fake_object)
 
             def save_as_mainfile(self, filepath: str) -> None:
@@ -1502,7 +1789,17 @@ class BackendTests(unittest.TestCase):
         bpy.ops.wm.save_as_mainfile(filepath=str(options.output_path))
         bpy.ops.export_scene.gltf(filepath=str(options.export_glb), export_format="GLB")
 
-        self.assertIn(("obj_import", "scan.obj"), calls)
+        self.assertIn(
+            (
+                "obj_import",
+                {
+                    "filepath": "scan.obj",
+                    "forward_axis": "NEGATIVE_Z",
+                    "up_axis": "Y",
+                },
+            ),
+            calls,
+        )
         self.assertIn(("transform_apply", (False, False, True)), calls)
         self.assertIn(("origin_set", ("ORIGIN_GEOMETRY", "BOUNDS")), calls)
         self.assertIn(("modifier_apply", "scanner_decimate"), calls)
@@ -1532,6 +1829,115 @@ class BackendTests(unittest.TestCase):
         )
         self.assertIn("sparse_point_cloud", plan.outputs)
 
+    def test_backend_plan_exposes_explicit_colmap_fused_openmvs_path(self) -> None:
+        scan_dir = Path("/tmp/scanner-colmap-fused-plan")
+        plan = build_backend_plan(
+            scan_dir,
+            BackendPlanConfig(
+                backend="colmap_openmvs",
+                openmvs_point_cloud_source="colmap_fused",
+                openmvs_scope_mode="unbounded",
+            ),
+        )
+
+        openmvs_commands = [
+            command
+            for command in plan.commands
+            if command[0]
+            in {"InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh", "TextureMesh"}
+        ]
+        self.assertEqual(
+            [command[0] for command in openmvs_commands],
+            ["InterfaceCOLMAP", "ReconstructMesh", "TextureMesh"],
+        )
+        for command in openmvs_commands:
+            self.assertEqual(
+                command[command.index("--working-folder") + 1],
+                str(scan_dir.resolve() / "dense"),
+            )
+        self.assertEqual(
+            plan.outputs["openmvs_dense_point_cloud"],
+            scan_dir.resolve() / "dense" / "scene.ply",
+        )
+        self.assertEqual(
+            plan.settings["openmvs"]["point_cloud_source"],
+            "colmap_fused",
+        )
+        self.assertTrue(any("DensifyPointCloud is skipped" in note for note in plan.notes))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "plan.json"
+            write_command_plan_report(plan, report_path)
+            report = json.loads(report_path.read_text())
+        self.assertEqual(
+            report["settings"]["openmvs"]["point_cloud_source"],
+            "colmap_fused",
+        )
+
+    def test_gpu_runner_dry_run_reports_colmap_fused_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scan_dir = self._write_scan(root)
+            output_root = root / "outputs"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "reconstruct_gpu.py"),
+                    str(scan_dir),
+                    "--output-root",
+                    str(output_root),
+                    "--openmvs-point-cloud-source",
+                    "colmap_fused",
+                    "--scope-mode",
+                    "unbounded",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((output_root / "scan_test" / "report.json").read_text())
+            processing = json.loads(
+                (
+                    output_root
+                    / "scan_test"
+                    / "source"
+                    / "scan_test"
+                    / "metadata"
+                    / "processing.json"
+                ).read_text()
+            )
+            processing_step = processing["steps"]["gpu_reconstruction"]
+            prepared_scan = output_root / "scan_test" / "source" / "scan_test"
+            self.assertTrue((prepared_scan / "sparse").is_dir())
+            self.assertTrue((prepared_scan / "dense").is_dir())
+
+        self.assertEqual(
+            report["openmvs_settings"]["point_cloud_source"],
+            "colmap_fused",
+        )
+        self.assertNotIn("DensifyPointCloud", [command[0] for command in report["commands"]])
+        self.assertEqual(
+            processing_step["state"],
+            "planned",
+        )
+        self.assertEqual(
+            processing_step["openmvs_settings"]["point_cloud_source"],
+            "colmap_fused",
+        )
+
+    def test_colmap_workspace_preparation_creates_requested_output_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp) / "scan"
+            prepare_colmap_output_directories(scan_dir, include_dense=False)
+            self.assertTrue((scan_dir / "sparse").is_dir())
+            self.assertFalse((scan_dir / "dense").exists())
+
+            prepare_colmap_output_directories(scan_dir)
+            self.assertTrue((scan_dir / "dense").is_dir())
+
     def test_openmvs_pipeline_runs_commands_from_dense_workspace(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-workspace").resolve()
 
@@ -1546,6 +1952,133 @@ class BackendTests(unittest.TestCase):
         for call in run_command_mock.call_args_list:
             self.assertEqual(call.kwargs["cwd"], scan_dir / "dense")
         inspect_mock.assert_called_once()
+
+    def test_openmvs_fused_cloud_pipeline_checks_budget_before_meshing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp).resolve()
+            events: list[str] = []
+
+            def record_command(command: list[str], cwd: Path | None = None) -> None:
+                self.assertEqual(cwd, scan_dir / "dense")
+                events.append(command[0])
+
+            def record_inspection(*_: object) -> None:
+                events.append("inspect_mesh_input")
+
+            config = OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+            )
+            with (
+                patch("app.openmvs_runner.run_command", side_effect=record_command),
+                patch(
+                    "app.openmvs_runner.inspect_openmvs_dense_cloud",
+                    side_effect=record_inspection,
+                ),
+            ):
+                run_openmvs_pipeline(scan_dir, config)
+
+        self.assertEqual(
+            events,
+            [
+                "InterfaceCOLMAP",
+                "inspect_mesh_input",
+                "ReconstructMesh",
+                "TextureMesh",
+            ],
+        )
+
+    def test_openmvs_fused_cloud_budget_failure_stops_before_meshing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp).resolve()
+            dense_dir = scan_dir / "dense"
+            dense_dir.mkdir()
+            commands_run: list[str] = []
+
+            def record_command(command: list[str], cwd: Path | None = None) -> None:
+                commands_run.append(command[0])
+                if command[0] == "InterfaceCOLMAP":
+                    (dense_dir / "scene.ply").write_bytes(
+                        b"ply\nformat ascii 1.0\nelement vertex 11\nend_header\n"
+                    )
+
+            config = OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                point_warning_limit=5,
+                point_hard_limit=10,
+            )
+            with (
+                patch("app.openmvs_runner.run_command", side_effect=record_command),
+                self.assertRaises(PointCloudBudgetError),
+            ):
+                run_openmvs_pipeline(scan_dir, config)
+
+        self.assertEqual(commands_run, ["InterfaceCOLMAP"])
+
+    def test_openmvs_fused_cloud_commands_keep_interface_scene_for_texturing(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-fused")
+        commands = build_openmvs_commands(
+            scan_dir,
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+            ),
+        )
+
+        self.assertEqual(
+            [command[0] for command in commands],
+            ["InterfaceCOLMAP", "ReconstructMesh", "TextureMesh"],
+        )
+        reconstruct = commands[1]
+        self.assertEqual(reconstruct[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            reconstruct[reconstruct.index("--pointcloud-file") + 1],
+            str(scan_dir / "dense" / "scene.ply"),
+        )
+        self.assertEqual(
+            reconstruct[reconstruct.index("--crop-to-roi") + 1],
+            "0",
+        )
+        texture = commands[2]
+        self.assertEqual(texture[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            texture[texture.index("-m") + 1],
+            str(scan_dir / "dense" / "scene_mesh.ply"),
+        )
+        for command in commands:
+            self.assertEqual(
+                command[command.index("--working-folder") + 1],
+                str(scan_dir / "dense"),
+            )
+
+    def test_openmvs_fused_cloud_refine_uses_explicit_mesh_files(self) -> None:
+        scan_dir = Path("/tmp/scanner-openmvs-fused-refine")
+        commands = build_openmvs_commands(
+            scan_dir,
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                include_refine=True,
+            ),
+        )
+
+        self.assertEqual(
+            [command[0] for command in commands],
+            ["InterfaceCOLMAP", "ReconstructMesh", "RefineMesh", "TextureMesh"],
+        )
+        refine = commands[2]
+        self.assertEqual(refine[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            refine[refine.index("--mesh-file") + 1],
+            str(scan_dir / "dense" / "scene_mesh.ply"),
+        )
+        texture = commands[3]
+        self.assertEqual(texture[1], str(scan_dir / "dense" / "scene.mvs"))
+        self.assertEqual(
+            texture[texture.index("-m") + 1],
+            str(scan_dir / "dense" / "scene_mesh_refined.ply"),
+        )
 
     def test_openmvs_commands_densify_with_explicit_scope_controls(self) -> None:
         scan_dir = Path("/tmp/scanner-openmvs-scope")
@@ -1565,6 +2098,11 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--crop-to-roi") + 1], "1")
         self.assertEqual(densify[densify.index("--roi-border") + 1], "10.0")
         self.assertNotIn("-p", commands[2])
+        for command in commands:
+            self.assertEqual(
+                command[command.index("--working-folder") + 1],
+                str(scan_dir / "dense"),
+            )
 
     def test_openmvs_unbounded_mode_disables_roi_crop(self) -> None:
         commands = build_openmvs_commands(
@@ -1645,6 +2183,30 @@ class BackendTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             OpenMVSConfig(mask_ignore_label=256)
 
+    def test_openmvs_fused_cloud_rejects_unsupported_scope_and_masks(self) -> None:
+        with self.assertRaisesRegex(ValueError, "point-cloud source"):
+            OpenMVSConfig(point_cloud_source="invalid")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "scope_mode='unbounded'"):
+            OpenMVSConfig(point_cloud_source="colmap_fused")
+        with self.assertRaisesRegex(ValueError, "reviewed region"):
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                region_path=Path("/tmp/region.roi"),
+            )
+        with self.assertRaisesRegex(ValueError, "does not yet support OpenMVS masks"):
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                mask_path=Path("/tmp/masks"),
+            )
+        with self.assertRaisesRegex(ValueError, "does not yet support OpenMVS masks"):
+            OpenMVSConfig(
+                point_cloud_source="colmap_fused",
+                scope_mode="unbounded",
+                texture_use_masks=True,
+            )
+
     def test_openmvs_config_reports_effective_scope_settings(self) -> None:
         settings = OpenMVSConfig(scope_mode="unbounded", roi_border=25).report_settings()
 
@@ -1654,12 +2216,53 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(settings["mask_path"])
         self.assertIsNone(settings["mask_ignore_label"])
 
+    def test_openmvs_fused_cloud_reports_only_effective_settings(self) -> None:
+        settings = OpenMVSConfig(
+            point_cloud_source="colmap_fused",
+            scope_mode="unbounded",
+        ).report_settings()
+
+        self.assertEqual(settings["point_cloud_source"], "colmap_fused")
+        self.assertFalse(settings["densification_enabled"])
+        self.assertEqual(settings["mesh_input_point_cloud"], "scene.ply")
+        self.assertIsNone(settings["resolution_level"])
+        self.assertIsNone(settings["number_views_fuse"])
+        self.assertEqual(settings["estimate_roi"], 0)
+        self.assertFalse(settings["crop_to_roi"])
+
     def test_openmvs_config_accepts_api_scope_modes(self) -> None:
         self.assertEqual(OpenMVSConfig(scope_mode="auto_roi").scope_mode, "auto_roi")
         self.assertEqual(OpenMVSConfig(scope_mode="unbounded").scope_mode, "unbounded")
 
+        positional = OpenMVSConfig(
+            "InterfaceCOLMAP",
+            "DensifyPointCloud",
+            "ReconstructMesh",
+            "RefineMesh",
+            "TextureMesh",
+            "unbounded",
+        )
+        self.assertEqual(positional.scope_mode, "unbounded")
+        self.assertEqual(positional.point_cloud_source, "openmvs_densify")
+
         with self.assertRaises(ValueError):
             OpenMVSConfig(scope_mode="invalid")  # type: ignore[arg-type]
+
+    def test_backend_plan_config_preserves_existing_positional_field_order(self) -> None:
+        sensor_database = Path("/tmp/sensors.db")
+        config = BackendPlanConfig(
+            "alicevision",
+            "sequential_matcher",
+            False,
+            False,
+            False,
+            "draft",
+            sensor_database,
+        )
+
+        self.assertEqual(config.meshroom_pipeline, "draft")
+        self.assertEqual(config.alicevision_sensor_database, sensor_database)
+        self.assertEqual(config.openmvs_point_cloud_source, "openmvs_densify")
 
     def test_ply_density_budget_reads_header_without_point_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3170,6 +3773,52 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(report["summary"]["status"], "initialized")
         self.assertEqual(report["provenance"]["tools"], {})
 
+    def test_benchmark_probe_accepts_openmvs_help_banner_nonzero_exit(self) -> None:
+        completed = SimpleNamespace(
+            returncode=1,
+            stdout="OpenMVS x64 v2.4.0\nAvailable options:\n",
+        )
+        with (
+            patch("app.benchmark_evidence.shutil.which", return_value="/usr/bin/InterfaceCOLMAP"),
+            patch("app.benchmark_evidence.subprocess.run", return_value=completed),
+        ):
+            result = probe_command(["InterfaceCOLMAP", "--help"])
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["return_code"], 1)
+        self.assertTrue(result["accepted_nonzero_exit"])
+
+    def test_benchmark_probe_rejects_unrecognized_nonzero_help_output(self) -> None:
+        completed = SimpleNamespace(returncode=1, stdout="unexpected failure\n")
+        with (
+            patch("app.benchmark_evidence.shutil.which", return_value="/usr/bin/InterfaceCOLMAP"),
+            patch("app.benchmark_evidence.subprocess.run", return_value=completed),
+        ):
+            result = probe_command(["InterfaceCOLMAP", "--help"])
+
+        self.assertEqual(result["status"], "error")
+        self.assertFalse(result["accepted_nonzero_exit"])
+
+    def test_benchmark_probe_uses_disposable_working_directory(self) -> None:
+        observed_cwd: Path | None = None
+
+        def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+            nonlocal observed_cwd
+            observed_cwd = Path(str(kwargs["cwd"]))
+            self.assertTrue(observed_cwd.is_dir())
+            return SimpleNamespace(returncode=0, stdout="tool 1.0\n")
+
+        with (
+            patch("app.benchmark_evidence.shutil.which", return_value="/usr/bin/tool"),
+            patch("app.benchmark_evidence.subprocess.run", side_effect=fake_run),
+        ):
+            result = probe_command(["tool", "--version"])
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIsNotNone(observed_cwd)
+        assert observed_cwd is not None
+        self.assertFalse(observed_cwd.exists())
+
     def test_benchmark_stage_records_log_time_vram_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -3532,7 +4181,26 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(plan.inputs["preferred_source_type"], "images")
         self.assertEqual(plan.commands[0][0:2], ["ns-process-data", "images"])
         self.assertIn("--matching-method", plan.commands[0])
+        self.assertEqual(
+            plan.commands[0][plan.commands[0].index("--colmap-cmd") + 1],
+            str(NERFSTUDIO_COLMAP_COMPAT_PATH),
+        )
+        self.assertTrue(NERFSTUDIO_COLMAP_COMPAT_PATH.is_absolute())
+        self.assertEqual(
+            plan.commands[0][plan.commands[0].index("--sfm-tool") + 1],
+            "colmap",
+        )
         self.assertEqual(plan.commands[1][0:2], ["ns-train", "splatfacto"])
+        self.assertEqual(
+            plan.commands[1][
+                plan.commands[1].index("--viewer.quit-on-train-completion") + 1
+            ],
+            "True",
+        )
+        self.assertEqual(
+            plan.commands[1][plan.commands[1].index("--viewer.websocket-host") + 1],
+            "127.0.0.1",
+        )
         self.assertEqual(plan.commands[2][0:2], ["ns-export", "gaussian-splat"])
         self.assertEqual(plan.inputs["delivery_formats"], ["sog", "html"])
         self.assertTrue(str(plan.outputs["splat_ply"]).endswith("exports/splat/splat.ply"))
@@ -3786,6 +4454,13 @@ class BackendTests(unittest.TestCase):
         self.assertIn("Backend: gaussian_splatting", result.stdout)
         self.assertIn("splatfacto-big", payload["commands"][1])
         self.assertIn("exhaustive", payload["commands"][0])
+        wrapper_index = payload["commands"][0].index("--colmap-cmd") + 1
+        self.assertEqual(
+            payload["commands"][0][wrapper_index],
+            str(ROOT / "scripts" / "nerfstudio_colmap_compat.py"),
+        )
+        self.assertIn("--viewer.quit-on-train-completion", payload["commands"][1])
+        self.assertIn("--viewer.websocket-host", payload["commands"][1])
         self.assertEqual(payload["inputs"]["preferred_source_type"], "images")
         self.assertEqual(payload["inputs"]["delivery_formats"], ["spz"])
         self.assertTrue(payload["commands"][3][-1].endswith("scene.spz"))

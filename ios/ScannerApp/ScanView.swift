@@ -9,56 +9,10 @@ struct ScanView: View {
     @State private var confirmIncompleteScene = false
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            ARSessionView(
-                session: scanManager.arSession,
-                cameraPath: scanManager.scanMode == .scene
-                    ? scanManager.sceneCameraPath
-                    : [],
-                surfaceSamples: scanManager.scanMode == .scene
-                    ? scanManager.sceneSurfaceSamples
-                    : []
-            ) { worldPosition in
-                scanManager.setObjectCenter(worldPosition)
-            }
-                .ignoresSafeArea()
-
-            if scanManager.scanMode == .scene,
-               scanManager.state == .scanning,
-               !isEditingReconstructionArea {
-                sceneCoverageReticle
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
-            }
-
-            if isEditingReconstructionArea {
-                CaptureMaskEditorView(
-                    polygon: $reconstructionPolygon,
-                    onCancel: cancelReconstructionAreaEditing,
-                    onConfirm: { previewSize in
-                        scanManager.configureReconstructionArea(
-                            reconstructionPolygon,
-                            previewSize: previewSize
-                        )
-                        scanManager.stopPreview()
-                        isEditingReconstructionArea = false
-                    }
-                )
-                .ignoresSafeArea()
-                .zIndex(1)
-            }
-
-            if !isEditingReconstructionArea {
-                VStack(spacing: 12) {
-                    modeControls
-                    statusBar
-                    exportSummaryPanel
-                    controls
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
-            }
+        GeometryReader { geometry in
+            scanContent(controlSafeAreaInsets: geometry.safeAreaInsets)
         }
+        .toolbar(isEditingReconstructionArea ? .hidden : .visible, for: .tabBar)
         .sheet(
             isPresented: Binding(
                 get: { shareURL != nil },
@@ -87,6 +41,60 @@ struct ScanView: View {
                 "Coverage is \(scanManager.sceneCoverage.percent)%. "
                     + scanManager.sceneCoverage.guidance
             )
+        }
+    }
+
+    private func scanContent(controlSafeAreaInsets: EdgeInsets) -> some View {
+        ZStack(alignment: .bottom) {
+            ARSessionView(
+                session: scanManager.arSession,
+                cameraPath: scanManager.scanMode == .scene
+                    ? scanManager.sceneCameraPath
+                    : [],
+                surfaceSamples: scanManager.scanMode == .scene
+                    ? scanManager.sceneSurfaceSamples
+                    : []
+            ) { worldPosition in
+                scanManager.setObjectCenter(worldPosition)
+            }
+                .ignoresSafeArea()
+
+            if scanManager.scanMode == .scene,
+               scanManager.state == .scanning,
+               !isEditingReconstructionArea {
+                sceneCoverageReticle
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
+            }
+
+            if isEditingReconstructionArea {
+                CaptureMaskEditorView(
+                    polygon: $reconstructionPolygon,
+                    controlSafeAreaInsets: controlSafeAreaInsets,
+                    onCancel: cancelReconstructionAreaEditing,
+                    onConfirm: { previewSize in
+                        scanManager.configureReconstructionArea(
+                            reconstructionPolygon,
+                            previewSize: previewSize
+                        )
+                        scanManager.stopPreview()
+                        isEditingReconstructionArea = false
+                    }
+                )
+                .ignoresSafeArea()
+                .zIndex(1)
+            }
+
+            if !isEditingReconstructionArea {
+                VStack(spacing: 12) {
+                    modeControls
+                    statusBar
+                    exportSummaryPanel
+                    controls
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+            }
         }
     }
 

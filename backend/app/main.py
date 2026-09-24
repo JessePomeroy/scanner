@@ -48,6 +48,7 @@ from app.openmvs_runner import (
     OpenMVSConfig,
     OpenMVSScopeMode,
     inspect_openmvs_dense_cloud,
+    openmvs_mesh_input_cloud_path,
     run_openmvs_pipeline,
     validate_openmvs_config_masks,
 )
@@ -704,7 +705,7 @@ def process_scan(
                 },
             )
             outputs["openmvs_dense_point_cloud"] = str(
-                scan_root / "dense" / "scene_dense.ply"
+                openmvs_mesh_input_cloud_path(scan_root, openmvs_config)
             )
             outputs["textured_mesh"] = str(textured_mesh)
 
@@ -960,7 +961,9 @@ def resume_scoped_scan(scan_id: str) -> None:
         outputs = {
             "colmap_output": str(colmap_output),
             "openmvs_unscoped_dense_point_cloud": str(dense_dir / "scene_dense_unscoped.ply"),
-            "openmvs_dense_point_cloud": str(dense_dir / "scene_dense.ply"),
+            "openmvs_dense_point_cloud": str(
+                openmvs_mesh_input_cloud_path(scan_root, openmvs_config)
+            ),
             "textured_mesh": str(textured_mesh),
             "reconstruction_region": str(scan_root / "metadata" / "reconstruction_region.json"),
             "reconstruction_region_application": str(application_path),

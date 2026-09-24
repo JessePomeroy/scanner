@@ -86,6 +86,23 @@ video could silently omit most of a scene. Video is only a fallback when no
 images are available. The export command contains a placeholder `config.yml`
 path because Nerfstudio creates the final training output folder at runtime.
 
+The planned `ns-process-data` command selects COLMAP explicitly and supplies
+the absolute path to `scripts/nerfstudio_colmap_compat.py`. Nerfstudio 1.1.5
+emits the legacy `SiftExtraction.use_gpu` and `SiftMatching.use_gpu` options.
+The wrapper asks the installed COLMAP which spellings it supports: it preserves
+those options for an older build, or translates only those two options to
+`FeatureExtraction.use_gpu` and `FeatureMatching.use_gpu` for COLMAP 4. Equals
+forms are handled as well. It fails instead of guessing when the real binary is
+missing, recursive, or advertises neither spelling. Set `SCANNER_REAL_COLMAP`
+only when the real COLMAP binary is intentionally outside `PATH`.
+
+Run the strict environment gate before launch; its required
+`nerfstudio-colmap-compat` probe exercises both capability decisions without
+creating a database or processing images. Planned training also sets
+`--viewer.quit-on-train-completion True` so unattended training terminates and
+`--viewer.websocket-host 127.0.0.1` so the viewer is not exposed beyond the
+workstation.
+
 The default delivery pair is:
 
 - `scene.sog`: compact R2/browser delivery format.

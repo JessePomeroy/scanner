@@ -128,16 +128,20 @@ an editable PLY master and produces SOG plus a standalone HTML viewer.
 
 See `docs/neural_backends.md` for backend-specific notes and license cautions.
 
-## High-Resolution Photo Scaffold
+## High-Resolution Keyframe Capture
 
-`CameraCaptureManager` contains reusable `AVCapturePhotoOutput` plumbing for
-capturing a high-resolution still directly to a scan package path. It writes the
-photo file, reports pixel dimensions, and extracts basic exposure/ISO metadata.
+The active scanner first qualifies a live `ARFrame`, then uses
+`ARSession.captureHighResolutionFrame` to request a higher-resolution keyframe
+with synchronized ARKit pose, intrinsics, and frame semantics. The triggering
+qualified live frame remains available as an explicit fallback when the request
+is unavailable, fails, times out, or does not pass the capture checks. Frame and
+session metadata record the selected source, dimensions, and fallback reason.
 
-The active scanner still uses ARFrame JPEG capture by default. Switching
-accepted keyframes over to high-resolution stills needs phone testing because
-the ARKit pose timestamp and AVCapture photo timestamp must be synchronized
-carefully.
+The software path and automated package audit are implemented. A physical
+iPhone audit still needs to validate real resolution gains, cadence, thermal
+behavior, pose consistency, and downstream texture quality. Run
+`scripts/inspect_scan.py <scan-folder> --verify-images` on those packages to
+decode the images and cross-check recorded dimensions and provenance.
 
 ## Export Summary
 
@@ -323,7 +327,8 @@ inspected before the scan is submitted again.
 ## Native Linux RTX 3070 Workflow
 
 Use the dual-boot RTX 3070 PC while it is booted into native Linux for final
-reconstruction and Blender work:
+reconstruction and Blender work. The native CachyOS driver and pinned toolchain
+have been installed and discovered successfully on this workstation:
 
 1. Install CachyOS and let its `chwd` hardware manager configure the native
    NVIDIA driver. Follow [`cachyos_setup.md`](cachyos_setup.md); do not use
@@ -353,6 +358,13 @@ export PATH="$HOME/.local/bin:$PATH"
 python3 scripts/wsl/check_reconstruction_env.py --strict
 ```
 
+This strict check is an installation and visibility gate. It verifies the GPU,
+CUDA and application inventory. It also requires a non-executing compatibility
+probe that proves the repository COLMAP wrapper can preserve legacy Nerfstudio
+GPU flags or translate the two renamed COLMAP 4 flags. It does not run a
+representative OpenMVS CUDA workload and therefore does not prove
+`DensifyPointCloud` runtime success.
+
 6. Create Linux-native workspace folders and dry-run the command plan:
 
 ```bash
@@ -374,11 +386,49 @@ required geometry. The runner warns above 2 million dense points and stops
 before meshing above 10 million points; both thresholds are recorded in the
 reconstruction report.
 
+The default remains `--openmvs-point-cloud-source openmvs_densify` with
+`--scope-mode auto_roi`. To explicitly reuse the COLMAP fused cloud instead:
+
+```bash
+python3 scripts/reconstruct_gpu.py scan.zip \
+  --output-root ~/ScannerOutputs \
+  --matcher sequential_matcher \
+  --camera-sharing per-folder \
+  --openmvs-point-cloud-source colmap_fused \
+  --scope-mode unbounded
+```
+
+When a validated scan mixes image resolutions, `--camera-sharing per-folder`
+groups the copied images by dimensions and shares one COLMAP camera within each
+group. This preserves the original ZIP while avoiding invalid single-camera
+dimension assumptions. Uniform-resolution scans continue to use the default
+`--camera-sharing single` mode.
+Per-folder grouping currently rejects capture masks and `--use-masks`; mask
+path remapping is not implemented. Treat the grouped directory as a derived
+COLMAP workspace, not a new exportable scan package: its copied capture metadata
+still records the original image paths.
+
+In this mode `InterfaceCOLMAP` imports `dense/fused.ply` and writes the
+view-aware `dense/scene.ply`. The runner skips `DensifyPointCloud`, applies the
+same point-count budget to `scene.ply`, and passes it to `ReconstructMesh` with
+`--pointcloud-file`. The mode fails before execution if combined with automatic
+ROI, OpenMVS masks, or a reviewed reconstruction region; those scope paths are
+not yet supported for the COLMAP-fused source.
+
 To use pre-generated masks, place one 8-bit grayscale PNG beside the equivalent
 relative image path under `dense/masks`, replace the source extension with
 `.mask.png` (for example, `frame_000001.jpg` becomes
 `frame_000001.mask.png`), and add `--use-masks`. The runner requires a complete
 set with dimensions matching `dense/images` before starting densification.
+
+The preserved July benchmark completed CUDA COLMAP. Its automatic OpenMVS run
+first failed because image paths were resolved from the wrong working directory
+(fixed for backend execution on current `main`; this change also embeds the
+dense working folder in generated plans); a later retry reached an
+OpenMVS CUDA invalid-argument failure. Manually meshing the
+`InterfaceCOLMAP`-imported cloud recovered a textured OBJ with 3,652,543
+vertices, 7,297,100 faces, and two 8192-pixel JPEG atlases. An automated rerun,
+a reviewed GLB, and the paired Gaussian output remain outstanding.
 
 8. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
    GLB, `.blend`, reports, or logs to a shared partition if they are also needed
@@ -396,6 +446,12 @@ To compare backend command plans on the workstation before a long run:
 python3 scripts/plan_reconstruction_backend.py scan.zip \
   --backend colmap_openmvs \
   --work-dir ~/ScannerPlans/colmap
+
+python3 scripts/plan_reconstruction_backend.py scan.zip \
+  --backend colmap_openmvs \
+  --openmvs-point-cloud-source colmap_fused \
+  --scope-mode unbounded \
+  --work-dir ~/ScannerPlans/colmap-fused
 
 python3 scripts/plan_reconstruction_backend.py scan.zip \
   --backend meshroom \
@@ -420,7 +476,9 @@ To create a `.blend` file from an output asset:
 ```bash
 blender --background --python scripts/blender/prepare_scan_asset.py -- \
   ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
-  ~/ScannerOutputs/scan_id/blender/scan_id.blend
+  ~/ScannerOutputs/scan_id/blender/scan_id.blend \
+  --obj-forward-axis NEGATIVE_Z \
+  --obj-up-axis Y
 ```
 
 The Blender helper accepts OBJ, PLY, GLB, and GLTF. It can also apply a scale,
@@ -431,14 +489,19 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
   ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
   ~/ScannerOutputs/scan_id/blender/scan_id.blend \
   --texture-dir ~/ScannerOutputs/scan_id/source/scan_id/dense \
+  --obj-forward-axis NEGATIVE_Z \
+  --obj-up-axis Y \
   --scale 1.0 \
   --origin geometry \
   --decimate-ratio 0.5 \
   --export-glb ~/ScannerOutputs/scan_id/blender/scan_id.glb
 ```
 
-The helper supports Blender 4.x native OBJ/PLY import operators and falls back
-to the Blender 3.x legacy OBJ/PLY import operators when needed.
+The helper passes the OBJ forward/up axes explicitly to Blender instead of
+depending on importer defaults. The defaults are `NEGATIVE_Z` and `Y`; choose
+from `X`, `Y`, `Z`, `NEGATIVE_X`, `NEGATIVE_Y`, and `NEGATIVE_Z`, using two
+different dimensions. It supports Blender 4.x native OBJ/PLY import operators
+and maps the same choices to Blender 3.x legacy OBJ axis names when needed.
 
 For reversible mesh cleanup before GLB publication, start from the example
 recipe, adjust its world-space bounds and component thresholds, and require a
@@ -450,6 +513,8 @@ blender --background --python scripts/blender/prepare_scan_asset.py -- \
   ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
   ~/ScannerOutputs/scan_id/blender/scan_id-clean.blend \
   --texture-dir ~/ScannerOutputs/scan_id/source/scan_id/dense \
+  --obj-forward-axis NEGATIVE_Z \
+  --obj-up-axis Y \
   --cleanup-recipe ~/ScannerOutputs/scan_id/cleanup.json \
   --cleanup-report ~/ScannerOutputs/scan_id/blender/mesh_cleanup_report.json \
   --export-glb ~/ScannerOutputs/scan_id/blender/scan_id-clean.glb
