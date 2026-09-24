@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 BLENDER_SCRIPT = ROOT / "scripts" / "blender" / "prepare_scan_asset.py"
+RECONSTRUCT_GPU_SCRIPT = ROOT / "scripts" / "reconstruct_gpu.py"
 
 from app.artifacts import (  # noqa: E402
     ArtifactUnavailableError,
@@ -197,6 +198,15 @@ def load_blender_script_module():
     spec = importlib.util.spec_from_file_location("prepare_scan_asset", BLENDER_SCRIPT)
     if spec is None or spec.loader is None:
         raise RuntimeError("Unable to load prepare_scan_asset.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_reconstruct_gpu_module():
+    spec = importlib.util.spec_from_file_location("reconstruct_gpu", RECONSTRUCT_GPU_SCRIPT)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -1107,6 +1117,95 @@ class BackendTests(unittest.TestCase):
 
         self.assertIn("--FeatureExtraction.use_gpu", commands[0])
         self.assertIn("--FeatureMatching.use_gpu", commands[1])
+
+    def test_colmap_can_share_intrinsics_per_image_folder(self) -> None:
+        from app.colmap_runner import ColmapConfig
+
+        commands = build_colmap_commands(
+            Path("/tmp/scan"),
+            ColmapConfig(single_camera=False, single_camera_per_folder=True),
+        )
+        feature_extractor = commands[0]
+
+        self.assertEqual(
+            feature_extractor[feature_extractor.index("--ImageReader.single_camera") + 1],
+            "0",
+        )
+        self.assertEqual(
+            feature_extractor[
+                feature_extractor.index("--ImageReader.single_camera_per_folder") + 1
+            ],
+            "1",
+        )
+
+    def test_colmap_rejects_conflicting_camera_sharing_modes(self) -> None:
+        from app.colmap_runner import ColmapConfig
+
+        with self.assertRaisesRegex(ValueError, "both single and per-folder"):
+            build_colmap_commands(
+                Path("/tmp/scan"),
+                ColmapConfig(single_camera=True, single_camera_per_folder=True),
+            )
+
+    def test_gpu_runner_groups_mixed_resolutions_for_per_folder_intrinsics(self) -> None:
+        module = load_reconstruct_gpu_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp) / "scan"
+            images_dir = scan_dir / "images"
+            metadata_dir = scan_dir / "metadata"
+            images_dir.mkdir(parents=True)
+            metadata_dir.mkdir()
+            Image.new("RGB", (4, 3), "red").save(images_dir / "high.jpg")
+            Image.new("RGB", (2, 2), "blue").save(images_dir / "fallback.jpg")
+            (metadata_dir / "frames.json").write_text(json.dumps([
+                {
+                    "id": 1,
+                    "image": "images/high.jpg",
+                    "timestamp": 1.0,
+                    "resolution": [4, 3],
+                },
+                {
+                    "id": 2,
+                    "image": "images/fallback.jpg",
+                    "timestamp": 2.0,
+                    "resolution": [2, 2],
+                },
+            ]))
+            (metadata_dir / "session.json").write_text("{}")
+
+            groups = module.group_images_by_resolution(scan_dir)
+
+            self.assertEqual(groups, {"2x2": 1, "4x3": 1})
+            self.assertTrue((images_dir / "4x3" / "high.jpg").is_file())
+            self.assertTrue((images_dir / "2x2" / "fallback.jpg").is_file())
+            self.assertFalse((images_dir / "high.jpg").exists())
+            self.assertFalse((images_dir / "fallback.jpg").exists())
+
+    def test_gpu_runner_rejects_capture_masks_before_grouping_images(self) -> None:
+        module = load_reconstruct_gpu_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_dir = Path(tmp)
+            metadata_dir = scan_dir / "metadata"
+            metadata_dir.mkdir()
+            (metadata_dir / "frames.json").write_text("[]")
+            (metadata_dir / "session.json").write_text("{}")
+            (metadata_dir / "manifest.json").write_text(json.dumps({"reconstruction_scope": {
+                "schema_version": "1.0", "mode": "image_masks", "mask_space": "capture_image",
+                "mask_convention": "white_keep_black_exclude", "mask_count": 1,
+            }}))
+            with self.assertRaisesRegex(ValueError, "does not yet support capture masks"):
+                module.group_images_by_resolution(scan_dir)
+            self.assertFalse((scan_dir / "images").exists())
+
+    def test_gpu_runner_rejects_explicit_masks_before_preparing_workspace(self) -> None:
+        module = load_reconstruct_gpu_module()
+        with patch.object(sys, "argv", ["reconstruct_gpu.py", "unused.zip", "--camera-sharing",
+                                        "per-folder", "--use-masks"]), \
+             patch.object(module, "prepare_scan_source") as prepare, \
+             self.assertRaises(SystemExit) as error:
+            module.main()
+        self.assertEqual(error.exception.code, 2)
+        prepare.assert_not_called()
 
     def test_colmap_masks_are_forwarded_only_to_configured_stages(self) -> None:
         from app.colmap_runner import ColmapConfig

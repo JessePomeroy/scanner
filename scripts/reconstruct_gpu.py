@@ -33,7 +33,9 @@ from app.mask_processor import validate_openmvs_masks  # noqa: E402
 from app.mask_undistorter import convert_capture_mask_set  # noqa: E402
 from app.report_writer import object_scan_summary, write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
+from app.scan_metadata import load_scan_metadata  # noqa: E402
 from app.scan_validator import find_scan_root  # noqa: E402
+from PIL import Image  # noqa: E402
 
 
 def main() -> None:
@@ -51,6 +53,15 @@ def main() -> None:
         help="Require a complete OpenMVS-ready mask set under dense/masks.",
     )
     parser.add_argument("--matcher", default="exhaustive_matcher")
+    parser.add_argument(
+        "--camera-sharing",
+        choices=("single", "per-folder"),
+        default="single",
+        help=(
+            "Share one COLMAP camera across every image, or one camera per "
+            "image subfolder for grouped mixed-resolution captures."
+        ),
+    )
     parser.add_argument("--skip-dense", action="store_true")
     parser.add_argument("--skip-openmvs", action="store_true")
     parser.add_argument(
@@ -73,6 +84,8 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true", help="Print and report commands without executing them.")
     args = parser.parse_args()
+    if args.camera_sharing == "per-folder" and args.use_masks:
+        parser.error("per-folder camera sharing does not yet support --use-masks")
     if (
         not args.skip_openmvs
         and args.openmvs_point_cloud_source == "colmap_fused"
@@ -113,10 +126,16 @@ def main() -> None:
             package = validate_and_report_scan(scan_root)
             validation_report = package.validation
 
+    camera_groups = None
+    if args.camera_sharing == "per-folder":
+        camera_groups = group_images_by_resolution(scan_root)
+
     prepare_colmap_output_directories(scan_root, include_dense=not args.skip_dense)
 
     colmap_config = ColmapConfig(
         matcher=args.matcher,
+        single_camera=args.camera_sharing == "single",
+        single_camera_per_folder=args.camera_sharing == "per-folder",
         use_gpu=True,
         geometric_consistency=True,
     )
@@ -161,6 +180,8 @@ def main() -> None:
     attempt = {
         "state": "planned" if args.dry_run else "running",
         "matcher": args.matcher,
+        "camera_sharing": args.camera_sharing,
+        "camera_groups": camera_groups,
         "dry_run": args.dry_run,
         "skip_dense": args.skip_dense,
         "skip_openmvs": args.skip_openmvs,
@@ -273,6 +294,8 @@ def main() -> None:
         "object_scan": object_summary,
         "warnings": package_report.get("warnings", []),
         "commands": commands,
+        "camera_sharing": args.camera_sharing,
+        "camera_groups": camera_groups,
         "openmvs_settings": openmvs_settings,
         "density_budget": density_budget.as_dict() if density_budget is not None else None,
         "mask_validation": mask_validation.as_dict() if mask_validation is not None else None,
@@ -303,6 +326,43 @@ def build_model_converter_command(scan_root: Path, config: ColmapConfig) -> list
         "--output_type",
         "PLY",
     ]
+
+
+def group_images_by_resolution(scan_root: Path) -> dict[str, int]:
+    """Group a validated copied scan by dimensions for per-folder intrinsics."""
+    scan_root = scan_root.resolve()
+    images_dir = scan_root / "images"
+    metadata = load_scan_metadata(scan_root / "metadata")
+    if metadata.reconstruction_scope is not None:
+        raise ValueError("Per-folder camera grouping does not yet support capture masks")
+    planned_moves: list[tuple[Path, Path]] = []
+    group_counts: dict[str, int] = {}
+
+    for frame in metadata.frames:
+        source = (scan_root / frame.image).resolve()
+        if source.parent != images_dir:
+            raise ValueError(
+                "Per-folder camera grouping requires flat validated image paths"
+            )
+        with Image.open(source) as image:
+            actual_resolution = image.size
+        if actual_resolution != frame.resolution:
+            raise ValueError(
+                f"Image resolution mismatch for {frame.image}: "
+                f"metadata={frame.resolution}, actual={actual_resolution}"
+            )
+        group = f"{actual_resolution[0]}x{actual_resolution[1]}"
+        destination = images_dir / group / source.name
+        if destination.exists():
+            raise FileExistsError(f"Camera-group destination exists: {destination}")
+        planned_moves.append((source, destination))
+        group_counts[group] = group_counts.get(group, 0) + 1
+
+    for source, destination in planned_moves:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
+
+    return dict(sorted(group_counts.items()))
 
 
 def run_command(

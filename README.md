@@ -221,9 +221,21 @@ For the explicit recovery path that meshes COLMAP's fused cloud instead, use:
 ```bash
 python3 scripts/reconstruct_gpu.py scan.zip \
   --output-root ~/ScannerOutputs \
+  --matcher sequential_matcher \
+  --camera-sharing per-folder \
   --openmvs-point-cloud-source colmap_fused \
   --scope-mode unbounded
 ```
+
+Use `--camera-sharing per-folder` for packages that mix capture resolutions.
+After validating the copied workspace, the runner groups images by dimensions
+and gives each group its own shared COLMAP intrinsics. The original ZIP remains
+unchanged. A single shared camera cannot represent images with different pixel
+dimensions; the default `single` mode remains appropriate for uniform inputs.
+Grouping is currently limited to unmasked captures: capture masks and
+`--use-masks` fail closed until their paths can be remapped together. Grouped
+files are a derived COLMAP workspace; the copied capture metadata retains the
+original image paths and is not a repackaged scan for export.
 
 `InterfaceCOLMAP` imports COLMAP's `dense/fused.ply` as the view-aware
 `dense/scene.ply`; this option skips `DensifyPointCloud` and passes `scene.ply`

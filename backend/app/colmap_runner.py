@@ -13,6 +13,7 @@ class ColmapConfig:
     executable: str = "colmap"
     matcher: str = "sequential_matcher"
     single_camera: bool = True
+    single_camera_per_folder: bool = False
     use_gpu: bool = True
     geometric_consistency: bool = True
     feature_mask_path: Path | None = None
@@ -32,6 +33,8 @@ def build_colmap_commands(scan_dir: Path, config: ColmapConfig | None = None) ->
 def build_colmap_sparse_commands(scan_dir: Path, config: ColmapConfig | None = None) -> list[list[str]]:
     """Build the COLMAP sparse reconstruction command sequence."""
     config = config or ColmapConfig()
+    if config.single_camera and config.single_camera_per_folder:
+        raise ValueError("COLMAP camera sharing cannot be both single and per-folder")
     image_path = scan_dir / "images"
     database_path = scan_dir / "database.db"
     sparse_path = scan_dir / "sparse"
@@ -45,6 +48,8 @@ def build_colmap_sparse_commands(scan_dir: Path, config: ColmapConfig | None = N
         str(image_path),
         "--ImageReader.single_camera",
         "1" if config.single_camera else "0",
+        "--ImageReader.single_camera_per_folder",
+        "1" if config.single_camera_per_folder else "0",
         "--FeatureExtraction.use_gpu",
         "1" if config.use_gpu else "0",
     ]

@@ -392,9 +392,21 @@ The default remains `--openmvs-point-cloud-source openmvs_densify` with
 ```bash
 python3 scripts/reconstruct_gpu.py scan.zip \
   --output-root ~/ScannerOutputs \
+  --matcher sequential_matcher \
+  --camera-sharing per-folder \
   --openmvs-point-cloud-source colmap_fused \
   --scope-mode unbounded
 ```
+
+When a validated scan mixes image resolutions, `--camera-sharing per-folder`
+groups the copied images by dimensions and shares one COLMAP camera within each
+group. This preserves the original ZIP while avoiding invalid single-camera
+dimension assumptions. Uniform-resolution scans continue to use the default
+`--camera-sharing single` mode.
+Per-folder grouping currently rejects capture masks and `--use-masks`; mask
+path remapping is not implemented. Treat the grouped directory as a derived
+COLMAP workspace, not a new exportable scan package: its copied capture metadata
+still records the original image paths.
 
 In this mode `InterfaceCOLMAP` imports `dense/fused.ply` and writes the
 view-aware `dense/scene.ply`. The runner skips `DensifyPointCloud`, applies the
