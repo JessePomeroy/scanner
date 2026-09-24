@@ -10,6 +10,13 @@ The panel uses the sage/green/rust/blue/teal Scanner palette with light surfaces
 and dark supporting text for contrast. Qt still draws the native controls,
 keyboard focus, menus, and scrolling; no replacement widget theme is installed.
 
+The main view fits its 520×600 window at the workstation's normal system font,
+including every action button. Run selection and related metrics share rows.
+Opening the checklist or recent log grows the window to fit the extra content;
+closing them returns it to the compact height. A scroll fallback preserves access
+on smaller screens, manually shortened windows, or with larger system fonts.
+The bounded log viewer retains its own scrolling for long logs.
+
 ```zsh
 cd /path/to/scanner
 /usr/bin/python -m desktop.scanner_panel \
@@ -28,7 +35,7 @@ cd /path/to/scanner
 - **Copy diagnostic summary** copies status, stage, timing, memory, error, and
   evidence paths. Full raw logs and commands are omitted; common credential
   patterns in errors are redacted. Local paths remain: review before sharing.
-- **Show completion checklist** separates process success from OBJ/material/
+- **Checklist** separates process success from OBJ/material/
   texture file presence and BLEND/GLB presence in the output folder. This is not
   pixel decoding, Blender import validation, or visual approval. Partial output
   is not checked until the selected attempt succeeds.
