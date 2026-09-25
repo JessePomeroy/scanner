@@ -176,6 +176,7 @@ def prepare_asset(options: BlenderAssetOptions) -> None:
     )
 
     clear_scene(bpy)
+    print('SCANNER_STAGE: Importing mesh', flush=True)
     imported_objects = import_asset(
         bpy,
         options.input_path,
@@ -206,8 +207,10 @@ def prepare_asset(options: BlenderAssetOptions) -> None:
         )
     if options.texture_dir is not None:
         relink_textures(bpy, options.texture_dir)
+    print('SCANNER_STAGE: Embedding textures', flush=True)
     pack_textures(bpy)
 
+    print('SCANNER_STAGE: Saving Blender file', flush=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(options.output_path))
     if options.export_glb is not None:
         if cleanup_recipe is not None:

@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import sqlite3
+import struct
 import subprocess
-from typing import Callable
+import tempfile
+from typing import Callable, NotRequired, TypedDict
+
+from PIL import Image
+
+from app.scan_validator import SUPPORTED_IMAGE_SUFFIXES
+from app.heavy_work import guarded, native_kwargs
 
 
 @dataclass(frozen=True)
@@ -20,9 +29,21 @@ class ColmapConfig:
     stereo_fusion_mask_path: Path | None = None
 
 
+class ColmapIntakeReport(TypedDict):
+    schema_version: str
+    status: str
+    input_image_count: int
+    imported_image_count: int
+    camera_count: int
+    resolution_groups: dict[str, int]
+    camera_sharing: NotRequired[str]
+    registered_image_count: NotRequired[int]
+    unregistered_image_count: NotRequired[int]
+
+
 def run_command(command: list[str], cwd: Path | None = None) -> None:
     """Run a reconstruction command and fail on non-zero exit."""
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, check=True, **native_kwargs())
 
 
 def build_colmap_commands(scan_dir: Path, config: ColmapConfig | None = None) -> list[list[str]]:
@@ -152,17 +173,173 @@ def prepare_colmap_output_directories(
         (scan_dir / "dense").mkdir(parents=True, exist_ok=True)
 
 
+@guarded('COLMAP sparse reconstruction')
 def run_colmap_sparse_pipeline(scan_dir: Path, config: ColmapConfig | None = None) -> Path:
     """Run feature extraction, matching, and sparse mapping."""
     scan_dir = scan_dir.resolve()
+    config = config or ColmapConfig()
     prepare_colmap_output_directories(scan_dir, include_dense=False)
 
-    for command in build_colmap_sparse_commands(scan_dir, config):
+    commands, groups = prepare_colmap_sparse_execution(scan_dir, config)
+    for command in commands[:-2]:
         run_command(command)
-
+    record_colmap_intake(scan_dir, groups, config)
+    for command in commands[-2:]:
+        run_command(command)
+    record_colmap_intake(scan_dir, groups, config, include_registration=True)
     return scan_dir / "sparse" / "0"
 
 
+def prepare_colmap_sparse_execution(
+    scan_dir: Path, config: ColmapConfig
+) -> tuple[list[list[str]], dict[str, list[str]]]:
+    """Prepare replayable feature batches shared by API and GPU execution plans."""
+    feature, matcher, mapper = build_colmap_sparse_commands(scan_dir, config)
+    groups = inspect_colmap_images(scan_dir)
+    # Separate reader instances give each resolution its own shared camera.
+    # Image names remain unchanged, preserving masks and sequential matching's
+    # filename order; folder regrouping would disrupt both contracts.
+    features = []
+    if config.single_camera and len(groups) > 1:
+        list_directory = scan_dir / "metadata"
+        if list_directory.is_symlink():
+            raise ValueError("COLMAP image-list directory must not be a symbolic link")
+        list_directory.mkdir(parents=True, exist_ok=True)
+        for resolution, names in groups.items():
+            image_list = list_directory / f"colmap_images_{resolution}.txt"
+            content = "\n".join(names) + "\n"
+            try:
+                with image_list.open("x", encoding="utf-8") as file:
+                    file.write(content)
+            except FileExistsError:
+                if image_list.is_symlink() or image_list.read_text(encoding="utf-8") != content:
+                    raise ValueError(f"Conflicting COLMAP image list: {image_list}")
+            features.append(feature + ["--image_list_path", str(image_list)])
+    else:
+        features.append(feature)
+    return [*features, matcher, mapper], groups
+
+
+def record_colmap_intake(
+    scan_dir: Path, groups: dict[str, list[str]], config: ColmapConfig,
+    *, include_registration: bool = False,
+) -> ColmapIntakeReport:
+    """Check native acceptance at the same stage boundary in every runner."""
+    intake = verify_colmap_image_intake(scan_dir, groups)
+    intake["camera_sharing"] = (
+        "per_resolution" if config.single_camera and len(groups) > 1
+        else "single" if config.single_camera
+        else "per_folder" if config.single_camera_per_folder
+        else "native_default"
+    )
+    if include_registration:
+        model = scan_dir / "sparse" / "0" / "images.bin"
+        try:
+            with model.open("rb") as file:
+                registered = struct.unpack("<Q", file.read(8))[0]
+        except (OSError, struct.error) as error:
+            raise ValueError("COLMAP did not produce a readable registered-image model") from error
+        if registered < 2 or registered > intake["input_image_count"]:
+            raise ValueError(f"Invalid COLMAP registered-image count: {registered}")
+        intake["registered_image_count"] = registered
+        intake["unregistered_image_count"] = intake["input_image_count"] - registered
+        intake["status"] = "checks_passed" if registered == intake["input_image_count"] else "needs_review"
+    _write_intake_report(scan_dir, intake)
+    return intake
+
+
+def inspect_colmap_images(scan_dir: Path) -> dict[str, list[str]]:
+    """Decode supported inputs and group equal pixel dimensions without moving files."""
+    images = scan_dir / "images"
+    groups: dict[str, list[str]] = {}
+    for path in sorted(images.rglob("*")):
+        if path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES or not path.is_file():
+            continue
+        relative = path.relative_to(images)
+        if any((images / Path(*relative.parts[:i])).is_symlink() for i in range(1, len(relative.parts) + 1)):
+            raise ValueError(f"COLMAP input must not be a symbolic link: {relative}")
+        name = relative.as_posix()
+        if "\n" in name or "\r" in name:
+            raise ValueError("COLMAP image names cannot contain line breaks")
+        try:
+            with Image.open(path) as image:
+                image.load()
+                width, height = image.size
+        except OSError as error:
+            raise ValueError(f"Unable to decode COLMAP input: {name}") from error
+        groups.setdefault(f"{width}x{height}", []).append(name)
+    if not groups:
+        raise ValueError("No decodable COLMAP input images")
+    return groups
+
+
+def verify_colmap_image_intake(
+    scan_dir: Path, groups: dict[str, list[str]]
+) -> ColmapIntakeReport:
+    """Reject native exit-zero skips before matching or expensive reconstruction."""
+    expected = {name for names in groups.values() for name in names}
+    database = scan_dir / "database.db"
+    if database.is_symlink():
+        raise ValueError("COLMAP database must not be a symbolic link")
+    try:
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            rows = connection.execute("SELECT name, camera_id FROM images").fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise ValueError("Unable to verify COLMAP image intake") from error
+    imported = {name for name, _ in rows}
+    missing, unexpected = sorted(expected - imported), sorted(imported - expected)
+    if missing or unexpected or len(rows) != len(expected):
+        raise ValueError(
+            f"COLMAP image intake mismatch: missing {missing[:8]}, unexpected {unexpected[:8]} "
+            f"({len(imported)}/{len(expected)} imported)"
+        )
+    try:
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            camera_rows = connection.execute(
+                "SELECT images.name, cameras.width, cameras.height FROM images "
+                "JOIN cameras ON images.camera_id = cameras.camera_id"
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise ValueError("Unable to verify COLMAP input camera dimensions") from error
+    expected_dimensions = {
+        name: tuple(int(dimension) for dimension in resolution.split("x"))
+        for resolution, names in groups.items() for name in names
+    }
+    if len(camera_rows) != len(expected) or any(
+        expected_dimensions[name] != (width, height) for name, width, height in camera_rows
+    ):
+        raise ValueError("COLMAP camera dimensions do not match the decoded inputs")
+    return {
+        "schema_version": "1.0",
+        "status": "imported",
+        "input_image_count": len(expected),
+        "imported_image_count": len(rows),
+        "camera_count": len({camera for _, camera in rows}),
+        "resolution_groups": {key: len(names) for key, names in groups.items()},
+    }
+
+
+def _write_intake_report(scan_dir: Path, report: ColmapIntakeReport) -> None:
+    destination = scan_dir / "metadata" / "colmap_intake.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent, delete=False) as file:
+        temporary = Path(file.name)
+        try:
+            json.dump(report, file, indent=2, sort_keys=True)
+            file.write("\n")
+            file.close()
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+@guarded('COLMAP dense reconstruction')
 def run_colmap_dense_pipeline(
     scan_dir: Path,
     config: ColmapConfig | None = None,
@@ -181,6 +358,7 @@ def run_colmap_dense_pipeline(
     return scan_dir / "dense" / "fused.ply"
 
 
+@guarded('COLMAP sparse export')
 def export_sparse_point_cloud(scan_dir: Path, config: ColmapConfig | None = None) -> Path:
     """Export the sparse COLMAP model to a PLY point cloud."""
     config = config or ColmapConfig()
@@ -204,6 +382,7 @@ def export_sparse_point_cloud(scan_dir: Path, config: ColmapConfig | None = None
     return output_path
 
 
+@guarded('COLMAP reconstruction')
 def run_colmap_pipeline(
     scan_dir: Path,
     config: ColmapConfig | None = None,

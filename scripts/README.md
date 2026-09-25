@@ -22,6 +22,12 @@ Current entry points:
   `--openmvs-point-cloud-source colmap_fused --scope-mode unbounded` mode skips
   `DensifyPointCloud` and meshes `InterfaceCOLMAP`'s `scene.ply`. That mode
   fails closed for masks, automatic ROI, or a reviewed region.
+  Default camera sharing batches decoded resolutions without renaming images
+  or mask paths. Dry runs preserve the batch lists; real runs check exact
+  COLMAP intake before matching and record registered-image coverage. After
+  texturing, `dense/texture_quality.json` screens decoded, face-used texture
+  pixels; successful commands alone do not establish a usable appearance.
+  Explicit legacy `--camera-sharing per-folder` still rejects masks.
 - `plan_reconstruction_backend.py`: write inspectable backend command plans.
   It exposes the same explicit COLMAP-fused OpenMVS source option as the native
   workstation runner without changing the default plan.

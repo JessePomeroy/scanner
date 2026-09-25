@@ -22,9 +22,14 @@ from app.mask_authoring import (
     MaskAuthoringPoint,
     MaskAuthoringRegion,
     load_mask_authoring_plan,
-    representative_frame_indices,
 )
 from app.scan_metadata import FrameMetadata
+
+
+_REVIEW_SAMPLE_COUNT = 5
+_LOW_CONFIDENCE = 0.5
+_ABRUPT_AREA_RATIO = 1.75
+_ABRUPT_CENTROID_DISTANCE = 0.18
 
 
 class MaskGenerationError(RuntimeError):
@@ -134,8 +139,6 @@ class PolygonInterpolationMaskGenerator:
         staging = Path(tempfile.mkdtemp(dir=masks_root, prefix=".proposed."))
         review_staging = Path(tempfile.mkdtemp(dir=masks_root, prefix=".review."))
         generated: list[GeneratedMaskFrame] = []
-        review_indices = representative_frame_indices(len(frames))
-        review_index_set = set(review_indices)
         review_masks: list[str] = []
         try:
             for index, frame in enumerate(frames):
@@ -147,10 +150,6 @@ class PolygonInterpolationMaskGenerator:
                     regions,
                     frame.resolution,
                 )
-                if index in review_index_set:
-                    review_output = review_staging / output_name
-                    _write_review_preview(scan_root / frame.image, output, review_output)
-                    review_masks.append(f"masks/review/{output_name}")
                 generated.append(
                     GeneratedMaskFrame(
                         frame_id=frame.id,
@@ -165,6 +164,16 @@ class PolygonInterpolationMaskGenerator:
                     )
                 )
             blocking_issues, warnings = _evaluate_quality(generated)
+            review_indices = _select_review_indices(generated)
+            for index in review_indices:
+                frame = generated[index]
+                output_name = Path(frame.mask).name
+                _write_review_preview(
+                    scan_root / frame.image,
+                    staging / output_name,
+                    review_staging / output_name,
+                )
+                review_masks.append(f"masks/review/{output_name}")
             report_path = scan_root / "metadata" / "mask_generation.json"
             result = MaskGenerationResult(
                 state="needs_correction" if blocking_issues else "awaiting_review",
@@ -403,7 +412,7 @@ def _evaluate_quality(
                 "frame_id": frame.frame_id,
                 "message": "The proposal keeps less than 0.5% of the frame.",
             })
-        if frame.confidence < 0.5:
+        if frame.confidence < _LOW_CONFIDENCE:
             warnings.append({
                 "code": "low_generator_confidence",
                 "frame_id": frame.frame_id,
@@ -413,7 +422,7 @@ def _evaluate_quality(
     for previous, current in zip(frames, frames[1:]):
         smaller = min(previous.keep_fraction, current.keep_fraction)
         larger = max(previous.keep_fraction, current.keep_fraction)
-        if smaller > 0 and larger / smaller > 1.75:
+        if smaller > 0 and larger / smaller > _ABRUPT_AREA_RATIO:
             blocking.append({
                 "code": "abrupt_area_change",
                 "frame_ids": [previous.frame_id, current.frame_id],
@@ -421,7 +430,7 @@ def _evaluate_quality(
             })
         if previous.centroid is not None and current.centroid is not None:
             distance = math.dist(previous.centroid, current.centroid)
-            if distance > 0.18:
+            if distance > _ABRUPT_CENTROID_DISTANCE:
                 blocking.append({
                     "code": "abrupt_centroid_change",
                     "frame_ids": [previous.frame_id, current.frame_id],
@@ -429,6 +438,71 @@ def _evaluate_quality(
                     "message": "The kept-region center jumps abruptly between adjacent frames.",
                 })
     return tuple(blocking), tuple(warnings)
+
+
+def _select_review_indices(frames: list[GeneratedMaskFrame]) -> tuple[int, ...]:
+    """Show propagation evidence, not another tour of the authored keyframes.
+
+    Confidence and geometric changes are generator heuristics, not evidence of
+    subject alignment. Reserve at most two slots for their strongest signals;
+    use the remaining slots to inspect gaps between previously seen frames.
+    """
+    count = len(frames)
+    if count <= _REVIEW_SAMPLE_COUNT:
+        return tuple(range(count))
+    authored = {index for index, frame in enumerate(frames) if frame.method == "authored"}
+    generated = set(range(count)) - authored
+    selected: set[int] = set()
+
+    def distance_from_seen(index: int) -> int:
+        seen = selected | (authored if index in generated else set())
+        return min((abs(index - other) for other in seen), default=count)
+
+    low_confidence = {
+        index for index in generated if frames[index].confidence < _LOW_CONFIDENCE
+    }
+    if low_confidence:
+        selected.add(min(
+            low_confidence,
+            key=lambda index: (frames[index].confidence, -distance_from_seen(index), index),
+        ))
+
+    # Match the existing area/centroid quality thresholds. A score above one
+    # reaches a blocking threshold; it may implicate an authored endpoint too.
+    changes = [math.inf if frame.keep_fraction <= 0 else 0.0 for frame in frames]
+    for index in range(1, count):
+        previous, current = frames[index - 1:index + 1]
+        smaller = min(previous.keep_fraction, current.keep_fraction)
+        larger = max(previous.keep_fraction, current.keep_fraction)
+        area_change = (
+            (larger / smaller - 1) / (_ABRUPT_AREA_RATIO - 1)
+            if smaller > 0 else (math.inf if larger > 0 else 0.0)
+        )
+        center_change = (
+            math.dist(previous.centroid, current.centroid) / _ABRUPT_CENTROID_DISTANCE
+            if previous.centroid is not None and current.centroid is not None else 0.0
+        )
+        changes[index] = max(changes[index], area_change, center_change)
+    change_candidates = {
+        index for index in range(count)
+        if index not in selected and changes[index] > 0
+        and (index in generated or changes[index] > 1)
+    }
+    if change_candidates:
+        selected.add(max(
+            change_candidates,
+            key=lambda index: (
+                frames[index].keep_fraction <= 0,
+                changes[index],
+                distance_from_seen(index),
+                -index,
+            ),
+        ))
+
+    while len(selected) < _REVIEW_SAMPLE_COUNT:
+        candidates = generated - selected or set(range(count)) - selected
+        selected.add(max(candidates, key=lambda index: (distance_from_seen(index), -index)))
+    return tuple(sorted(selected))
 
 
 def _publish_generation(

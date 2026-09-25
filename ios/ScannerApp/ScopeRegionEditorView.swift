@@ -56,6 +56,7 @@ struct ScopeRegionEditorView: View {
     @State private var cameraPreview: SparseCameraPreview?
     @State private var cameraDownload: DownloadedReconstructionArtifact?
     @State private var cameraErrorMessage: String?
+    @State private var isSubmitting = false
 
     init(
         download: DownloadedReconstructionArtifact,
@@ -80,26 +81,29 @@ struct ScopeRegionEditorView: View {
     var body: some View {
         NavigationStack {
             content
+                .disabled(isBusy)
                 .navigationTitle("Reconstruction Region")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Done", action: onDone)
+                            .disabled(isBusy)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button {
-                            save()
+                            save(continueProcessing: true)
                         } label: {
-                            if scopeStore.isSaving || scopeStore.isResuming {
+                            if isBusy {
                                 ProgressView()
                             } else {
                                 Text("Save & Continue")
                             }
                         }
-                        .disabled(draft == nil || scopeStore.isSaving || scopeStore.isResuming)
+                        .disabled(draft == nil || isBusy)
                     }
                 }
         }
+        .interactiveDismissDisabled(isBusy)
         .task(id: reloadSequence) {
             await previewStore.load(fileURL: download.fileURL)
             await scopeStore.load(scanID: scanID, baseURLString: baseURLString)
@@ -164,7 +168,7 @@ struct ScopeRegionEditorView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Keep only what belongs in the finished reconstruction inside the cyan box.")
                         .font(.subheadline)
-                    Text("Saving records this region. Processing stays paused until the reconstruction-resume step is available.")
+                    Text("Save Region keeps processing paused. Save & Continue saves the region and resumes reconstruction.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let cameraPreview {
@@ -249,10 +253,10 @@ struct ScopeRegionEditorView: View {
                     .buttonStyle(.bordered)
 
                     Button("Save Region") {
-                        save()
+                        save(continueProcessing: false)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(scopeStore.isSaving)
+                    .disabled(isBusy)
                 }
             }
             .padding()
@@ -348,16 +352,22 @@ struct ScopeRegionEditorView: View {
         }
     }
 
-    private func save() {
-        guard let draft,
+    private var isBusy: Bool {
+        isSubmitting || scopeStore.isSaving || scopeStore.isResuming
+    }
+
+    private func save(continueProcessing: Bool) {
+        guard !isBusy, let draft,
               let region = try? draft.region(revision: nextRevision) else { return }
+        isSubmitting = true
         Task {
+            defer { isSubmitting = false }
             let saved = await scopeStore.save(
                 region,
                 scanID: scanID,
                 baseURLString: baseURLString
             )
-            if saved,
+            if saved, continueProcessing,
                await scopeStore.resume(scanID: scanID, baseURLString: baseURLString) {
                 onDone()
             }

@@ -105,6 +105,19 @@ Then enter `http://<workstation-lan-ip>:8000` in the app's `Jobs` tab. The
 backend currently has no authentication, so do not expose this listener to the
 public internet or an untrusted network.
 
+Updated API, reconstruction CLI, and desktop workers share one fail-fast heavy-job
+admission lock per OS user. A busy initial reconstruction fails with a clear
+message; a busy reviewed continuation stays at its checkpoint for manual retry.
+There is no automatic queue. Native workers inherit the lock so a surviving
+child still excludes competing jobs if its Python supervisor exits. Existing
+desktop memory limits remain separate: this guard cannot limit another app's RAM.
+
+The persistent lock is `~/.local/state/scanner/heavy-work.lock`; do not delete it
+to clear a busy status. `SCANNER_HEAVY_LOCK` is for tests or explicitly coordinated
+deployment. All cooperating launchers must share its inode and user; raw native
+commands, other users, and unconfigured containers are not automatically covered.
+Docker/host coordination requires an explicitly shared lock and matching UID.
+
 Upload a scan package in validation-only mode:
 
 ```bash
@@ -120,6 +133,12 @@ cancellation remove partial or newly published files and mark the job failed
 instead of leaving a truncated package that looks complete. Job-state failure
 recording is best-effort and never replaces the original storage error or
 cancellation.
+
+Validation-only extraction, package checks, and final placement also run off the
+event loop. Unexpected validation failures mark the job failed and preserve its
+partial workspace; a failed preservation move does not hide the original error.
+Existing processing, completed, or failed workspaces are never replaced. After
+the ZIP is stored, validation can finish even if its HTTP caller disconnects.
 
 Run reconstruction mode when COLMAP is installed:
 
@@ -208,9 +227,14 @@ scripts/wsl/setup_gpu_reconstruction.sh
 python3 scripts/wsl/check_reconstruction_env.py
 # After the pinned COLMAP/OpenMVS and neural environments are installed:
 python3 scripts/wsl/check_reconstruction_env.py --strict
-python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs --dry-run
-python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
+python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerPlans/gpu-preview-001 --dry-run
+python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs/gpu-run-001
 ```
+
+Dry runs also prepare a workspace. Keep their output separate from real runs;
+the runner refuses to replace an existing scan directory. Use a new output-root
+name for each repeat attempt, and keep prior results until you choose to remove
+them yourself.
 
 The native CachyOS/RTX 3070 toolchain has passed this install and visibility
 gate and completed CUDA COLMAP on the frozen iPhone benchmark. Strict mode does
@@ -222,22 +246,27 @@ For the explicit recovery path that meshes COLMAP's fused cloud instead, use:
 
 ```bash
 python3 scripts/reconstruct_gpu.py scan.zip \
-  --output-root ~/ScannerOutputs \
+  --output-root ~/ScannerOutputs/fused-run-001 \
   --matcher sequential_matcher \
-  --camera-sharing per-folder \
   --openmvs-point-cloud-source colmap_fused \
   --scope-mode unbounded
 ```
 
-Use `--camera-sharing per-folder` for packages that mix capture resolutions.
-After validating the copied workspace, the runner groups images by dimensions
-and gives each group its own shared COLMAP intrinsics. The original ZIP remains
-unchanged. A single shared camera cannot represent images with different pixel
-dimensions; the default `single` mode remains appropriate for uniform inputs.
-Grouping is currently limited to unmasked captures: capture masks and
-`--use-masks` fail closed until their paths can be remapped together. Grouped
-files are a derived COLMAP workspace; the copied capture metadata retains the
-original image paths and is not a repackaged scan for export.
+The backend, local runner, and GPU runner automatically handle mixed capture
+resolutions: they decode images, extract features in one batch per resolution,
+and share a camera within each batch. Image names, mask paths, and sequential
+matching order remain unchanged. The GPU option retains the name
+`--camera-sharing single`, but mixed inputs report the effective policy as
+`per_resolution`. A dry run records replayable image lists without running
+COLMAP. Real runs verify that every input reached the database before matching,
+then record registration counts in `metadata/colmap_intake.json`; missing
+registered views are flagged for review, not silently treated as full coverage.
+
+Explicit `--camera-sharing per-folder` remains a legacy alternative that moves
+copied images into dimension subfolders. Only this path rejects capture masks
+and `--use-masks`, because mask-path remapping is not implemented. Its derived
+workspace retains original paths in capture metadata and is not an exportable
+scan package. Neither mode modifies the original ZIP.
 
 `InterfaceCOLMAP` imports COLMAP's `dense/fused.ply` as the view-aware
 `dense/scene.ply`; this option skips `DensifyPointCloud` and passes `scene.ply`
@@ -308,6 +337,13 @@ manifest-published outputs, and never exposes raw server paths as download
 instructions. File responses stream from the already-authorized no-follow file
 descriptor rather than reopening a validated pathname.
 
+For a textured backend result, download `textured_bundle` (`textured_mesh.zip`)
+instead of sharing the OBJ alone. The ZIP contains the OBJ, its referenced MTL
+and texture images, and available `texture_quality.json` evidence. It preserves
+relative material paths and excludes unrelated files. The manifest also exposes
+available texture-quality and COLMAP-intake reports separately. Packaging is not
+a Blender conversion or visual approval; the desktop `.blend` step is separate.
+
 ## Local Scripts
 
 Inspect an extracted scan:
@@ -319,8 +355,13 @@ python3 scripts/inspect_scan.py path/to/scan_dir
 Validate and optionally run reconstruction:
 
 ```bash
-python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap
+python3 scripts/reconstruct_local.py scan.zip --work-dir ~/ScannerOutputs/local-sparse-001 --run-colmap
 ```
+
+Reconstruction requires `--work-dir` so results survive script exit. Choose a
+new directory and do not create it beforehand: preparation claims it
+exclusively and will not replace existing work. Validation without reconstruction
+can omit `--work-dir` and use temporary storage.
 
 Validation writes `metadata/scan_report.json` with capture-quality diagnostics.
 It also validates the typed frame/session/video metadata contract, exact flat
@@ -340,7 +381,7 @@ for ordered iPhone scans. Use exhaustive matching only when you want a slower
 quality check:
 
 ```bash
-python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap --matcher exhaustive_matcher
+python3 scripts/reconstruct_local.py scan.zip --work-dir ~/ScannerOutputs/local-exhaustive-001 --run-colmap --matcher exhaustive_matcher
 ```
 
 On macOS/Homebrew, COLMAP can run sparse reconstruction without CUDA. Dense
@@ -348,7 +389,7 @@ stereo may require a CUDA-capable build and GPU. Use `--dense` only when that
 toolchain is available:
 
 ```bash
-python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scan-work --run-colmap --dense
+python3 scripts/reconstruct_local.py scan.zip --work-dir ~/ScannerOutputs/local-dense-001 --run-colmap --dense
 ```
 
 For object scans, inspect the crop metadata and get the manual crop command:

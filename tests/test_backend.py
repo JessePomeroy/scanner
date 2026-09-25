@@ -133,6 +133,11 @@ def _grayscale_png(width: int, height: int, *, value: int = 255) -> bytes:
     return output.getvalue()
 
 
+def setUpModule():
+    from heavy_work_fixture import isolated_heavy_work
+    unittest.enterModuleContext(isolated_heavy_work())
+
+
 class RecordingAsyncReader:
     def __init__(
         self,
@@ -1878,6 +1883,9 @@ class BackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scan_dir = self._write_scan(root)
+            Image.new("RGB", (1920, 1080), color=(120, 100, 80)).save(
+                scan_dir / "images" / "frame_000001.jpg"
+            )
             output_root = root / "outputs"
             result = subprocess.run(
                 [
@@ -1944,6 +1952,7 @@ class BackendTests(unittest.TestCase):
         with (
             patch("app.openmvs_runner.run_command") as run_command_mock,
             patch("app.openmvs_runner.inspect_openmvs_dense_cloud") as inspect_mock,
+            patch("app.openmvs_runner.write_texture_report") as texture_check,
         ):
             result = run_openmvs_pipeline(scan_dir)
 
@@ -1952,6 +1961,7 @@ class BackendTests(unittest.TestCase):
         for call in run_command_mock.call_args_list:
             self.assertEqual(call.kwargs["cwd"], scan_dir / "dense")
         inspect_mock.assert_called_once()
+        texture_check.assert_called_once_with(scan_dir / 'dense/scene_textured.obj', scan_dir / 'dense/texture_quality.json')
 
     def test_openmvs_fused_cloud_pipeline_checks_budget_before_meshing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1971,6 +1981,7 @@ class BackendTests(unittest.TestCase):
             )
             with (
                 patch("app.openmvs_runner.run_command", side_effect=record_command),
+                patch("app.openmvs_runner.write_texture_report", side_effect=lambda *_: events.append('inspect_texture')),
                 patch(
                     "app.openmvs_runner.inspect_openmvs_dense_cloud",
                     side_effect=record_inspection,
@@ -1985,6 +1996,7 @@ class BackendTests(unittest.TestCase):
                 "inspect_mesh_input",
                 "ReconstructMesh",
                 "TextureMesh",
+                "inspect_texture",
             ],
         )
 
@@ -4344,7 +4356,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(payload["inputs"]["video_count"], 0)
         self.assertEqual(payload["commands"], [])
 
-    def test_neural_backend_cli_resets_stale_zip_workspace(self) -> None:
+    def test_neural_backend_cli_refuses_stale_zip_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             source_root = tmp_path / "source"
@@ -4401,16 +4413,20 @@ class BackendTests(unittest.TestCase):
                     "--work-dir",
                     str(work_dir),
                 ],
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
             )
             report_path = work_dir / "source" / "scan_test" / "metadata" / "mast3r_slam_neural_plan.json"
             payload = json.loads(report_path.read_text())
 
-        self.assertIn("Videos: 0", second.stdout)
-        self.assertEqual(payload["inputs"]["video_count"], 0)
-        self.assertFalse((work_dir / "source" / "scan_test" / "video" / "scan.mp4").exists())
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("choose a fresh workspace", second.stderr)
+            self.assertEqual(payload["inputs"]["video_count"], 1)
+            self.assertEqual(
+                (work_dir / "source" / "scan_test" / "video" / "scan.mp4").read_bytes(),
+                b"fake mp4",
+            )
 
     def test_neural_backend_cli_wires_gaussian_splat_flags_to_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

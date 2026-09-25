@@ -10,14 +10,20 @@ def validate_selection(run: Path, unit: str) -> tuple[Path, str]:
     run = run.expanduser().resolve()
     if not run.is_dir():
         raise ValueError('Choose an attempt directory containing state.json and plan.json.')
-    read_record(run / 'state.json')
-    read_record(run / 'plan.json')
+    state = read_record(run / 'state.json')
+    plan = read_record(run / 'plan.json')
     if not re.fullmatch(r'scanner-reconstruct-[A-Za-z0-9_-]+\.service', unit):
         raise ValueError('Enter the exact scanner-reconstruct-*.service user unit.')
     result = subprocess.run(['systemctl', '--user', 'show', unit, '--no-pager',
                              '--property=LoadState,ExecStart'], capture_output=True,
                             text=True, timeout=2, check=False)
     values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+    if values.get('LoadState') == 'not-found' and state.get('status') in {'succeeded', 'failed', 'stopped'}:
+        if plan.get('service') not in (None, unit):
+            raise ValueError('Recorded service does not belong to this attempt.')
+        # Inspecting a completed result does not authorize execution. Recovery
+        # separately requires a live, verified service-to-attempt association.
+        return run, unit
     if result.returncode or values.get('LoadState') != 'loaded':
         raise ValueError('Service is unavailable; cannot verify that it belongs to this attempt.')
     invocation = values.get('ExecStart', '')
@@ -49,7 +55,15 @@ def delivery_checks(output: Path | None, status: str) -> tuple[str, ...]:
         blend = any(present(p) for p in output.glob('*.blend'))
         glb = any(present(p) for p in output.glob('*.glb'))
         blender = 'BLEND and GLB present; not validated' if blend and glb else 'BLEND/GLB pair not found in output folder'
-        return processing, f'Texture package: {texture_status}', f'Blender delivery: {blender}', 'Visual quality: manual review required'
+        quality = output / 'texture_quality.json'
+        screening = 'Texture screening: not recorded'
+        if present(quality):
+            report = read_record(quality)
+            if report.get('status') == 'needs_review':
+                screening = 'Texture warning: mostly near-black; inspect appearance'
+            elif report.get('status') == 'checks_passed':
+                screening = 'Texture screening: decoded and sampled; appearance not approved'
+        return processing, f'Texture package: {texture_status}', f'Blender delivery: {blender}', 'Visual quality: manual review required', screening
     except (OSError, UnicodeError, ValueError):
         return processing, 'Texture package: could not inspect output', 'Blender delivery: not verified', 'Visual quality: manual review required'
 

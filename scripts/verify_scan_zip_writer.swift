@@ -24,6 +24,13 @@ struct VerifyScanZipWriter {
         }
 
         let scanDirectory = try writer.createNewScanFolder(scanId: scanId)
+        var duplicateRejected = false
+        do {
+            _ = try writer.createNewScanFolder(scanId: scanId)
+        } catch {
+            duplicateRejected = true
+        }
+        precondition(duplicateRejected, "A new capture must not reuse an existing scan folder")
         let nestedDirectory = scanDirectory
             .appendingPathComponent("metadata", isDirectory: true)
             .appendingPathComponent("nested", isDirectory: true)
@@ -75,6 +82,33 @@ struct VerifyScanZipWriter {
         try largeData.write(to: scanDirectory.appendingPathComponent("video/scan.mov"))
 
         let zipURL = try writer.zipScanFolder(at: scanDirectory)
+        try validateWithPythonZipfile(zipURL)
+        let originalArchive = try Data(contentsOf: zipURL)
+        try Data("updated scanner notes\n".utf8).write(
+            to: nestedDirectory.appendingPathComponent("notes.txt")
+        )
+        let failingPublisher = ScanPackageWriter(rootDirectory: root) { temporary, destination in
+            precondition(fileManager.fileExists(atPath: temporary.path))
+            precondition(destination == zipURL)
+            let existingArchive = try Data(contentsOf: destination)
+            precondition(existingArchive == originalArchive)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+        }
+        var publishRejected = false
+        do {
+            _ = try failingPublisher.zipScanFolder(at: scanDirectory)
+        } catch {
+            publishRejected = true
+        }
+        precondition(publishRejected, "The injected publication failure must reach the caller")
+        let preservedArchive = try Data(contentsOf: zipURL)
+        precondition(preservedArchive == originalArchive, "Failed replacement must preserve the original ZIP")
+        let leftovers = try fileManager.contentsOfDirectory(atPath: root.path)
+        precondition(!leftovers.contains(where: { $0.hasSuffix(".tmp") }))
+
+        _ = try writer.zipScanFolder(at: scanDirectory)
+        let updatedArchive = try Data(contentsOf: zipURL)
+        precondition(updatedArchive != originalArchive, "Successful replacement must publish the new ZIP")
         try validateWithPythonZipfile(zipURL)
         print("Verified scan ZIP: \(zipURL.path)")
     }

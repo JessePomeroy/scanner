@@ -29,7 +29,7 @@ def main() -> None:
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as temporary:
-        scan_root = prepare_scan_source(args.scan, Path(temporary))
+        scan_root = prepare_scan_source(args.scan, Path(temporary) / "source")
         report = validate_and_report_scan(scan_root).validation
 
         print(f"scan_id: {report.scan_id or scan_root.name}")

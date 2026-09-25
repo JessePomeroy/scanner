@@ -11,8 +11,13 @@ Use the MacBook for capture iteration and package validation:
 5. Validate and run sparse COLMAP locally:
 
 ```bash
-python3 scripts/reconstruct_local.py scan.zip --work-dir /tmp/scanner-test --run-colmap
+python3 scripts/reconstruct_local.py scan.zip --work-dir ~/ScannerOutputs/local-sparse-001 --run-colmap
 ```
+
+Use a new `--work-dir` for every attempt and do not create that directory first.
+Preparation refuses existing destinations instead of replacing data. Real
+reconstruction requires this persistent destination; validation-only runs may
+omit it and use temporary storage.
 
 This produces `sparse/sparse_points.ply`. The Homebrew COLMAP build on macOS is
 useful for sparse smoke tests, but not for dense CUDA reconstruction.
@@ -30,6 +35,8 @@ python3 scripts/plan_reconstruction_backend.py scan.zip \
 When `--work-dir` is omitted, the planner writes a persistent workspace under
 `ScannerPlans/<scan_id>/<backend>/`. This folder is ignored by Git because it
 contains extracted scan files and generated reports.
+Repeated planning requires a fresh `--work-dir`; existing plans and inputs are
+never reset or merged with a new package.
 
 Alternate dry-run planners are available for Meshroom/AliceVision research:
 
@@ -208,6 +215,14 @@ recording is best-effort: a job-record write failure cannot mask the original
 storage error or cancellation. The source upload remains owned by FastAPI; the
 storage helper owns only its temporary and destination paths.
 
+After persistence, validation-only extraction, metadata checks, and workspace
+placement run together in a worker thread, not on the HTTP event loop. The
+worker finishes its lifecycle even if the HTTP caller disconnects. Unexpected
+validation errors mark the job failed and preserve any partial extraction under
+`scans/failed/`. If that move fails, the original workspace stays available and
+the failure message includes both errors. Existing processing, completed, and
+failed directories are never erased to make room for another attempt.
+
 ## Backend Job Status
 
 The local FastAPI backend stores job records under `scans/jobs/`. Query a single
@@ -259,11 +274,22 @@ swap between authorization and response streaming. Run the reconstruction
 backend on native Linux because secure artifact serving depends on POSIX
 descriptor semantics.
 
+Backend mesh jobs publish `textured_bundle`, a `dense/textured_mesh.zip` containing
+the OBJ and every referenced MTL/texture file, preserving their relative paths.
+Choose this artifact when sharing a textured result: the standalone
+`textured_mesh` OBJ does not contain its materials. Bundling rejects missing,
+escaping, or linked dependencies and never exposes neighboring files. Available
+`texture_quality.json` is included in the ZIP and published separately, alongside
+`metadata/colmap_intake.json`. A bundle confirms portable dependencies, not
+appearance or a `.blend` conversion; desktop Blender preparation remains a
+separate step.
+
 Reconstruction output paths are rebased when their workspace moves from
 processing to completed storage so future terminal jobs do not retain stale
 processing paths. If the backend restarts after that move but before the final
 job update, recovery rediscovers the known scan report, dense-or-sparse COLMAP
-point cloud, and textured OBJ before restoring a `complete` job. An exporting-
+point cloud, textured OBJ, and any existing bundle/intake/quality reports before
+restoring a `complete` job. An exporting-
 stage job with no safe dense or sparse COLMAP result is marked failed with an
 explicit message while its package directory remains preserved.
 
@@ -365,20 +391,24 @@ GPU flags or translate the two renamed COLMAP 4 flags. It does not run a
 representative OpenMVS CUDA workload and therefore does not prove
 `DensifyPointCloud` runtime success.
 
-6. Create Linux-native workspace folders and dry-run the command plan:
+6. Dry-run the command plan into a separate Linux-native planning workspace:
 
 ```bash
-mkdir -p ~/ScannerOutputs ~/ScannerPlans
 python3 scripts/reconstruct_gpu.py scan.zip \
-  --output-root ~/ScannerOutputs \
+  --output-root ~/ScannerPlans/gpu-preview-001 \
   --dry-run
 ```
 
 7. Run COLMAP dense reconstruction and OpenMVS:
 
 ```bash
-python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs
+python3 scripts/reconstruct_gpu.py scan.zip --output-root ~/ScannerOutputs/gpu-run-001
 ```
+
+The dry run prepares its own copied scan, so it cannot share a destination with
+the real run. The runner creates missing parent folders and refuses an existing
+scan workspace. For another attempt, choose a new output-root name; prior and
+partially prepared workspaces remain available for inspection.
 
 OpenMVS densification uses its estimated region of interest by default. Use
 `--scope-mode unbounded` only for diagnostics when the automatic ROI removes
@@ -391,22 +421,35 @@ The default remains `--openmvs-point-cloud-source openmvs_densify` with
 
 ```bash
 python3 scripts/reconstruct_gpu.py scan.zip \
-  --output-root ~/ScannerOutputs \
+  --output-root ~/ScannerOutputs/fused-run-001 \
   --matcher sequential_matcher \
-  --camera-sharing per-folder \
   --openmvs-point-cloud-source colmap_fused \
   --scope-mode unbounded
 ```
 
-When a validated scan mixes image resolutions, `--camera-sharing per-folder`
-groups the copied images by dimensions and shares one COLMAP camera within each
-group. This preserves the original ZIP while avoiding invalid single-camera
-dimension assumptions. Uniform-resolution scans continue to use the default
-`--camera-sharing single` mode.
-Per-folder grouping currently rejects capture masks and `--use-masks`; mask
-path remapping is not implemented. Treat the grouped directory as a derived
-COLMAP workspace, not a new exportable scan package: its copied capture metadata
-still records the original image paths.
+The default `--camera-sharing single` now means one shared camera per decoded
+resolution when inputs have mixed dimensions. The backend and local runner use
+the same feature-batch preparation. Each resolution has its own feature-reader
+invocation; images stay in place, so metadata references, capture-mask names,
+and sequential matching order remain intact. The effective policy is recorded
+as `per_resolution` for mixed inputs. Dry runs also decode images and save flat
+`metadata/colmap_images_<width>x<height>.txt` batch lists, making printed commands
+replayable without performing native reconstruction.
+
+Before matching, real runs verify exact input-name acceptance and camera pixel
+dimensions in COLMAP's database: exit zero alone is not sufficient. After
+mapping, `metadata/colmap_intake.json` records imported and registered counts.
+Unregistered views produce `needs_review` evidence rather than a claim of full
+coverage. Native smoke testing verified four alternating-resolution masked
+images entering two cameras; it does not establish full-scan reconstruction
+quality.
+
+Explicit `--camera-sharing per-folder` remains a legacy alternative that moves
+copied images into resolution folders. That option still rejects capture masks
+and `--use-masks`, because mask-path remapping is not implemented. Treat its
+grouped directory as a derived COLMAP workspace, not a new exportable package:
+copied capture metadata still records the original image paths. The original ZIP
+is unchanged by either path.
 
 In this mode `InterfaceCOLMAP` imports `dense/fused.ply` and writes the
 view-aware `dense/scene.ply`. The runner skips `DensifyPointCloud`, applies the
@@ -430,9 +473,10 @@ OpenMVS CUDA invalid-argument failure. Manually meshing the
 vertices, 7,297,100 faces, and two 8192-pixel JPEG atlases. An automated rerun,
 a reviewed GLB, and the paired Gaussian output remain outstanding.
 
-8. Open OBJ/PLY outputs directly in Blender for Linux. Copy only finished OBJ,
-   GLB, `.blend`, reports, or logs to a shared partition if they are also needed
-   from Windows.
+8. Open OBJ/PLY outputs directly in Blender for Linux. When copying a textured
+   OBJ, keep its MTL and image dependencies together with unchanged relative
+   paths, or use a backend `textured_bundle` ZIP. Packed `.blend` files, GLB,
+   reports, and logs can be transferred separately when needed from Windows.
 
 Dual boot changes worker availability: while the PC is booted into Windows, the
 Linux reconstruction agent is offline. Local manual work waits until the next
@@ -458,10 +502,10 @@ python3 scripts/plan_reconstruction_backend.py scan.zip \
   --work-dir ~/ScannerPlans/meshroom
 ```
 
-The expected output layout is:
+The selected `--output-root` contains:
 
 ```text
-ScannerOutputs/
+gpu-run-001/
   scan_id/
     source/
     logs/
@@ -475,8 +519,8 @@ To create a `.blend` file from an output asset:
 
 ```bash
 blender --background --python scripts/blender/prepare_scan_asset.py -- \
-  ~/ScannerOutputs/scan_id/source/scan_id/dense/scene_textured.obj \
-  ~/ScannerOutputs/scan_id/blender/scan_id.blend \
+  ~/ScannerOutputs/gpu-run-001/scan_id/source/scan_id/dense/scene_textured.obj \
+  ~/ScannerOutputs/gpu-run-001/scan_id/blender/scan_id.blend \
   --obj-forward-axis NEGATIVE_Z \
   --obj-up-axis Y
 ```

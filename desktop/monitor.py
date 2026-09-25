@@ -16,6 +16,9 @@ STAGES = {
     "interface_colmap": "Preparing point cloud",
     "reconstruct_mesh": "Building mesh",
     "texture_mesh": "Texturing mesh",
+    "texture_check": "Checking texture pixels",
+    "blend_prepare": "Preparing Blender file",
+    "blend_verify": "Checking Blender file",
 }
 
 
@@ -128,6 +131,11 @@ class Snapshot:
     output: Path | None
     sampled_at: str
     checks: tuple[str, ...] = ()
+    phase: str = 'reconstruction'
+    auto_blend: bool = False
+    blend_path: Path | None = None
+    can_prepare_blend: bool = False
+    worker_inactive: bool = False
 
 
 def build_snapshot(run: Path, state: dict, plan: dict, service: dict[str, str],
@@ -178,7 +186,8 @@ def build_snapshot(run: Path, state: dict, plan: dict, service: dict[str, str],
                     duration(seconds_since(start, end)), duration(seconds_since(stage_start, end)),
                     f"{completed} of {count} stages completed in this attempt" if count else f"{completed} stages completed in this attempt",
                     progress, last, age, memory, gpu, error, text[-16000:], output_path,
-                    datetime.fromtimestamp(now, timezone.utc).astimezone().strftime("%H:%M:%S"))
+                    datetime.fromtimestamp(now, timezone.utc).astimezone().strftime("%H:%M:%S"),
+                    worker_inactive=service.get('ActiveState') == 'inactive')
 
 
 def service_properties(unit: str) -> dict[str, str]:
@@ -206,7 +215,7 @@ def gpu_memory() -> str:
     return "Unavailable"
 
 
-def collect(run: Path, unit: str) -> Snapshot:
+def collect(run: Path, unit: str, *, follow_blend: bool = True) -> Snapshot:
     errors = []
     records = []
     for name in ("state.json", "plan.json"):
@@ -235,4 +244,8 @@ def collect(run: Path, unit: str) -> Snapshot:
         errors.append(f"Cannot query service: {error}")
     value = build_snapshot(run, state, plan, service, text, age, gpu_memory(), time.time(), "\n".join(errors))
     from desktop.features import delivery_checks
-    return replace(value, checks=delivery_checks(value.output, value.status))
+    value = replace(value, checks=delivery_checks(value.output, value.status))
+    if follow_blend:
+        from desktop.blender import follow_snapshot
+        value = follow_snapshot(run, value)
+    return value

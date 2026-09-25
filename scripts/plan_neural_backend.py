@@ -68,7 +68,7 @@ def main() -> None:
 
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    scan_root = prepare_scan_source(args.scan, source_dir, reset=True)
+    scan_root = prepare_scan_source(args.scan, source_dir)
     package = validate_and_report_scan(scan_root)
     plan = build_neural_backend_plan(
         scan_root,

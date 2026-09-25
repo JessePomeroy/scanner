@@ -20,6 +20,128 @@ from app.scan_metadata import FrameMetadata  # noqa: E402
 
 
 class MaskGeneratorTests(unittest.TestCase):
+    def test_review_samples_generated_frames_between_all_five_authored_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frames = self._frames(root, count=21)
+            anchors = (0, 5, 10, 15, 20)
+            self._write_plan(root, frames, anchors=anchors)
+
+            result = generate_mask_proposals(
+                root,
+                frames,
+                generator=PolygonInterpolationMaskGenerator(resampled_point_count=16),
+            )
+
+            assert result is not None
+            self.assertEqual(len(result.review_indices), 5)
+            self.assertTrue(set(result.review_indices).isdisjoint(anchors))
+            self.assertTrue(all(
+                result.frames[index].method == "interpolated" for index in result.review_indices
+            ))
+            for lower, upper in zip(anchors, anchors[1:]):
+                self.assertTrue(any(lower < index < upper for index in result.review_indices))
+
+    def test_review_includes_low_confidence_fallback_not_only_authored_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frames = self._frames(root, count=21)
+            self._write_plan(root, frames, anchors=(0, 5, 10, 15, 20), add_erase_to_last=True)
+
+            result = generate_mask_proposals(
+                root, frames, generator=PolygonInterpolationMaskGenerator(resampled_point_count=16),
+            )
+
+            assert result is not None
+            selected = [result.frames[index] for index in result.review_indices]
+            self.assertTrue(any(frame.method == "nearest_topology_fallback" for frame in selected))
+            self.assertEqual(min(frame.confidence for frame in selected), 0.25)
+            self.assertEqual(len(selected), 5)
+
+    def test_review_prioritizes_worst_area_and_centroid_changes(self) -> None:
+        for change in ("area", "centroid"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                frames = self._frames(root, count=21)
+                self._write_plan(root, frames, anchors=(0, 5, 6, 15, 20))
+                plan_path = root / "metadata" / "mask_authoring.json"
+                plan = json.loads(plan_path.read_text())
+                # Adjacent authored keyframes isolate a change that the old
+                # quartile review missed, without fabricating mask metrics.
+                for frame in plan["representative_frames"]:
+                    left = frame["frame_id"] < 6
+                    x, y, width, height = (
+                        (0.05 if left else 0.75, 0.3, 0.2, 0.4)
+                        if change == "centroid" else
+                        ((0.45, 0.45, 0.05, 0.05) if left else (0.1, 0.1, 0.8, 0.8))
+                    )
+                    frame["regions"][0]["points"] = [
+                        {"x": x, "y": y}, {"x": x + width, "y": y},
+                        {"x": x + width, "y": y + height}, {"x": x, "y": y + height},
+                    ]
+                plan_path.write_text(json.dumps(plan))
+
+                result = generate_mask_proposals(
+                    root, frames, generator=PolygonInterpolationMaskGenerator(resampled_point_count=16),
+                )
+
+                assert result is not None
+                self.assertEqual(result.state, "needs_correction")
+                self.assertIn(6, result.review_indices)
+                self.assertTrue(any(
+                    result.frames[index].method == "interpolated" for index in result.review_indices
+                ))
+
+    def test_short_and_fully_authored_scans_have_complete_bounded_unique_review_sets(self) -> None:
+        for count in (1, 2, 3, 4, 5, 6, 8):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                frames = self._frames(root, count=count)
+                self._write_plan(root, frames, anchors=tuple(range(count)))
+
+                result = generate_mask_proposals(root, frames)
+
+                assert result is not None
+                self.assertEqual(len(result.review_indices), min(count, 5))
+                self.assertEqual(result.review_indices, tuple(sorted(set(result.review_indices))))
+                self.assertEqual(len(result.review_masks), min(count, 5))
+                self.assertIn(0, result.review_indices)
+                self.assertIn(count - 1, result.review_indices)
+                if count <= 5:
+                    self.assertEqual(result.review_indices, tuple(range(count)))
+
+    def test_sampling_preserves_sources_complete_proposals_and_deterministic_preview_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frames = self._frames(root, count=21)
+            self._write_plan(root, frames, anchors=(0, 5, 10, 15, 20))
+            sources = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            generator = PolygonInterpolationMaskGenerator(resampled_point_count=16)
+
+            first = generate_mask_proposals(root, frames, generator=generator)
+            assert first is not None
+            proposals = {path.name: path.read_bytes() for path in first.output_dir.iterdir()}
+            second = generate_mask_proposals(root, frames, generator=generator)
+            assert second is not None
+
+            self.assertEqual(first.report_payload(), second.report_payload())
+            self.assertEqual(json.loads(second.report_path.read_text()), second.report_payload())
+            self.assertEqual(len(proposals), len(frames))
+            self.assertEqual(proposals, {path.name: path.read_bytes() for path in second.output_dir.iterdir()})
+            self.assertTrue(all(path.read_bytes() == content for path, content in sources.items()))
+            self.assertEqual(second.review_indices, tuple(sorted(set(second.review_indices))))
+            expected_review_names = set()
+            for index, preview in zip(second.review_indices, second.review_masks, strict=True):
+                name = Path(frames[index].image).name + ".png"
+                expected_review_names.add(name)
+                self.assertEqual(preview, f"masks/review/{name}")
+                with Image.open(root / preview) as overlay:
+                    overlay.load()
+                    self.assertEqual(overlay.mode, "RGB")
+                    self.assertEqual(overlay.size, frames[index].resolution)
+            self.assertEqual({path.name for path in (root / "masks/review").iterdir()}, expected_review_names)
+            self.assertFalse((root / "masks/capture").exists())
+
     def test_generates_complete_interpolated_proposals_and_review_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

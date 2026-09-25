@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,20 @@ from desktop.monitor import build_snapshot
 
 
 class FeatureTests(unittest.TestCase):
+    def test_completed_run_remains_selectable_after_unit_collection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / 'state.json').write_text(json.dumps({'status': 'succeeded'}))
+            (run / 'plan.json').write_text(json.dumps({'service': 'scanner-reconstruct-test.service'}))
+            response = SimpleNamespace(returncode=0, stdout='LoadState=not-found\nExecStart=\n')
+            with patch('desktop.features.subprocess.run', return_value=response):
+                self.assertEqual(validate_selection(run, 'scanner-reconstruct-test.service'), (run, 'scanner-reconstruct-test.service'))
+                with self.assertRaisesRegex(ValueError, 'does not belong'):
+                    validate_selection(run, 'scanner-reconstruct-wrong.service')
+                (run / 'state.json').write_text(json.dumps({'status': 'running'}))
+                with self.assertRaisesRegex(ValueError, 'unavailable'):
+                    validate_selection(run, 'scanner-reconstruct-test.service')
+
     def test_selects_matching_service_without_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory)

@@ -9,7 +9,7 @@ from PySide6.QtCore import QLockFile, QSettings, QStandardPaths, Qt, QThread, QT
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
+    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QStyle,
     QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
@@ -18,6 +18,7 @@ from desktop.monitor import Snapshot, collect, duration, read_record
 from desktop.resume import launch, preview
 from desktop.features import delivery_checks, diagnostic_summary, validate_selection
 from desktop.theme import GREEN, RUST, message_palette, scanner_palette
+from desktop import blender
 
 
 class ResumeTask(QThread):
@@ -71,6 +72,8 @@ class Panel(QMainWindow):
         self.run_dir, self.unit = run, unit
         self.snapshot: Snapshot | None = None
         self.previous_status: str | None = None
+        self.previous_phase: str | None = None
+        self.auto_blend_attempted: set[Path] = set()
         self.quitting = False
         self.resume_task = None
         self.polling_enabled = poll
@@ -164,6 +167,19 @@ class Panel(QMainWindow):
         self.resume_button.setEnabled(False)
         self.resume_button.clicked.connect(self.review_resume)
         layout.addWidget(self.resume_button)
+        self.blend_controls = QWidget()
+        blend_row = QHBoxLayout(self.blend_controls)
+        blend_row.setContentsMargins(0, 0, 0, 0)
+        self.auto_blend = QCheckBox('Auto-create .blend')
+        self.auto_blend.setToolTip('For this run: start Blender after reconstruction succeeds while the panel is open or in the tray.')
+        self.auto_blend.toggled.connect(self.set_auto_blend)
+        blend_row.addWidget(self.auto_blend, 1)
+        self.blend_button = QPushButton('Create .blend')
+        self.blend_button.setEnabled(False)
+        self.blend_button.clicked.connect(self.blender_action)
+        blend_row.addWidget(self.blend_button)
+        layout.addWidget(self.blend_controls)
+        self.resume_button.hide()
         self.log_toggle = QPushButton("Show recent log")
         self.log_toggle.setCheckable(True)
         self.log_toggle.toggled.connect(self.toggle_log)
@@ -189,7 +205,7 @@ class Panel(QMainWindow):
         self.copy_button.setEnabled(False)
         self.copy_button.clicked.connect(self.copy_diagnostics)
         buttons.addWidget(self.copy_button, 1, 1)
-        self.footer = label("Closing leaves reconstruction running.")
+        self.footer = label("Closing keeps background jobs running.")
         layout.addWidget(self.footer)
         layout.addStretch()
         scroll = QScrollArea()
@@ -202,7 +218,7 @@ class Panel(QMainWindow):
         self.show_action = self.menu.addAction("Show Scanner")
         self.show_action.triggered.connect(self.show_panel)
         self.menu.addSeparator()
-        self.quit_action = self.menu.addAction("Quit panel (leave reconstruction running)")
+        self.quit_action = self.menu.addAction("Quit panel (leave jobs running)")
         self.quit_action.triggered.connect(self.quit_panel)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self.tray_activated)
@@ -239,6 +255,10 @@ class Panel(QMainWindow):
         titles = {"running": "Reconstruction running", "succeeded": "Reconstruction finished",
                   "failed": "Reconstruction failed", "interrupted": "Reconstruction interrupted",
                   "stopped": "Reconstruction stopped", "unknown": "Status unavailable"}
+        if value.phase == 'blender':
+            titles = {'running': 'Preparing Blender file', 'succeeded': 'Blender file ready',
+                      'failed': 'Blender preparation failed', 'interrupted': 'Blender preparation interrupted',
+                      'stopped': 'Blender preparation stopped', 'unknown': 'Blender status unavailable'}
         self.title.setText(titles[value.status])
         self.stage.setText(value.stage if value.status == "running" else f"Last stage: {value.stage}")
         self.set_status_icon(value.status)
@@ -268,25 +288,80 @@ class Panel(QMainWindow):
         self.error.setText(value.error)
         self.folder.setEnabled(value.output is not None and value.output.is_dir())
         self.logs.setPlainText(value.log)
-        self.footer.setText(f"Checked {value.sampled_at} · Closing leaves reconstruction running.")
+        self.footer.setText(f"Checked {value.sampled_at} · Closing keeps background jobs running.")
         if self.previous_status is not None and value.status != self.previous_status and value.status in {"succeeded", "failed", "interrupted"}:
             if self.tray_enabled and QSystemTrayIcon.isSystemTrayAvailable():
                 kind = QSystemTrayIcon.MessageIcon.Information if value.status == "succeeded" else QSystemTrayIcon.MessageIcon.Warning
                 self.tray.showMessage("Scanner", titles[value.status] + ". Open the panel for details.", kind)
-        if value.status != self.previous_status:
+        if value.status != self.previous_status or value.phase != self.previous_phase:
             QTimer.singleShot(0, self.fit_content_height)
         self.previous_status = value.status
+        self.previous_phase = value.phase
         if not self.resume_task:
-            allowed = value.status in {'failed', 'interrupted', 'stopped'} and value.stage == 'Texturing mesh'
+            allowed = value.phase == 'reconstruction' and value.status in {'failed', 'interrupted', 'stopped'} and value.stage == 'Texturing mesh'
             self.resume_button.setEnabled(allowed)
+            self.resume_button.setVisible(allowed)
+            self.blend_controls.setVisible(not allowed)
             self.recovery_note.setText(
                 'Review a texture-only retry. Inputs will be verified before confirmation; earlier outputs stay untouched.' if allowed else
-                'Recovery is disabled while reconstruction is running.' if value.status == 'running' else
-                'No supported retry available. Only failed texturing from a completed mesh can resume here.')
+                'Open the prepared file and inspect it in Material Preview.' if value.blend_path else
+                'Blender runs in the background; closing this panel keeps it running.' if value.phase == 'blender' and value.status == 'running' else
+                'The reconstruction is preserved. Review the Blender log before retrying.' if value.phase == 'blender' else
+                'Blender will start automatically after reconstruction succeeds.' if value.auto_blend else
+                'Create a Blender file with embedded textures after reconstruction.')
+            self.auto_blend.blockSignals(True)
+            self.auto_blend.setChecked(value.auto_blend)
+            self.auto_blend.blockSignals(False)
+            self.blend_button.setText('Open .blend' if value.blend_path else
+                                      'Retry .blend' if value.phase == 'blender' and value.can_prepare_blend else
+                                      'Preparing .blend…' if value.phase == 'blender' and value.status == 'running' else 'Create .blend')
+            self.blend_button.setEnabled(value.blend_path is not None or value.can_prepare_blend)
+            if (value.auto_blend and value.phase == 'reconstruction' and value.can_prepare_blend
+                    and self.run_dir not in self.auto_blend_attempted):
+                self.start_blender()
+
+    def set_auto_blend(self, enabled: bool):
+        try:
+            blender.set_automatic(self.run_dir, enabled)
+        except (OSError, ValueError) as error:
+            self.auto_blend.blockSignals(True)
+            self.auto_blend.setChecked(not enabled)
+            self.auto_blend.blockSignals(False)
+            QMessageBox.warning(self, 'Blender preference unchanged', str(error))
+            return
+        if enabled and self.snapshot and self.snapshot.phase == 'reconstruction' and self.snapshot.can_prepare_blend:
+            self.start_blender()
+
+    def blender_action(self):
+        if self.snapshot and self.snapshot.blend_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.snapshot.blend_path)))
+        elif self.snapshot and self.snapshot.can_prepare_blend:
+            self.start_blender(retry=self.snapshot.phase == 'blender')
+
+    def start_blender(self, *, retry: bool = False):
+        if self.resume_task:
+            return
+        run, unit = self.run_dir, self.unit
+        self.auto_blend_attempted.add(run)
+        self.recovery_note.setText('Checking reconstruction files and preparing the Blender job…')
+        self.start_resume_task(lambda: blender.launch(run, unit, retry=retry),
+                               lambda attempt: self.recovery_note.setText('Blender preparation started. Following its progress…'),
+                               lambda message: self.blender_failed(run, message))
+
+    def blender_failed(self, run: Path, message: str):
+        try:
+            blender.record_launch_error(run, message)
+        except (OSError, ValueError):
+            pass
+        self.recovery_note.setText(f'Blender preparation blocked: {message}')
+        self.error.setText(message)
+        self.error.show()
 
     def start_resume_task(self, action, callback, on_error=None):
         self.resume_button.setEnabled(False)
         self.choose_button.setEnabled(False)
+        self.auto_blend.setEnabled(False)
+        self.blend_button.setEnabled(False)
         self.quit_action.setEnabled(False)
         self.resume_task = ResumeTask(action)
         self.resume_task.result.connect(callback)
@@ -297,6 +372,7 @@ class Panel(QMainWindow):
     def resume_task_finished(self):
         self.resume_task = None
         self.choose_button.setEnabled(True)
+        self.auto_blend.setEnabled(True)
         self.quit_action.setEnabled(True)
 
     def review_resume(self):
@@ -317,7 +393,9 @@ class Panel(QMainWindow):
             'Only TextureMesh will run: four workers, 48 GiB RAM limit, no swap. '
             'The failed stage starts from its beginning; earlier stages are not repeated.\n\n'
             f"New outputs go into a fresh panel-resume folder under:\n{self.run_dir.parent}\n\n"
-            'Existing outputs and failed-attempt evidence are preserved. The same settings may fail again.')
+            'Existing outputs are preserved. Both seam-blending options are disabled '
+            'to avoid the diagnosed black-texture failure. Textures will be decoded and sampled; '
+            'visual review is still required, and memory limits may still stop the job.')
         message.setStandardButtons(QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes)
         message.button(QMessageBox.StandardButton.Yes).setText('Resume texturing')
         message.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -334,8 +412,15 @@ class Panel(QMainWindow):
         self.start_resume_task(lambda: launch(approved), self.resume_started)
 
     def resume_started(self, result):
+        preference_error = None
+        if self.auto_blend.isChecked():
+            try:
+                blender.set_automatic(result[0], True)
+            except (OSError, ValueError) as error:
+                preference_error = str(error)
         self.select_run(result)
-        self.recovery_note.setText('New attempt launched. Following its progress; previous outputs are preserved.')
+        self.recovery_note.setText(f'New attempt launched. Enable Blender preparation again: {preference_error}'
+                                  if preference_error else 'New attempt launched. Following its progress; previous outputs are preserved.')
 
     def connect_poller(self, poller):
         poller.sampled.connect(lambda value: self.render(value) if self.poller is poller else None)
@@ -351,10 +436,15 @@ class Panel(QMainWindow):
         self.identity.setText(f'{self.run_dir.parent.name} / {self.run_dir.name}')
         self.identity.setToolTip(str(self.run_dir))
         self.previous_status = None
+        self.previous_phase = None
         self.snapshot = None
         self.copy_button.setEnabled(False)
         self.resume_button.setEnabled(False)
         self.folder.setEnabled(False)
+        self.blend_button.setEnabled(False)
+        self.auto_blend.blockSignals(True)
+        self.auto_blend.setChecked(False)
+        self.auto_blend.blockSignals(False)
         self.title.setText('Checking selected run…')
         self.stage.setText('Waiting for fresh evidence')
         self.activity.clear()
@@ -424,6 +514,7 @@ class Panel(QMainWindow):
 
     def poll_failed(self, message: str):
         self.resume_button.setEnabled(False)
+        self.blend_button.setEnabled(False)
         self.copy_button.setEnabled(False)
         self.title.setText("Monitor unavailable")
         self.error.setText(f"Could not refresh: {message}. Reconstruction has not been changed.")

@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -22,16 +23,20 @@ from app.mask_review import (  # noqa: E402
     reject_mask_review,
 )
 from app.scan_metadata import load_scan_metadata  # noqa: E402
-from app.scan_validator import validate_scan_package  # noqa: E402
+from app.scan_validator import ScanValidationError, validate_scan_package  # noqa: E402
 
 
 class MaskReviewTests(unittest.TestCase):
     def test_approval_promotes_exact_set_and_activates_manifest_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = self._scan(Path(tmp), count=3)
+            root = self._scan(Path(tmp), count=21)
             frames = load_scan_metadata(root / "metadata").frames
             result = generate_mask_proposals(root, frames)
             assert result is not None
+            self.assertEqual(len(result.review_indices), 5)
+            proposal_bytes = {
+                path.name: path.read_bytes() for path in (root / "masks/proposed").iterdir()
+            }
 
             approved = approve_mask_review(
                 root,
@@ -39,11 +44,123 @@ class MaskReviewTests(unittest.TestCase):
             )
             validation = validate_scan_package(root)
             manifest = json.loads((root / "metadata" / "manifest.json").read_text())
+            self.assertEqual(
+                proposal_bytes,
+                {path.name: path.read_bytes() for path in (root / "masks/capture").iterdir()},
+            )
 
         self.assertEqual(approved["state"], "approved")
-        self.assertEqual(approved["decision"]["promoted_mask_count"], 3)
-        self.assertEqual(validation.capture_mask_count, 3)
-        self.assertEqual(manifest["reconstruction_scope"]["mask_count"], 3)
+        self.assertEqual(approved["decision"]["promoted_mask_count"], 21)
+        self.assertEqual(validation.capture_mask_count, 21)
+        self.assertEqual(manifest["reconstruction_scope"]["mask_count"], 21)
+
+    def test_approval_validates_unsampled_proposals_not_just_the_five_previews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._scan(Path(tmp), count=21)
+            frames = load_scan_metadata(root / "metadata").frames
+            result = generate_mask_proposals(root, frames)
+            assert result is not None
+            index = next(index for index in range(len(frames)) if index not in result.review_indices)
+            proposal = root / result.frames[index].mask
+            proposal.write_bytes(b"not a PNG")
+
+            with self.assertRaisesRegex(MaskReviewError, "promotion validation"):
+                approve_mask_review(root)
+
+            self.assertFalse((root / "masks/capture").exists())
+            self.assertIsNone(load_scan_metadata(root / "metadata").reconstruction_scope)
+            self.assertEqual(load_mask_review(root)["state"], "awaiting_review")
+
+    def test_review_rejects_invalid_indices_and_mismatched_preview_associations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._scan(Path(tmp), count=21)
+            frames = load_scan_metadata(root / "metadata").frames
+            result = generate_mask_proposals(root, frames)
+            assert result is not None
+            original = result.report_payload()
+            invalid_indices = (
+                [], [0, 1, 2, 3], [0, 1, 2, 3, 4, 5], [0, 0, 2, 3, 4],
+                [4, 3, 2, 1, 0], [-1, 1, 2, 3, 4], [0, 1, 2, 3, 21],
+                [False, 1, 2, 3, 4], [0.0, 1, 2, 3, 4], "0,1,2,3,4",
+            )
+            for indices in invalid_indices:
+                with self.subTest(indices=indices):
+                    payload = dict(original, review_indices=indices)
+                    result.report_path.write_text(json.dumps(payload))
+                    with self.assertRaises(MaskReviewError):
+                        load_mask_review(root)
+                    with self.assertRaises(ScanValidationError):
+                        validate_scan_package(root)
+                    with self.assertRaises(MaskReviewError):
+                        approve_mask_review(root)
+                    self.assertFalse((root / "masks/capture").exists())
+            for masks in (
+                original["review_masks"][::-1],
+                original["review_masks"][:-1],
+                ["../outside.png", *original["review_masks"][1:]],
+            ):
+                with self.subTest(masks=masks):
+                    result.report_path.write_text(json.dumps(dict(original, review_masks=masks)))
+                    with self.assertRaises(MaskReviewError):
+                        load_mask_review(root)
+                    with self.assertRaises(ScanValidationError):
+                        validate_scan_package(root)
+
+    def test_legacy_quartile_previews_remain_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._scan(Path(tmp), count=21)
+            frames = load_scan_metadata(root / "metadata").frames
+            # The prior generator emitted these exact indices; fixture it
+            # through generation so real previews and full proposals exist.
+            with patch("app.mask_generator._select_review_indices", return_value=(0, 5, 10, 15, 20)):
+                result = generate_mask_proposals(root, frames)
+            assert result is not None
+
+            self.assertEqual(load_mask_review(root)["review_indices"], [0, 5, 10, 15, 20])
+            approve_mask_review(root)
+            self.assertEqual(validate_scan_package(root).capture_mask_count, 21)
+
+    def test_validation_binds_review_report_to_metadata_and_exact_preview_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._scan(Path(tmp), count=21)
+            frames = load_scan_metadata(root / "metadata").frames
+            result = generate_mask_proposals(root, frames)
+            assert result is not None
+            payload = result.report_payload()
+            index = result.review_indices[0]
+            # A self-consistent report referring to a different source image
+            # must still disagree with the trusted capture-frame ordering.
+            payload["frames"][index]["image"] = "images/different.jpg"
+            payload["review_masks"][0] = "masks/review/different.jpg.png"
+            result.report_path.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ScanValidationError, "capture metadata"):
+                validate_scan_package(root)
+
+            result.report_path.write_text(json.dumps(result.report_payload()))
+            preview = root / result.review_masks[0]
+            contents = preview.read_bytes()
+            preview.unlink()
+            with self.assertRaisesRegex(ScanValidationError, "association mismatch"):
+                validate_scan_package(root)
+            preview.write_bytes(contents)
+            (preview.parent / "unexpected.png").write_bytes(contents)
+            with self.assertRaisesRegex(ScanValidationError, "association mismatch"):
+                validate_scan_package(root)
+
+    def test_preview_failure_preserves_previous_generation_and_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._scan(Path(tmp), count=21)
+            frames = load_scan_metadata(root / "metadata").frames
+            generate_mask_proposals(root, frames)
+            existing = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+            with patch("app.mask_generator._write_review_preview", side_effect=OSError("preview failed")):
+                with self.assertRaisesRegex(OSError, "preview failed"):
+                    generate_mask_proposals(root, frames)
+
+            self.assertEqual(existing, {path: path.read_bytes() for path in root.rglob("*") if path.is_file()})
+            self.assertFalse(any(path.name.startswith(".") for path in (root / "masks").iterdir()))
+            self.assertEqual(validate_scan_package(root).capture_mask_count, 0)
 
     def test_quality_failure_cannot_be_approved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

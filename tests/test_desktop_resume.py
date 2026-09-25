@@ -4,9 +4,15 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
+from PIL import Image
 from unittest.mock import patch
 
 from desktop import resume
+
+
+def setUpModule():
+    from heavy_work_fixture import isolated_heavy_work
+    unittest.enterModuleContext(isolated_heavy_work())
 
 
 class ResumeTests(unittest.TestCase):
@@ -23,7 +29,15 @@ class ResumeTests(unittest.TestCase):
         (self.source / 'scene.mvs').write_bytes(b'fixture-calibration')
         (self.source / 'scene_mesh.ply').write_bytes(b'ply\nformat ascii 1.0\nelement vertex 3\nelement face 1\nend_header\n0 0 0\n')
         self.tool = self.root / 'TextureMesh'
-        self.tool.write_text('#!/usr/bin/python\nimport pathlib,sys\np=pathlib.Path(sys.argv[sys.argv.index("-o")+1])\np.with_suffix(".obj").write_text("mtllib scene_textured.mtl\\n")\np.with_suffix(".mtl").write_text("newmtl fixture\\nmap_Kd texture.jpg\\n")\n(p.parent/"texture.jpg").write_bytes(b"fixture pixels")\n')
+        fixture_texture = self.root / 'fixture.png'
+        Image.new('RGB', (2, 2), (120, 150, 180)).save(fixture_texture)
+        self.obj_text = ('mtllib scene_textured.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\n'
+                         'vt 0 0\nvt 1 0\nvt 0 1\nusemtl fixture\nf 1/1 2/2 3/3\n')
+        self.tool.write_text('#!/usr/bin/python\nimport pathlib,sys,shutil\n'
+                            'p=pathlib.Path(sys.argv[sys.argv.index("-o")+1])\n'
+                            f'p.with_suffix(".obj").write_text({self.obj_text!r})\n'
+                            'p.with_suffix(".mtl").write_text("newmtl fixture\\nmap_Kd texture.png\\n")\n'
+                            f'shutil.copyfile({str(fixture_texture)!r},p.parent/"texture.png")\n')
         self.tool.chmod(0o700)
         self.addCleanup(patch.stopall)
         patch.object(resume, 'TOOL', self.tool).start()
@@ -115,7 +129,9 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(state['status'], 'succeeded')
         self.assertEqual([stage['name'] for stage in state['stages']], ['texture_mesh'])
         self.assertEqual((self.source / 'scene_textured.obj').read_text(), 'previous partial output')
-        self.assertEqual((attempt / 'output/scene_textured.obj').read_text(), 'mtllib scene_textured.mtl\n')
+        self.assertEqual((attempt / 'output/scene_textured.obj').read_text(), self.obj_text)
+        self.assertEqual(state['texture_quality'], 'checks_passed')
+        self.assertTrue((attempt / 'output/texture_quality.json').is_file())
         for name, digest in approved['input_sha256'].items():
             self.assertEqual(resume.sha256(Path(name)), digest)
         self.assertEqual(json.loads((self.root / '.panel-latest.json').read_text())['unit'], unit)
@@ -127,6 +143,17 @@ class ResumeTests(unittest.TestCase):
             resume.execute(attempt)
         self.assertEqual((attempt / 'output/keep.txt').read_text(), 'preserve')
         self.assertEqual(json.loads((attempt / 'state.json').read_text())['status'], 'failed')
+
+    def test_texture_validation_failure_remains_eligible_for_guarded_retry(self):
+        attempt, unit = self.launch(self.preview())
+        with patch.object(resume.texture_quality, 'write_texture_report', side_effect=ValueError('Corrupt texture pixels')):
+            with self.assertRaisesRegex(ValueError, 'Corrupt texture pixels'):
+                resume.execute(attempt)
+        state = json.loads((attempt / 'state.json').read_text())
+        self.assertEqual(state['status'], 'failed')
+        self.assertEqual(state['stages'][-1]['status'], 'failed')
+        self.assertEqual(state['stages'][-1]['return_code'], 0)
+        self.assertEqual(resume.preview(attempt, unit)['source_run'], str(attempt))
 
     def test_worker_failure_is_recorded_and_log_preserved(self):
         self.tool.write_text('#!/usr/bin/python\nimport sys\nprint("fixture failure")\nsys.exit(9)\n')

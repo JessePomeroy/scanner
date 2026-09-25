@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 from time import perf_counter
@@ -19,8 +19,9 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.colmap_runner import (  # noqa: E402
     ColmapConfig,
     build_colmap_dense_commands,
-    build_colmap_sparse_commands,
     prepare_colmap_output_directories,
+    prepare_colmap_sparse_execution,
+    record_colmap_intake,
 )
 from app.openmvs_runner import (  # noqa: E402
     OpenMVSConfig,
@@ -33,8 +34,10 @@ from app.mask_processor import validate_openmvs_masks  # noqa: E402
 from app.mask_undistorter import convert_capture_mask_set  # noqa: E402
 from app.report_writer import object_scan_summary, write_scan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
-from app.scan_metadata import load_scan_metadata  # noqa: E402
+from app.scan_metadata import load_scan_metadata, validate_scan_id  # noqa: E402
 from app.scan_validator import find_scan_root  # noqa: E402
+from app.texture_quality import write_texture_report  # noqa: E402
+from app.heavy_work import heavy_work, native_kwargs  # noqa: E402
 from PIL import Image  # noqa: E402
 
 
@@ -45,7 +48,7 @@ def main() -> None:
         "--output-root",
         type=Path,
         default=Path("ScannerOutputs"),
-        help="Output folder on a Linux-native filesystem.",
+        help="Output root on a Linux-native filesystem; refuses existing scan workspaces.",
     )
     parser.add_argument(
         "--use-masks",
@@ -58,8 +61,8 @@ def main() -> None:
         choices=("single", "per-folder"),
         default="single",
         help=(
-            "Share one COLMAP camera across every image, or one camera per "
-            "image subfolder for grouped mixed-resolution captures."
+            "Default: share one camera per decoded resolution, preserving image names. "
+            "Legacy per-folder mode moves images into dimension subfolders."
         ),
     )
     parser.add_argument("--skip-dense", action="store_true")
@@ -82,7 +85,10 @@ def main() -> None:
             "colmap_fused requires unbounded."
         ),
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print and report commands without executing them.")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Prepare a fresh workspace and report commands without executing them; use a separate output root from the real run.",
+    )
     args = parser.parse_args()
     if args.camera_sharing == "per-folder" and args.use_masks:
         parser.error("per-folder camera sharing does not yet support --use-masks")
@@ -99,13 +105,20 @@ def main() -> None:
     ):
         parser.error("colmap_fused does not yet support --use-masks")
 
+    # Admission precedes workspace reservation. A rejected run leaves no empty
+    # workspace behind and never queues implicitly.
+    with nullcontext() if args.dry_run else heavy_work(f"GPU reconstruction {args.scan.name}"):
+        execute(args)
+
+
+def execute(args: argparse.Namespace) -> None:
     initial_scan_id = scan_id_from_path(args.scan)
-    run_dir = (args.output_root / initial_scan_id).resolve()
+    output_root = args.output_root.resolve()
+    run_dir = _workspace_path(output_root, initial_scan_id, args.scan)
     source_dir = run_dir / "source"
     logs_dir = run_dir / "logs"
 
-    run_dir.mkdir(parents=True, exist_ok=True)
-    source_dir.mkdir(parents=True, exist_ok=True)
+    _reserve_workspace(run_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     scan_root = prepare_scan_source(args.scan, source_dir)
@@ -113,12 +126,14 @@ def main() -> None:
     validation_report = package.validation
     scan_id = validation_report.scan_id if validation_report and validation_report.scan_id else initial_scan_id
     if scan_id != initial_scan_id:
-        final_run_dir = (args.output_root / scan_id).resolve()
+        final_run_dir = _workspace_path(output_root, scan_id, args.scan)
         if final_run_dir != run_dir:
-            final_run_dir.parent.mkdir(parents=True, exist_ok=True)
-            if final_run_dir.exists():
-                shutil.rmtree(final_run_dir)
-            shutil.move(str(run_dir), str(final_run_dir))
+            _reserve_workspace(final_run_dir)
+            # Both directories are ours. Never rename over an existing run (even
+            # an empty directory); publish children only into the reserved one.
+            for child in run_dir.iterdir():
+                child.rename(final_run_dir / child.name)
+            run_dir.rmdir()
             run_dir = final_run_dir
             source_dir = run_dir / "source"
             logs_dir = run_dir / "logs"
@@ -139,8 +154,13 @@ def main() -> None:
         use_gpu=True,
         geometric_consistency=True,
     )
-    commands: list[list[str]] = []
-    commands.extend(build_colmap_sparse_commands(scan_root, colmap_config))
+    sparse_commands, image_groups = prepare_colmap_sparse_execution(scan_root, colmap_config)
+    camera_groups = {resolution: len(names) for resolution, names in image_groups.items()}
+    effective_camera_sharing = (
+        "per_resolution" if args.camera_sharing == "single" and len(camera_groups) > 1
+        else args.camera_sharing
+    )
+    commands: list[list[str]] = list(sparse_commands)
     commands.append(build_model_converter_command(scan_root, colmap_config))
 
     if not args.skip_dense:
@@ -174,6 +194,8 @@ def main() -> None:
     density_budget = None
     mask_validation = None
     mask_conversion = None
+    colmap_intake = None
+    texture_quality = None
     openmvs_settings = (
         openmvs_config.report_settings() if not args.skip_openmvs else None
     )
@@ -181,6 +203,7 @@ def main() -> None:
         "state": "planned" if args.dry_run else "running",
         "matcher": args.matcher,
         "camera_sharing": args.camera_sharing,
+        "effective_camera_sharing": effective_camera_sharing,
         "camera_groups": camera_groups,
         "dry_run": args.dry_run,
         "skip_dense": args.skip_dense,
@@ -204,6 +227,8 @@ def main() -> None:
             active_command = None
             pending_command = command
             failure_phase = "preflight"
+            if not args.dry_run and command == sparse_commands[-2]:
+                colmap_intake = record_colmap_intake(scan_root, image_groups, colmap_config)
             if (
                 not args.dry_run
                 and command[0] == openmvs_config.interface_colmap
@@ -237,6 +262,16 @@ def main() -> None:
                 dry_run=args.dry_run,
                 cwd=scan_root / "dense" if command[0] in openmvs_commands else None,
             )
+            failure_phase = "verification"
+            if not args.dry_run and command == sparse_commands[-1]:
+                colmap_intake = record_colmap_intake(
+                    scan_root, image_groups, colmap_config, include_registration=True
+                )
+            if not args.dry_run and command[0] == openmvs_config.texture_mesh:
+                texture_quality = write_texture_report(
+                    scan_root / "dense" / "scene_textured.obj",
+                    scan_root / "dense" / "texture_quality.json",
+                )
             active_command = None
             pending_command = None
             failure_phase = None
@@ -272,6 +307,8 @@ def main() -> None:
             "density_budget": density_budget.as_dict() if density_budget is not None else None,
             "mask_validation": mask_validation.as_dict() if mask_validation is not None else None,
             "mask_conversion": mask_conversion.as_dict() if mask_conversion is not None else None,
+            "colmap_intake": colmap_intake,
+            "texture_quality": texture_quality,
         },
     )
 
@@ -295,11 +332,14 @@ def main() -> None:
         "warnings": package_report.get("warnings", []),
         "commands": commands,
         "camera_sharing": args.camera_sharing,
+        "effective_camera_sharing": effective_camera_sharing,
         "camera_groups": camera_groups,
         "openmvs_settings": openmvs_settings,
         "density_budget": density_budget.as_dict() if density_budget is not None else None,
         "mask_validation": mask_validation.as_dict() if mask_validation is not None else None,
         "mask_conversion": mask_conversion.as_dict() if mask_conversion is not None else None,
+        "colmap_intake": colmap_intake,
+        "texture_quality": texture_quality,
         "outputs": {key: str(path) for key, path in outputs.items()},
         "notes": [
             "Use this runner on native Linux with a CUDA-enabled COLMAP build.",
@@ -313,6 +353,30 @@ def main() -> None:
     print(f"Report: {report_path}")
     for key, path in outputs.items():
         print(f"{key}: {path}")
+
+
+def _workspace_path(output_root: Path, scan_id: str, scan: Path) -> Path:
+    path = output_root / validate_scan_id(scan_id)
+    resolved = path.resolve()
+    if resolved.parent != output_root:
+        raise ValueError(f"Workspace must stay directly inside output root: {path}")
+    source = scan.resolve(strict=True)
+    if (
+        source == resolved
+        or resolved in source.parents
+        or (source.is_dir() and source in resolved.parents)
+    ):
+        raise ValueError("Scan input and output workspace must not overlap")
+    return path
+
+
+def _reserve_workspace(path: Path) -> None:
+    try:
+        path.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"Reconstruction workspace already exists; choose a fresh --output-root: {path}"
+        ) from error
 
 
 def build_model_converter_command(scan_root: Path, config: ColmapConfig) -> list[str]:
@@ -380,7 +444,7 @@ def run_command(
     if dry_run:
         return
 
-    subprocess.run(command, check=True, cwd=cwd)
+    subprocess.run(command, check=True, cwd=cwd, **native_kwargs())
 
 
 def expected_outputs(
@@ -393,6 +457,7 @@ def expected_outputs(
     outputs = {
         "sparse_model": scan_root / "sparse" / "0",
         "sparse_point_cloud": scan_root / "sparse" / "sparse_points.ply",
+        "colmap_intake": scan_root / "metadata" / "colmap_intake.json",
     }
 
     if include_dense:
@@ -403,6 +468,7 @@ def expected_outputs(
             scan_root, openmvs_config
         )
         outputs["textured_mesh"] = scan_root / "dense" / "scene_textured.obj"
+        outputs["texture_quality"] = scan_root / "dense" / "texture_quality.json"
 
     return outputs
 

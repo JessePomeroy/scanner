@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 import tempfile
@@ -15,12 +16,16 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.colmap_runner import ColmapConfig, run_colmap_pipeline  # noqa: E402
 from app.openmvs_runner import run_openmvs_pipeline  # noqa: E402
 from app.scan_package import prepare_scan_source, validate_and_report_scan  # noqa: E402
+from app.heavy_work import heavy_work  # noqa: E402
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scan", type=Path, help="Scan zip or extracted scan directory.")
-    parser.add_argument("--work-dir", type=Path, default=None)
+    parser.add_argument(
+        "--work-dir", type=Path, default=None,
+        help="New persistent workspace (must not exist); required when running reconstruction.",
+    )
     parser.add_argument("--run-colmap", action="store_true")
     parser.add_argument(
         "--matcher",
@@ -32,12 +37,19 @@ def main() -> None:
     parser.add_argument("--use-gpu", action="store_true", help="Enable COLMAP GPU feature extraction/matching.")
     parser.add_argument("--run-openmvs", action="store_true")
     args = parser.parse_args()
+    if (args.run_colmap or args.run_openmvs) and args.work_dir is None:
+        parser.error("--work-dir is required for reconstruction so outputs are retained")
 
+    admission = (heavy_work(f"Local reconstruction {args.scan.name}")
+                 if args.run_colmap or args.run_openmvs else nullcontext())
+    with admission:
+        execute(args)
+
+
+def execute(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory() as temporary:
         work_dir = args.work_dir or Path(temporary) / "scan"
-        work_dir.mkdir(parents=True, exist_ok=True)
-
-        scan_root = prepare_scan_source(args.scan, work_dir, reset=False)
+        scan_root = prepare_scan_source(args.scan, work_dir)
         package = validate_and_report_scan(scan_root)
         report = package.validation
         print(f"Validated {report.image_count} images and {report.frame_count} frames.")

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 from typing import Any
+from app.heavy_work import heavy_work, native_kwargs
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,11 @@ class CommandPlan:
 
 def run_command_plan(plan: CommandPlan, *, dry_run: bool = False, command_log: Path | None = None) -> None:
     """Run or print every command in a command plan."""
+    with nullcontext() if dry_run else heavy_work(f'{plan.backend} command plan'):
+        _run_command_plan(plan, dry_run=dry_run, command_log=command_log)
+
+
+def _run_command_plan(plan: CommandPlan, *, dry_run: bool, command_log: Path | None) -> None:
     for command in plan.commands:
         line = shell_join(command)
         print(line)
@@ -48,7 +55,7 @@ def run_command_plan(plan: CommandPlan, *, dry_run: bool = False, command_log: P
             with command_log.open("a") as log:
                 log.write(line + "\n")
         if not dry_run:
-            subprocess.run(command, check=True)
+            subprocess.run(command, check=True, **native_kwargs())
 
 
 def write_command_plan_report(plan: CommandPlan, path: Path, *, extra: dict[str, Any] | None = None) -> Path:

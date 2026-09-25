@@ -30,7 +30,11 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     @Published private(set) var lastExportSummary: ScanExportSummary?
     @Published var scanMode: ScanMode = .scene {
         didSet {
-            objectCenterWorld = nil
+            captureQueue.async {
+                guard !self.isScanning else { return }
+                self.objectCenterWorld = nil
+            }
+            objectCenterIsSet = false
             statusMessage = scanMode == .object ? "Tap subject while scanning" : "Ready"
         }
     }
@@ -56,6 +60,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     private var currentScanId: String?
     private var frameCounter = 0
     private var isScanning = false
+    private var activeScanMode: ScanMode = .scene
+    private var activeObjectRadius: ObjectRadiusPreset = .medium
     private var objectCenterWorld: SIMD3<Float>?
     private var qualityStats = CaptureQualityStats()
     private var sceneCoverageTracker = SceneCoverageTracker()
@@ -83,12 +89,15 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         arTrackingManager.session
     }
 
+    @MainActor
     func startPreview() throws {
+        guard state != .scanning, state != .exporting else { return }
         try arTrackingManager.startTracking()
     }
 
+    @MainActor
     func stopPreview() {
-        guard !isScanning else { return }
+        guard state != .scanning, state != .exporting else { return }
         arTrackingManager.stopTracking()
     }
 
@@ -106,8 +115,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         self.arTrackingManager.setDelegate(self, queue: captureQueue)
     }
 
+    @MainActor
     func startScan(scanId: String = ScanCaptureManager.makeScanId()) throws {
+        guard state != .scanning, state != .exporting else { return }
+        // Claim the UI transition synchronously before any queued state publication.
+        state = .scanning
         let scanDirectory = try packageWriter.createNewScanFolder(scanId: scanId)
+        let selectedMode = scanMode
+        let selectedRadius = objectRadiusPreset
 
         captureQueue.sync {
             capturedFrames.removeAll()
@@ -115,6 +130,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             frameCounter = 0
             currentScanId = scanId
             currentScanDirectory = scanDirectory
+            activeScanMode = selectedMode
+            activeObjectRadius = selectedRadius
             objectCenterWorld = nil
             qualityStats = CaptureQualityStats()
             sceneCoverageTracker.reset()
@@ -164,186 +181,206 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         }
     }
 
-    @discardableResult
-    func stopScan() throws -> URL {
+    @MainActor
+    func stopScan() {
+        guard state == .scanning else { return }
+        state = .exporting
         updatePublishedState(state: .exporting, statusMessage: "Exporting")
         arTrackingManager.stopTracking()
+        let deviceModel = UIDevice.current.model
 
-        let exportResult: (zipURL: URL, summary: ScanExportSummary) = try captureQueue.sync {
-            try finishPendingKeyframeWithFallback()
-            isScanning = false
-
-            guard let currentScanDirectory,
-                  let currentScanId else {
-                throw ScanPackageWriterError.invalidScanId
-            }
-
-            let motionSamples = motionRecorder.stop()
-            let videoMetadata = videoRecorder.finish().map { [$0] } ?? []
-            let createdAt = ISO8601DateFormatter().string(from: Date())
-            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
-            let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-            let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
-            let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
-            let finalSceneCoverage = scanMode == .scene
-                ? sceneCoverageTracker.snapshot
-                : nil
-            let session = ScanSessionMetadata(
-                scanId: currentScanId,
-                createdAt: createdAt,
-                device: UIDevice.current.model,
-                appVersion: appVersion,
-                buildVersion: buildVersion,
-                scanMode: scanMode.rawValue,
-                usesLidar: usesLidar,
-                usesARKitMesh: usesARKitMesh,
-                highResolutionFrameCaptureEnabled: arTrackingManager
-                    .highResolutionFrameCaptureEnabled,
-                configuredVideoResolution: arTrackingManager.configuredVideoResolution,
-                highResolutionImageCount: highResolutionImageCount,
-                fallbackImageCount: fallbackImageCount,
-                imageCount: capturedFrames.count,
-                depthFrameCount: 0,
-                imuSampleCount: motionSamples.count,
-                videoCount: videoMetadata.count,
-                rejectedFrameCount: qualityStats.rejectedTotal,
-                rejectedTrackingCount: qualityStats.rejectedTracking,
-                rejectedBlurCount: qualityStats.rejectedBlur,
-                rejectedMotionCount: qualityStats.rejectedMotion,
-                averageBlurScore: qualityStats.averageBlurScore,
-                minimumBlurScore: qualityStats.minimumBlurScore,
-                maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
-                captureDurationSeconds: scanStartedAt.map { Date().timeIntervalSince($0) },
-                objectCenterWorld: objectCenterWorld?.array,
-                objectRadiusMeters: scanMode == .object ? objectRadiusPreset.rawValue : nil,
-                sceneCoverage: finalSceneCoverage.map {
-                    SceneCoverageMetadata(
-                        schemaVersion: "1.1",
-                        acceptedPoseCount: $0.acceptedPoseCount,
-                        uniquePositionCellCount: $0.uniquePositionCellCount,
-                        headingBinCount: $0.headingBinCount,
-                        elevationBinCount: $0.elevationBinCount,
-                        pathLengthMeters: $0.pathLengthMeters,
-                        disconnectedJumpCount: $0.disconnectedJumpCount,
-                        surfaceHitCount: $0.surfaceHitCount,
-                        uniqueSurfaceCellCount: $0.uniqueSurfaceCellCount,
-                        multiAngleSurfaceCellCount: $0.multiAngleSurfaceCellCount,
-                        minimumSurfaceDistanceMeters: $0.minimumSurfaceDistanceMeters,
-                        maximumSurfaceDistanceMeters: $0.maximumSurfaceDistanceMeters,
-                        surfaceScore: $0.surfaceScore,
-                        score: $0.score
-                    )
-                },
-                notes: scanMode == .object
-                    ? "Object scan package with ARKit subject center metadata."
-                    : "Scene scan package."
-            )
-
-            var manifest = ScanPackageManifest(
-                schemaVersion: "0.3.0",
-                scanId: currentScanId,
-                scanMode: scanMode.rawValue,
-                appVersion: appVersion,
-                buildVersion: buildVersion,
-                imageCount: capturedFrames.count,
-                depthFrameCount: 0,
-                imuSampleCount: motionSamples.count,
-                videoCount: videoMetadata.count,
-                usesLidar: usesLidar,
-                usesARKitMesh: usesARKitMesh,
-                usesVideo: !videoMetadata.isEmpty,
-                createdAt: createdAt,
-                limitations: [
-                    "depth frames are optional and absent on non-LiDAR devices",
-                    "pose-synchronized ARKit high-resolution keyframes are preferred but individual captures may fall back to the triggering video frame",
-                    "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
-                    "video capture is capped at 30 seconds to keep scan exports manageable",
-                    "scene surface coverage uses ARKit estimated raycasts and is capture guidance, not reconstruction proof",
-                    "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
-                    "dense reconstruction requires a CUDA-capable COLMAP build"
-                ]
-            )
-            if !reconstructionPolygon.isEmpty {
-                guard captureMaskCount == capturedFrames.count,
-                      captureMaskCount > 0 else {
-                    throw ScanCaptureMaskError.incompleteMaskSet(
-                        expected: capturedFrames.count,
-                        actual: captureMaskCount
-                    )
-                }
-                manifest.reconstructionScope = ReconstructionScopeManifest(
-                    schemaVersion: "1.0",
-                    mode: "image_masks",
-                    maskSpace: "capture_image",
-                    maskConvention: "white_keep_black_exclude",
-                    maskCount: captureMaskCount
+        captureQueue.async {
+            do {
+                let exportResult = try self.exportCurrentScan(deviceModel: deviceModel)
+                self.updatePublishedState(
+                    state: .completed(exportResult.zipURL),
+                    statusMessage: "Exported \(exportResult.zipURL.lastPathComponent)",
+                    guidanceMessage: self.exportSummary(exportResult.summary),
+                    lastZipURL: exportResult.zipURL,
+                    lastExportSummary: exportResult.summary
+                )
+            } catch {
+                self.cleanupCaptureAfterFailure()
+                self.updatePublishedState(
+                    state: .failed(error.localizedDescription),
+                    statusMessage: "Export failed: \(error.localizedDescription)",
+                    guidanceMessage: "The captured files are still stored on this iPhone."
                 )
             }
-
-            try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
-            try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
-            try packageWriter.saveMotionMetadata(motionSamples, in: currentScanDirectory)
-            try packageWriter.saveVideoMetadata(videoMetadata, in: currentScanDirectory)
-            try packageWriter.saveManifest(manifest, in: currentScanDirectory)
-            let zipURL = try packageWriter.zipScanFolder(at: currentScanDirectory)
-            let summary = ScanExportSummary(
-                scanId: currentScanId,
-                zipFileName: zipURL.lastPathComponent,
-                scanModeTitle: scanMode.title,
-                acceptedFrameCount: capturedFrames.count,
-                rejectedFrameCount: qualityStats.rejectedTotal,
-                highResolutionImageCount: highResolutionImageCount,
-                fallbackImageCount: fallbackImageCount,
-                videoCount: videoMetadata.count,
-                averageBlurScore: qualityStats.averageBlurScore,
-                minimumBlurScore: qualityStats.minimumBlurScore,
-                maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
-                captureDurationSeconds: session.captureDurationSeconds,
-                objectRadiusMeters: session.objectRadiusMeters,
-                objectCenterWasSet: session.objectCenterWorld != nil,
-                sceneCoverageScore: finalSceneCoverage?.score
-            )
-
-            return (zipURL, summary)
         }
-
-        updatePublishedState(
-            state: .completed(exportResult.zipURL),
-            statusMessage: "Exported \(exportResult.zipURL.lastPathComponent)",
-            guidanceMessage: exportSummary(exportResult.summary),
-            lastZipURL: exportResult.zipURL,
-            lastExportSummary: exportResult.summary
-        )
-
-        return exportResult.zipURL
     }
 
+    // Only captureQueue may finish frames, metadata and archive publication. Keeping the
+    // entire operation here serializes it with frame callbacks without blocking SwiftUI.
+    private func exportCurrentScan(deviceModel: String) throws -> (zipURL: URL, summary: ScanExportSummary) {
+        guard isScanning else { throw ScanPackageWriterError.invalidScanId }
+        isScanning = false
+        try finishPendingKeyframeWithFallback()
+
+        guard let currentScanDirectory,
+              let currentScanId else {
+            throw ScanPackageWriterError.invalidScanId
+        }
+
+        let motionSamples = motionRecorder.stop()
+        let videoMetadata = videoRecorder.finish().map { [$0] } ?? []
+        let createdAt = ISO8601DateFormatter().string(from: Date())
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        let usesLidar = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+        let usesARKitMesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+        let finalSceneCoverage = activeScanMode == .scene
+            ? sceneCoverageTracker.snapshot
+            : nil
+        let session = ScanSessionMetadata(
+            scanId: currentScanId,
+            createdAt: createdAt,
+            device: deviceModel,
+            appVersion: appVersion,
+            buildVersion: buildVersion,
+            scanMode: activeScanMode.rawValue,
+            usesLidar: usesLidar,
+            usesARKitMesh: usesARKitMesh,
+            highResolutionFrameCaptureEnabled: arTrackingManager
+                .highResolutionFrameCaptureEnabled,
+            configuredVideoResolution: arTrackingManager.configuredVideoResolution,
+            highResolutionImageCount: highResolutionImageCount,
+            fallbackImageCount: fallbackImageCount,
+            imageCount: capturedFrames.count,
+            depthFrameCount: 0,
+            imuSampleCount: motionSamples.count,
+            videoCount: videoMetadata.count,
+            rejectedFrameCount: qualityStats.rejectedTotal,
+            rejectedTrackingCount: qualityStats.rejectedTracking,
+            rejectedBlurCount: qualityStats.rejectedBlur,
+            rejectedMotionCount: qualityStats.rejectedMotion,
+            averageBlurScore: qualityStats.averageBlurScore,
+            minimumBlurScore: qualityStats.minimumBlurScore,
+            maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
+            captureDurationSeconds: scanStartedAt.map { Date().timeIntervalSince($0) },
+            objectCenterWorld: objectCenterWorld?.array,
+            objectRadiusMeters: activeScanMode == .object ? activeObjectRadius.rawValue : nil,
+            sceneCoverage: finalSceneCoverage.map {
+                SceneCoverageMetadata(
+                    schemaVersion: "1.1",
+                    acceptedPoseCount: $0.acceptedPoseCount,
+                    uniquePositionCellCount: $0.uniquePositionCellCount,
+                    headingBinCount: $0.headingBinCount,
+                    elevationBinCount: $0.elevationBinCount,
+                    pathLengthMeters: $0.pathLengthMeters,
+                    disconnectedJumpCount: $0.disconnectedJumpCount,
+                    surfaceHitCount: $0.surfaceHitCount,
+                    uniqueSurfaceCellCount: $0.uniqueSurfaceCellCount,
+                    multiAngleSurfaceCellCount: $0.multiAngleSurfaceCellCount,
+                    minimumSurfaceDistanceMeters: $0.minimumSurfaceDistanceMeters,
+                    maximumSurfaceDistanceMeters: $0.maximumSurfaceDistanceMeters,
+                    surfaceScore: $0.surfaceScore,
+                    score: $0.score
+                )
+            },
+            notes: activeScanMode == .object
+                ? "Object scan package with ARKit subject center metadata."
+                : "Scene scan package."
+        )
+
+        var manifest = ScanPackageManifest(
+            schemaVersion: "0.3.0",
+            scanId: currentScanId,
+            scanMode: activeScanMode.rawValue,
+            appVersion: appVersion,
+            buildVersion: buildVersion,
+            imageCount: capturedFrames.count,
+            depthFrameCount: 0,
+            imuSampleCount: motionSamples.count,
+            videoCount: videoMetadata.count,
+            usesLidar: usesLidar,
+            usesARKitMesh: usesARKitMesh,
+            usesVideo: !videoMetadata.isEmpty,
+            createdAt: createdAt,
+            limitations: [
+                "depth frames are optional and absent on non-LiDAR devices",
+                "pose-synchronized ARKit high-resolution keyframes are preferred but individual captures may fall back to the triggering video frame",
+                "video capture is encoded from ARFrame camera buffers, not separate high-resolution video",
+                "video capture is capped at 30 seconds to keep scan exports manageable",
+                "scene surface coverage uses ARKit estimated raycasts and is capture guidance, not reconstruction proof",
+                "automatic object crop requires ARKit-to-COLMAP coordinate alignment",
+                "dense reconstruction requires a CUDA-capable COLMAP build"
+            ]
+        )
+        if !reconstructionPolygon.isEmpty {
+            guard captureMaskCount == capturedFrames.count,
+                  captureMaskCount > 0 else {
+                throw ScanCaptureMaskError.incompleteMaskSet(
+                    expected: capturedFrames.count,
+                    actual: captureMaskCount
+                )
+            }
+            manifest.reconstructionScope = ReconstructionScopeManifest(
+                schemaVersion: "1.0",
+                mode: "image_masks",
+                maskSpace: "capture_image",
+                maskConvention: "white_keep_black_exclude",
+                maskCount: captureMaskCount
+            )
+        }
+
+        try packageWriter.saveFrameMetadata(capturedFrames, in: currentScanDirectory)
+        try packageWriter.saveSessionMetadata(session, in: currentScanDirectory)
+        try packageWriter.saveMotionMetadata(motionSamples, in: currentScanDirectory)
+        try packageWriter.saveVideoMetadata(videoMetadata, in: currentScanDirectory)
+        try packageWriter.saveManifest(manifest, in: currentScanDirectory)
+        let zipURL = try packageWriter.zipScanFolder(at: currentScanDirectory)
+        let summary = ScanExportSummary(
+            scanId: currentScanId,
+            zipFileName: zipURL.lastPathComponent,
+            scanModeTitle: activeScanMode.title,
+            acceptedFrameCount: capturedFrames.count,
+            rejectedFrameCount: qualityStats.rejectedTotal,
+            highResolutionImageCount: highResolutionImageCount,
+            fallbackImageCount: fallbackImageCount,
+            videoCount: videoMetadata.count,
+            averageBlurScore: qualityStats.averageBlurScore,
+            minimumBlurScore: qualityStats.minimumBlurScore,
+            maximumMovementSpeedMetersPerSecond: qualityStats.maximumMovementSpeed,
+            captureDurationSeconds: session.captureDurationSeconds,
+            objectRadiusMeters: session.objectRadiusMeters,
+            objectCenterWasSet: session.objectCenterWorld != nil,
+            sceneCoverageScore: finalSceneCoverage?.score
+        )
+
+        return (zipURL, summary)
+    }
+
+    @MainActor
     func fail(_ error: Error) {
-        captureQueue.sync {
-            cleanupCaptureAfterFailure()
+        captureQueue.async {
+            self.cleanupCaptureAfterFailure()
         }
         arTrackingManager.stopTracking()
         updatePublishedState(state: .failed(error.localizedDescription), statusMessage: error.localizedDescription)
     }
 
+    @MainActor
     func setObjectCenter(_ worldPosition: SIMD3<Float>) {
-        guard scanMode == .object else { return }
+        guard state == .scanning, scanMode == .object else { return }
 
-        captureQueue.sync {
-            objectCenterWorld = worldPosition
+        captureQueue.async {
+            guard self.isScanning, self.activeScanMode == .object else { return }
+            self.objectCenterWorld = worldPosition
+            self.updatePublishedState(
+                statusMessage: "Subject set",
+                guidanceMessage: "Circle the subject and keep it filling most of the frame",
+                objectCenterIsSet: true
+            )
         }
-
-        updatePublishedState(
-            statusMessage: "Subject set",
-            guidanceMessage: "Circle the subject and keep it filling most of the frame",
-            objectCenterIsSet: true
-        )
     }
 
+    @MainActor
     func configureReconstructionArea(
         _ polygon: [NormalizedMaskPoint],
         previewSize: CGSize
     ) {
+        guard state != .scanning, state != .exporting else { return }
         do {
             try maskRasterizer.validate(polygon)
             guard previewSize.width > 0, previewSize.height > 0 else { return }
@@ -356,7 +393,9 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         }
     }
 
+    @MainActor
     func clearReconstructionArea() {
+        guard state != .scanning, state != .exporting else { return }
         captureQueue.sync {
             reconstructionPolygon.removeAll()
             reconstructionPreviewSize = nil
@@ -553,17 +592,17 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             fallbackImageCount += 1
         }
         qualityStats.recordAccepted(blurScore: blurScore, movementSpeed: decision.movementSpeedMetersPerSecond)
-        let surfacePoint = scanMode == .scene
+        let surfacePoint = activeScanMode == .scene
             ? estimatedSceneSurfacePoint(for: frame)
             : nil
-        let coverage = scanMode == .scene
+        let coverage = activeScanMode == .scene
             ? sceneCoverageTracker.record(
                 cameraTransform: frame.camera.transform,
                 surfacePoint: surfacePoint
             )
             : nil
         var cameraPath: [SIMD3<Float>]?
-        if scanMode == .scene {
+        if activeScanMode == .scene {
             sceneCameraPositions.append(frame.camera.transform.translation)
             if sceneCameraPositions.count > 300 {
                 sceneCameraPositions.removeFirst(sceneCameraPositions.count - 300)
@@ -586,7 +625,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             lastMovementSpeed: decision.movementSpeedMetersPerSecond,
             sceneCoverage: coverage,
             sceneCameraPath: cameraPath,
-            sceneSurfaceSamples: scanMode == .scene
+            sceneSurfaceSamples: activeScanMode == .scene
                 ? sceneCoverageTracker.surfaceSamples
                 : nil
         )
@@ -724,7 +763,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         sceneCameraPath: [SIMD3<Float>]? = nil,
         sceneSurfaceSamples: [SceneSurfaceSample]? = nil
     ) {
-        DispatchQueue.main.async {
+        let update = {
             if let state {
                 self.state = state
             }
@@ -775,13 +814,18 @@ final class ScanCaptureManager: NSObject, ObservableObject {
                 self.lastExportSummary = lastExportSummary
             }
         }
+        if Thread.isMainThread {
+            update()
+        } else {
+            DispatchQueue.main.async(execute: update)
+        }
     }
 
     private static func makeScanId() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy_MM_dd_HH_mm_ss"
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return "scan_\(formatter.string(from: Date()))"
+        return "scan_\(formatter.string(from: Date()))_\(UUID().uuidString.lowercased())"
     }
 
     private func guidance(
@@ -789,7 +833,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         blurScore: Float,
         sceneCoverage: SceneCoverageSnapshot?
     ) -> String {
-        if scanMode == .object && !objectCenterIsSet {
+        if activeScanMode == .object && objectCenterWorld == nil {
             return "Tap the subject so the object radius can be saved"
         }
 
@@ -802,7 +846,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
             return "Hold steadier; sharp frames reconstruct better"
         }
 
-        if scanMode == .object {
+        if activeScanMode == .object {
             return "Keep circling and vary your height"
         }
 
@@ -830,7 +874,7 @@ final class ScanCaptureManager: NSObject, ObservableObject {
         case .tooSoon:
             return "Keep moving slowly; overlap is good"
         case .insufficientMotion:
-            return scanMode == .object ? "Move around the subject" : "Shift position or angle for more coverage"
+            return activeScanMode == .object ? "Move around the subject" : "Shift position or angle for more coverage"
         case .blurry:
             return "Slow down and avoid fast pans"
         case .firstFrame, .usefulMotion:

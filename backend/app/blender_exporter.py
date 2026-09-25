@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+from app.heavy_work import heavy_work, native_kwargs
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,11 @@ def export_blender_formats(scan_dir: Path, config: BlenderConfig | None = None) 
     if config.script_path is None:
         return
 
+    with heavy_work(f'Blender export {scan_dir.name}'):
+        _export(scan_dir, config)
+
+
+def _export(scan_dir: Path, config: BlenderConfig) -> None:
     subprocess.run(
         [
             config.executable,
@@ -29,4 +35,5 @@ def export_blender_formats(scan_dir: Path, config: BlenderConfig | None = None) 
             str(scan_dir),
         ],
         check=True,
+        **native_kwargs(),
     )
