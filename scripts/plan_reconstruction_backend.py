@@ -65,9 +65,7 @@ def main() -> None:
 
     scan_id = scan_id_from_path(args.scan)
     work_dir = args.work_dir or Path("ScannerPlans") / scan_id / args.backend
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    scan_root = prepare_scan_source(args.scan, work_dir, reset=False)
+    scan_root = prepare_scan_source(args.scan, work_dir)
     package = validate_and_report_scan(scan_root)
     if args.backend == "colmap_openmvs":
         prepare_colmap_output_directories(

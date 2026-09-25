@@ -155,8 +155,11 @@ class PanelTests(unittest.TestCase):
         for widget in (self.panel.title, self.panel.identity, self.panel.choose_button,
                        self.panel.stage, *self.panel.values.values(), self.panel.completed,
                        self.panel.check_toggle, self.panel.activity, self.panel.recovery_note,
-                       self.panel.resume_button, self.panel.log_toggle, self.panel.folder,
+                       self.panel.resume_button, self.panel.auto_blend, self.panel.blend_button,
+                       self.panel.log_toggle, self.panel.folder,
                        self.panel.hide_button, self.panel.copy_button, self.panel.footer):
+            if not widget.isVisible():
+                continue
             rect = QRect(widget.mapTo(viewport, QPoint()), widget.size())
             self.assertTrue(viewport.rect().contains(rect), widget.text())
             if widget.hasHeightForWidth():
@@ -211,6 +214,30 @@ class PanelTests(unittest.TestCase):
             self.panel.copy_button.click()
         self.assertIn('review before sharing', self.panel.footer.text())
         self.assert_main_controls_fit()
+
+    def test_auto_blender_launches_once_for_completed_selected_run(self):
+        value = replace(self.compact_snapshot('succeeded'), auto_blend=True, can_prepare_blend=True)
+        with patch.object(self.panel, 'start_resume_task') as start:
+            self.panel.render(value)
+            self.panel.render(value)
+        self.assertEqual(start.call_count, 1)
+        self.assertFalse(self.panel.resume_button.isVisible())
+
+    def test_blender_running_failure_and_ready_use_the_correct_action(self):
+        base = replace(self.compact_snapshot('succeeded'), phase='blender')
+        self.panel.show()
+        for status, path, retry, caption in (
+                ('running', None, False, 'Preparing .blend…'),
+                ('failed', None, True, 'Retry .blend'),
+                ('succeeded', Path('/tmp/scan.blend'), False, 'Open .blend')):
+            value = replace(base, status=status, blend_path=path, can_prepare_blend=retry)
+            self.panel.render(value)
+            self.assertEqual(self.panel.blend_button.text(), caption)
+            self.assertEqual(self.panel.blend_button.isEnabled(), path is not None or retry)
+            self.assert_main_controls_fit()
+        with patch('desktop.scanner_panel.QDesktopServices.openUrl') as opened:
+            self.panel.blend_button.click()
+        self.assertEqual(opened.call_args.args[0].toLocalFile(), '/tmp/scan.blend')
 
     def test_close_with_tray_hides_without_quitting(self):
         self.panel.tray_enabled = True

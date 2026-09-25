@@ -394,8 +394,13 @@ struct ScanView: View {
     private var controls: some View {
         HStack(spacing: 12) {
             Button(action: primaryAction) {
-                Label(primaryTitle, systemImage: primaryIcon)
-                    .frame(maxWidth: .infinity)
+                HStack {
+                    if scanManager.state == .exporting {
+                        ProgressView().tint(.white)
+                    }
+                    Label(primaryTitle, systemImage: primaryIcon)
+                }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .disabled(primaryActionDisabled)
@@ -468,11 +473,7 @@ struct ScanView: View {
     }
 
     private func stopScan() {
-        do {
-            try scanManager.stopScan()
-        } catch {
-            scanManager.fail(error)
-        }
+        scanManager.stopScan()
     }
 
     private func beginReconstructionAreaEditing() {

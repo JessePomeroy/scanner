@@ -63,6 +63,25 @@ def load_mask_review(scan_root: Path) -> dict[str, object]:
         or frame_count != len(payload["frames"])
     ):
         raise MaskReviewError("Mask review frame count is invalid")
+    indices = payload.get("review_indices")
+    if (
+        not isinstance(indices, list)
+        or len(indices) != min(frame_count, 5)
+        or any(
+            isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < frame_count
+            for index in indices
+        )
+        or indices != sorted(set(indices))
+    ):
+        raise MaskReviewError("Mask review indices must be bounded, unique, and ordered")
+    expected_previews: list[str] = []
+    for index in indices:
+        frame = payload["frames"][index]
+        if not isinstance(frame, dict) or not isinstance(frame.get("image"), str):
+            raise MaskReviewError("Mask review frame association is invalid")
+        expected_previews.append(f"masks/review/{Path(frame['image']).name}.png")
+    if payload.get("review_masks") != expected_previews or len(set(expected_previews)) != len(indices):
+        raise MaskReviewError("Mask review preview associations are invalid")
     quality = payload.get("quality")
     if not isinstance(quality, dict):
         raise MaskReviewError("Mask review quality summary is invalid")

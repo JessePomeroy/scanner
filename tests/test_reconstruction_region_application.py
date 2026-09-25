@@ -19,6 +19,11 @@ from app.reconstruction_region_application import (  # noqa: E402
 )
 
 
+def setUpModule():
+    from heavy_work_fixture import isolated_heavy_work
+    unittest.enterModuleContext(isolated_heavy_work())
+
+
 class ReconstructionRegionApplicationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.region = ReconstructionRegion(

@@ -1,7 +1,13 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 enum ScanPackageWriterError: Error {
     case invalidScanId
+    case scanDirectoryAlreadyExists(URL)
     case missingScanDirectory(URL)
     case unsupportedLargeFile(URL)
     case unsupportedLargeArchive
@@ -20,16 +26,19 @@ final class ScanPackageWriter {
 
     private let fileManager: FileManager
     private let metadataWriter: MetadataWriter
+    private let publishArchive: (URL, URL) throws -> Void
 
     init(
         rootDirectory: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Scans", isDirectory: true),
         fileManager: FileManager = .default,
-        metadataWriter: MetadataWriter = MetadataWriter()
+        metadataWriter: MetadataWriter = MetadataWriter(),
+        publishArchive: @escaping (URL, URL) throws -> Void = ScanPackageWriter.publishArchiveAtomically
     ) {
         self.rootDirectory = rootDirectory
         self.fileManager = fileManager
         self.metadataWriter = metadataWriter
+        self.publishArchive = publishArchive
     }
 
     @discardableResult
@@ -42,9 +51,16 @@ final class ScanPackageWriter {
         let subdirectories = ["images", "depth", "arkit", "metadata", "preview", "video"]
 
         try fileManager.createDirectory(
-            at: scanDirectory,
+            at: rootDirectory,
             withIntermediateDirectories: true
         )
+        // mkdir claims this capture exclusively; FileManager accepts an existing directory.
+        guard scanDirectory.path.withCString({ mkdir($0, 0o700) }) == 0 else {
+            if errno == EEXIST {
+                throw ScanPackageWriterError.scanDirectoryAlreadyExists(scanDirectory)
+            }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
 
         for subdirectory in subdirectories {
             try fileManager.createDirectory(
@@ -170,11 +186,7 @@ final class ScanPackageWriter {
                 destinationURL: temporaryURL
             )
 
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try fileManager.removeItem(at: destinationURL)
-            }
-
-            try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+            try publishArchive(temporaryURL, destinationURL)
         } catch {
             if fileManager.fileExists(atPath: temporaryURL.path) {
                 try? fileManager.removeItem(at: temporaryURL)
@@ -184,6 +196,19 @@ final class ScanPackageWriter {
         }
 
         return destinationURL
+    }
+
+    private static func publishArchiveAtomically(_ temporaryURL: URL, _ destinationURL: URL) throws {
+        // Both paths are siblings, so rename publishes on the same filesystem. A failed
+        // rename leaves the previous ZIP untouched; there is no remove-then-move gap.
+        let result = temporaryURL.path.withCString { source in
+            destinationURL.path.withCString { destination in
+                rename(source, destination)
+            }
+        }
+        guard result == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
     }
 
     private func isSafeScanId(_ scanId: String) -> Bool {

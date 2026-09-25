@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import ExitStack
 import errno
+import io
 import mimetypes
 import os
 from pathlib import Path
+import shlex
+import shutil
 import stat as stat_module
+import tempfile
 from typing import BinaryIO, Mapping, Sequence
+import zipfile
 
 
 class ArtifactUnavailableError(FileNotFoundError):
@@ -190,6 +196,9 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
     candidates: list[tuple[str, Path]] = [
         ("scan_report", Path("metadata/scan_report.json")),
         ("textured_mesh", Path("dense/scene_textured.obj")),
+        ("textured_bundle", Path("dense/textured_mesh.zip")),
+        ("texture_quality", Path("dense/texture_quality.json")),
+        ("colmap_intake", Path("metadata/colmap_intake.json")),
     ]
     dense_cloud = Path("dense/fused.ply")
     sparse_cloud = Path("sparse/sparse_points.ply")
@@ -215,6 +224,92 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         os.close(descriptor)
         outputs[name] = str(resolved_root / relative)
     return outputs
+
+
+def bundle_textured_mesh(
+    obj: Path, destination: Path, *, evidence_files: Sequence[Path] = ()
+) -> Path:
+    """Publish exactly the OBJ's material dependencies as a portable no-clobber ZIP.
+
+    OpenMVS emits plain relative map paths. Unsupported MTL map options are
+    rejected rather than silently publishing an incomplete or unsafe result.
+    Every input inode stays open through packaging using the serving boundary's
+    same no-follow checks; no neighboring files are made downloadable.
+    """
+    obj = _absolute_lexical(obj)
+    root = obj.parent
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"Textured bundle already exists: {destination}")
+    with ExitStack() as stack:
+        files: dict[str, BinaryIO] = {}
+
+        def owned_file(relative: Path) -> BinaryIO:
+            name = relative.as_posix()
+            if name not in files:
+                descriptor, _ = _open_owned_regular_file(root, root.resolve(), relative)
+                files[name] = stack.enter_context(os.fdopen(descriptor, "rb"))
+            return files[name]
+
+        def reference(parent: Path, value: str) -> Path:
+            path = Path(value)
+            if not value or "\\" in value or "\0" in value or path.is_absolute() or any(part in {".", ".."} for part in value.split("/")):
+                raise UnsafeArtifactPathError(f"Unsafe mesh dependency: {value}")
+            return parent / path
+
+        def records(file: BinaryIO):
+            file.seek(0)
+            reader = io.TextIOWrapper(file, encoding="utf-8")
+            try:
+                for line in reader:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        fields = stripped.split(maxsplit=1)
+                        yield fields[0], fields[1] if len(fields) == 2 else ""
+            finally:
+                reader.detach()
+
+        materials: set[Path] = set()
+        used: set[str] = set()
+        for kind, value in records(owned_file(Path(obj.name))):
+            if kind == "mtllib":
+                materials.update(reference(Path(), name) for name in shlex.split(value))
+            elif kind == "usemtl":
+                used.add(value)
+        if not materials or not used:
+            raise ValueError("Textured OBJ must reference material definitions")
+        textured_materials: set[str] = set()
+        for mtl in sorted(materials):
+            material = ""
+            for kind, value in records(owned_file(mtl)):
+                if kind == "newmtl":
+                    material = value
+                elif kind.startswith("map_") or kind in {"bump", "disp", "decal", "norm"}:
+                    names = shlex.split(value)
+                    if len(names) != 1 or names[0].startswith("-"):
+                        raise ValueError("Material map options are not supported by the portable bundle")
+                    owned_file(reference(mtl.parent, names[0]))
+                    if kind == "map_Kd":
+                        textured_materials.add(material)
+        if missing := used - textured_materials:
+            raise ValueError(f"OBJ materials lack diffuse texture maps: {sorted(missing)}")
+        for evidence in evidence_files:
+            owned_file(reference(Path(), evidence.as_posix()))
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".textured-", suffix=".zip", delete=False) as file:
+            temporary = Path(file.name)
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
+                for name, source in files.items():
+                    source.seek(0)
+                    with archive.open(name, "w", force_zip64=True) as target:
+                        shutil.copyfileobj(source, target, length=1024 * 1024)
+            # An existing result is never overwritten, even if it appeared while
+            # the large archive was being built.
+            os.link(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return destination
 
 
 def _package_directory(

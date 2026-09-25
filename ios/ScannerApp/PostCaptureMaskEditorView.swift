@@ -78,7 +78,7 @@ final class PostCaptureMaskEditorStore: ObservableObject {
     }
 
     func selectSample(_ index: Int) {
-        guard sampleIndices.indices.contains(index) else { return }
+        guard !isSaving, sampleIndices.indices.contains(index) else { return }
         selectedSample = index
         do {
             try loadSelectedImage()
@@ -90,7 +90,7 @@ final class PostCaptureMaskEditorStore: ObservableObject {
     }
 
     func appendRegion(points: [NormalizedMaskPoint]) {
-        guard let frame = selectedFrame else { return }
+        guard !isSaving, let frame = selectedFrame else { return }
         do {
             try CaptureMaskRasterizer().validate(points)
             guard points.count <= 4_096 else { throw MaskEditorError.invalidPolygon }
@@ -106,7 +106,7 @@ final class PostCaptureMaskEditorStore: ObservableObject {
     }
 
     func undoRegion() {
-        guard let frame = selectedFrame, var regions = selections[frame.id], !regions.isEmpty else {
+        guard !isSaving, let frame = selectedFrame, var regions = selections[frame.id], !regions.isEmpty else {
             return
         }
         regions.removeLast()
@@ -115,7 +115,7 @@ final class PostCaptureMaskEditorStore: ObservableObject {
     }
 
     func clearFrame() {
-        guard let frame = selectedFrame else { return }
+        guard !isSaving, let frame = selectedFrame else { return }
         selections[frame.id] = []
         confirmationMessage = nil
     }
@@ -285,6 +285,7 @@ struct PostCaptureMaskEditorView: View {
     let onDone: () -> Void
     @StateObject private var store: PostCaptureMaskEditorStore
     @State private var draftPoints: [NormalizedMaskPoint] = []
+    @State private var isSubmitting = false
 
     init(archiveURL: URL, onDone: @escaping () -> Void) {
         self.onDone = onDone
@@ -298,6 +299,8 @@ struct PostCaptureMaskEditorView: View {
                     ProgressView("Loading representative photos")
                 } else if let image = store.image, let frame = store.selectedFrame {
                     editor(image: image, frame: frame)
+                        .disabled(isBusy)
+                        .allowsHitTesting(!isBusy)
                 } else {
                     ContentUnavailableView(
                         "Mask Draft Unavailable",
@@ -311,18 +314,29 @@ struct PostCaptureMaskEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done", action: onDone)
+                        .disabled(isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        Task { _ = await store.save() }
+                        guard !isBusy else { return }
+                        isSubmitting = true
+                        Task {
+                            defer { isSubmitting = false }
+                            _ = await store.save()
+                        }
                     } label: {
-                        if store.isSaving { ProgressView() } else { Text("Save Draft") }
+                        if isBusy { ProgressView() } else { Text("Save Draft") }
                     }
-                    .disabled(store.isSaving || store.authoredFrameCount == 0)
+                    .disabled(isBusy || store.authoredFrameCount == 0)
                 }
             }
         }
+        .interactiveDismissDisabled(isBusy)
         .task { store.load() }
+    }
+
+    private var isBusy: Bool {
+        isSubmitting || store.isSaving
     }
 
     private func editor(image: UIImage, frame: MaskEditorFrame) -> some View {
@@ -399,7 +413,7 @@ struct PostCaptureMaskEditorView: View {
     private func drawGesture(in rect: CGRect) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard rect.contains(value.location), rect.width > 0, rect.height > 0 else { return }
+                guard !isBusy, rect.contains(value.location), rect.width > 0, rect.height > 0 else { return }
                 let point = NormalizedMaskPoint(
                     x: Double((value.location.x - rect.minX) / rect.width),
                     y: Double((value.location.y - rect.minY) / rect.height)

@@ -7,11 +7,24 @@ from datetime import datetime
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 
 class ScanMetadataError(ValueError):
     """Raised when a metadata file does not match the package contract."""
+
+
+def validate_scan_id(value: str) -> str:
+    """Require a bounded path component before an ID names a workspace."""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}", value
+    ):
+        raise ScanMetadataError(
+            "scan_id must be 1–255 ASCII letters, digits, dots, underscores or hyphens, "
+            "starting with a letter or digit"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -145,6 +158,8 @@ def _parse_frame(value: Any, index: int) -> FrameMetadata:
 
 def _parse_session(value: dict[str, Any]) -> SessionMetadata:
     scan_id = _optional_non_empty_string(value.get("scan_id"), "scan_id")
+    if scan_id is not None:
+        validate_scan_id(scan_id)
     scan_mode = _optional_non_empty_string(value.get("scan_mode"), "scan_mode")
     image_count = _optional_integer(value.get("image_count"), "image_count", minimum=0)
     video_count = _optional_integer(value.get("video_count"), "video_count", minimum=0)

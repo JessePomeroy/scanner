@@ -9,24 +9,25 @@ import shutil
 from typing import BinaryIO, Iterator
 from urllib.parse import quote
 import uuid
-import zipfile
 from time import perf_counter
 
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from app.artifacts import (
     ArtifactUnavailableError,
     UnsafeArtifactPathError,
+    bundle_textured_mesh,
     list_downloadable_artifacts,
     open_downloadable_artifact,
     rebase_output_paths,
 )
-from app.blender_exporter import export_blender_formats
 from app.colmap_runner import ColmapConfig, run_colmap_dense_pipeline, run_colmap_pipeline
 from app.density_budget import inspect_ply_point_budget
 from app.job_recovery import reconcile_interrupted_jobs
+from app.heavy_work import HeavyWorkBusy, Reservation, heavy_work, reserve_heavy_work
 from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
 from app.mask_generator import MaskGenerationError, generate_mask_proposals
@@ -73,7 +74,7 @@ from app.scan_validator import (
 )
 from app.schemas import JobRecord, ScanArtifact
 from app.sparse_review import load_sparse_review_checkpoint, publish_sparse_review_checkpoint
-from app.storage import UnsafeArchiveError, safe_extract_zip
+from app.storage import safe_extract_zip
 from app.upload_lifecycle import store_job_upload
 
 
@@ -171,6 +172,11 @@ async def upload_scan(
             message="Scan queued for processing.",
         )
 
+    return await run_in_threadpool(validate_uploaded_scan, scan_id, incoming_zip)
+
+
+def validate_uploaded_scan(scan_id: str, incoming_zip: Path) -> JobRecord:
+    """Own the blocking validation lifecycle independently of the HTTP event loop."""
     processing_dir: Path | None = None
     try:
         jobs.update(
@@ -198,9 +204,8 @@ async def upload_scan(
             frame_count=report.frame_count,
             outputs=outputs,
         )
-    except (ScanValidationError, UnsafeArchiveError, zipfile.BadZipFile) as error:
-        fail_processing(scan_id, processing_dir)
-        return jobs.update(scan_id, status="failed", message=str(error))
+    except Exception as error:
+        return record_processing_failure(scan_id, processing_dir, error)
 
 
 @app.get("/scans/{scan_id}", response_model=JobRecord)
@@ -278,6 +283,24 @@ def approve_scan_mask_review(
         "awaiting_masks", "awaiting_scope"
     }:
         raise HTTPException(status_code=409, detail="The scan is not awaiting review.")
+    reservation = None
+    if record.stage == "awaiting_masks":
+        try:
+            reservation = reserve_heavy_work(f"API foreground alignment {scan_id}")
+        except HeavyWorkBusy as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    try:
+        return _approve_scan_mask_review(scan_id, record, background_tasks, reservation)
+    except BaseException:
+        if reservation is not None:
+            reservation.close()
+        raise
+
+
+def _approve_scan_mask_review(
+    scan_id: str, record: JobRecord, background_tasks: BackgroundTasks,
+    reservation: Reservation | None,
+) -> JobRecord:
     scan_root = _active_scan_root(scan_id)
     try:
         approve_mask_review(scan_root)
@@ -314,7 +337,8 @@ def approve_scan_mask_review(
             )
         except JobClaimError as error:
             raise HTTPException(status_code=409, detail="This scan has already resumed.") from error
-        background_tasks.add_task(resume_masked_alignment, scan_id)
+        assert reservation is not None
+        background_tasks.add_task(reservation.run, resume_masked_alignment, scan_id)
         return claimed
     return reviewed
 
@@ -440,6 +464,24 @@ def _stream_artifact(file: BinaryIO, chunk_size: int = 1024 * 1024) -> Iterator[
 
 
 def process_scan(
+    scan_id: str,
+    incoming_zip: Path,
+    run_dense: bool,
+    run_openmvs: bool,
+    scope_mode: OpenMVSScopeMode = "auto_roi",
+    use_masks: bool = False,
+    review_scope: bool = False,
+    mask_profile: MaskProfileName = "scene_geometry",
+) -> None:
+    try:
+        with heavy_work(f"API reconstruction {scan_id}"):
+            _process_scan(scan_id, incoming_zip, run_dense, run_openmvs,
+                          scope_mode, use_masks, review_scope, mask_profile)
+    except HeavyWorkBusy as error:
+        record_processing_failure(scan_id, None, error)
+
+
+def _process_scan(
     scan_id: str,
     incoming_zip: Path,
     run_dense: bool,
@@ -627,6 +669,9 @@ def process_scan(
             "scan_report": str(package.report_path),
             **proposal_outputs,
         }
+        intake_path = scan_root / "metadata" / "colmap_intake.json"
+        if intake_path.is_file() and not intake_path.is_symlink():
+            outputs["colmap_intake"] = str(intake_path)
 
         if review_scope:
             checkpoint_outputs = publish_sparse_review_checkpoint(
@@ -713,9 +758,9 @@ def process_scan(
             scan_id,
             status="processing",
             stage="exporting",
-            message="Preparing Blender-friendly outputs.",
+            message="Packaging reconstruction outputs for download.",
         )
-        export_blender_formats(scan_root)
+        publish_delivery_outputs(scan_root, outputs)
         package = validate_and_report_scan(scan_root)
         rebased_outputs = rebase_output_paths(
             outputs,
@@ -738,11 +783,18 @@ def process_scan(
             outputs=rebased_outputs,
         )
     except Exception as error:
-        fail_processing(scan_id, processing_dir)
-        jobs.update(scan_id, status="failed", message=str(error))
+        record_processing_failure(scan_id, processing_dir, error)
 
 
 def resume_masked_alignment(scan_id: str) -> None:
+    try:
+        with heavy_work(f"API foreground alignment {scan_id}"):
+            _resume_masked_alignment(scan_id)
+    except HeavyWorkBusy as error:
+        jobs.update(scan_id, status="processing", stage="awaiting_masks", message=str(error))
+
+
+def _resume_masked_alignment(scan_id: str) -> None:
     """Start object alignment after reviewed masks become authoritative."""
     processing_dir = PROCESSING_DIR / scan_id
     try:
@@ -799,6 +851,9 @@ def resume_masked_alignment(scan_id: str) -> None:
         outputs.update({name: str(path) for name, path in checkpoint_outputs.items()})
         outputs["package_dir"] = str(processing_dir)
         outputs["scan_report"] = str(package.report_path)
+        intake_path = scan_root / "metadata" / "colmap_intake.json"
+        if intake_path.is_file() and not intake_path.is_symlink():
+            outputs["colmap_intake"] = str(intake_path)
         package.record_processing_step(
             "scope_review_checkpoint",
             {
@@ -819,11 +874,18 @@ def resume_masked_alignment(scan_id: str) -> None:
             outputs=outputs,
         )
     except Exception as error:
-        fail_processing(scan_id, processing_dir)
-        jobs.update(scan_id, status="failed", message=str(error))
+        record_processing_failure(scan_id, processing_dir, error)
 
 
 def resume_scoped_scan(scan_id: str) -> None:
+    try:
+        with heavy_work(f"API reviewed reconstruction {scan_id}"):
+            _resume_scoped_scan(scan_id)
+    except HeavyWorkBusy as error:
+        jobs.update(scan_id, status="processing", stage="awaiting_scope", message=str(error))
+
+
+def _resume_scoped_scan(scan_id: str) -> None:
     """Resume dense work without repeating sparse feature matching or mapping."""
     processing_dir = PROCESSING_DIR / scan_id
     try:
@@ -974,9 +1036,9 @@ def resume_scoped_scan(scan_id: str) -> None:
             scan_id,
             status="processing",
             stage="exporting",
-            message="Preparing Blender-friendly outputs.",
+            message="Packaging reconstruction outputs for download.",
         )
-        export_blender_formats(scan_root)
+        publish_delivery_outputs(scan_root, outputs)
         validate_and_report_scan(scan_root)
         completed_target = COMPLETED_DIR / scan_id
         rebased_outputs = rebase_output_paths(
@@ -999,8 +1061,26 @@ def resume_scoped_scan(scan_id: str) -> None:
             outputs=rebased_outputs,
         )
     except Exception as error:
-        fail_processing(scan_id, processing_dir)
-        jobs.update(scan_id, status="failed", message=str(error))
+        record_processing_failure(scan_id, processing_dir, error)
+
+
+def publish_delivery_outputs(scan_root: Path, outputs: dict[str, str]) -> None:
+    """Publish a portable OBJ bundle, not an implied Blender conversion."""
+    textured_mesh = outputs.get("textured_mesh")
+    if textured_mesh is not None:
+        quality_report = Path(textured_mesh).parent / "texture_quality.json"
+        bundle = bundle_textured_mesh(
+            Path(textured_mesh), scan_root / "dense" / "textured_mesh.zip",
+            evidence_files=(Path("texture_quality.json"),) if quality_report.exists() else (),
+        )
+        outputs["textured_bundle"] = str(bundle)
+    for name, relative in (
+        ("texture_quality", "dense/texture_quality.json"),
+        ("colmap_intake", "metadata/colmap_intake.json"),
+    ):
+        path = scan_root / relative
+        if path.is_file() and not path.is_symlink():
+            outputs[name] = str(path)
 
 
 def _active_scan_root(scan_id: str) -> Path:
@@ -1040,20 +1120,28 @@ def _stored_scan_root(scan_id: str, record: JobRecord) -> Path:
     raise HTTPException(status_code=404, detail="The stored scan workspace is unavailable.")
 
 
+class ProcessingPreparationError(RuntimeError):
+    """Extraction failed after this job exclusively created its workspace."""
+
+    def __init__(self, workspace: Path, cause: Exception):
+        super().__init__(str(cause))
+        self.workspace = workspace
+
+
 def prepare_processing_dir(scan_id: str, incoming_zip: Path) -> Path:
     processing_dir = PROCESSING_DIR / scan_id
-    if processing_dir.exists():
-        shutil.rmtree(processing_dir)
-
     processing_dir.mkdir(parents=True)
-    safe_extract_zip(incoming_zip, processing_dir)
+    try:
+        safe_extract_zip(incoming_zip, processing_dir)
+    except Exception as error:
+        raise ProcessingPreparationError(processing_dir, error) from error
     return processing_dir
 
 
 def move_to_completed(scan_id: str, processing_dir: Path) -> Path:
     completed_dir = COMPLETED_DIR / scan_id
-    if completed_dir.exists():
-        shutil.rmtree(completed_dir)
+    if completed_dir.exists() or completed_dir.is_symlink():
+        raise FileExistsError(f"Completed workspace already exists: {completed_dir}")
     shutil.move(str(processing_dir), str(completed_dir))
     return completed_dir
 
@@ -1061,8 +1149,30 @@ def move_to_completed(scan_id: str, processing_dir: Path) -> Path:
 def fail_processing(scan_id: str, processing_dir: Path | None) -> None:
     if processing_dir is None or not processing_dir.exists():
         return
+    if processing_dir.is_symlink():
+        raise ValueError("Failed workspace must not be a symbolic link")
 
     failed_dir = FAILED_DIR / scan_id
-    if failed_dir.exists():
-        shutil.rmtree(failed_dir)
+    if failed_dir.exists() or failed_dir.is_symlink():
+        raise FileExistsError(f"Failed workspace already exists: {failed_dir}")
     shutil.move(str(processing_dir), str(failed_dir))
+
+
+def record_processing_failure(
+    scan_id: str, processing_dir: Path | None, error: Exception
+) -> JobRecord:
+    """Preserve partial work without letting a secondary move hide the cause."""
+    if isinstance(error, ProcessingPreparationError):
+        processing_dir = error.workspace
+    message = str(error)
+    outputs = dict(jobs.read(scan_id).outputs)
+    try:
+        fail_processing(scan_id, processing_dir)
+        preserved = FAILED_DIR / scan_id
+        if processing_dir is not None and preserved.is_dir():
+            outputs["package_dir"] = str(preserved)
+    except Exception as preservation_error:
+        message += f"; workspace preservation failed: {preservation_error}"
+        if processing_dir is not None and processing_dir.is_dir():
+            outputs["package_dir"] = str(processing_dir)
+    return jobs.update(scan_id, status="failed", message=message, outputs=outputs)

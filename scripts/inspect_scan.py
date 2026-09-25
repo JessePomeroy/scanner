@@ -39,7 +39,7 @@ def _verify_image_dimensions(
         try:
             with Image.open(image_path) as image:
                 actual_resolution = image.size
-                image.verify()
+                image.load()
         except (OSError, UnidentifiedImageError) as error:
             raise SystemExit(f"Image decode failed for {frame.image}: {error}") from error
 

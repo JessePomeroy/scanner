@@ -18,8 +18,8 @@ from app.mask_processor import MaskValidationError, validate_capture_mask_png
 from app.mask_authoring import (
     MaskAuthoringError,
     load_mask_authoring_plan,
-    representative_frame_indices,
 )
+from app.mask_review import MaskReviewError, load_mask_review
 
 
 class ScanValidationError(ValueError):
@@ -362,10 +362,20 @@ def _validate_review_previews(
 ) -> None:
     _validate_owned_directory(scan_dir, review_dir, label="masks/review")
     review_files = _validated_flat_files(review_dir, label="masks/review")
-    expected_names = {
-        Path(frames[index].image).name + ".png"
-        for index in representative_frame_indices(len(frames))
-    }
+    try:
+        report = load_mask_review(scan_dir)
+    except MaskReviewError as error:
+        raise ScanValidationError(str(error)) from error
+    if report["frame_count"] != len(frames):
+        raise ScanValidationError("Mask review frame count does not match capture metadata")
+    indices = report["review_indices"]
+    assert isinstance(indices, list)
+    expected_previews = [
+        f"masks/review/{Path(frames[index].image).name}.png" for index in indices
+    ]
+    if report["review_masks"] != expected_previews:
+        raise ScanValidationError("Mask review previews do not match capture metadata")
+    expected_names = {Path(path).name for path in expected_previews}
     actual_names = {path.name for path in review_files}
     if actual_names != expected_names:
         missing = sorted(expected_names - actual_names)

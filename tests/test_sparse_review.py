@@ -31,6 +31,11 @@ IMAGES_TEXT = """# Image list
 """
 
 
+def setUpModule():
+    from heavy_work_fixture import isolated_heavy_work
+    unittest.enterModuleContext(isolated_heavy_work())
+
+
 class SparseReviewTests(unittest.TestCase):
     def test_publishes_camera_preview_and_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,7 +228,7 @@ class SparseReviewTests(unittest.TestCase):
                     },
                 ),
                 patch.object(backend_main, "run_openmvs_pipeline") as run_openmvs,
-                patch.object(backend_main, "export_blender_formats") as export_blender,
+                patch.object(backend_main, "publish_delivery_outputs") as publish_delivery,
             ):
                 backend_main.process_scan(
                     "scan-1",
@@ -247,7 +252,7 @@ class SparseReviewTests(unittest.TestCase):
         run_colmap.assert_called_once()
         self.assertFalse(run_colmap.call_args.kwargs["include_dense"])
         run_openmvs.assert_not_called()
-        export_blender.assert_not_called()
+        publish_delivery.assert_not_called()
         self.assertEqual(record_step.call_args_list[-1].args[0], "scope_review_checkpoint")
 
     def test_object_profile_pauses_for_masks_before_colmap_alignment(self) -> None:

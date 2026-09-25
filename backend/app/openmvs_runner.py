@@ -5,9 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+from app.heavy_work import guarded, native_kwargs
 from typing import Any, Literal
 
 from app.density_budget import PointCloudBudgetResult, inspect_ply_point_budget
+from app.texture_policy import TextureSettings
+from app.texture_quality import write_texture_report
 from app.mask_processor import (
     MaskValidationResult,
     stage_openmvs_texture_masks,
@@ -42,6 +45,7 @@ class OpenMVSConfig:
     point_warning_limit: int = 2_000_000
     point_hard_limit: int = 10_000_000
     point_cloud_source: OpenMVSPointCloudSource = "openmvs_densify"
+    texture: TextureSettings = TextureSettings()
 
     def __post_init__(self) -> None:
         if self.point_cloud_source not in {"openmvs_densify", "colmap_fused"}:
@@ -94,6 +98,7 @@ class OpenMVSConfig:
             and self.region_path is None
         )
         return {
+            "texture": self.texture.as_dict(),
             "point_cloud_source": self.point_cloud_source,
             "densification_enabled": densification_enabled,
             "mesh_input_point_cloud": (
@@ -120,7 +125,7 @@ class OpenMVSConfig:
 
 
 def run_command(command: list[str], cwd: Path | None = None) -> None:
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, check=True, **native_kwargs())
 
 
 def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) -> list[list[str]]:
@@ -284,6 +289,7 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
         str(textured_scene),
         "--export-type",
         "obj",
+        *config.texture.arguments(),
     ]
     if config.texture_use_masks:
         texture.extend(["--ignore-mask-label", str(config.mask_ignore_label)])
@@ -293,6 +299,7 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
     return commands
 
 
+@guarded('OpenMVS reconstruction')
 def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) -> Path:
     """Run the OpenMVS mesh and texturing pipeline."""
     scan_dir = scan_dir.resolve()
@@ -313,6 +320,8 @@ def run_openmvs_pipeline(scan_dir: Path, config: OpenMVSConfig | None = None) ->
         # workspace. Every later OpenMVS command must resolve those paths from
         # the same directory rather than from the backend process directory.
         run_command(command, cwd=dense_dir)
+        if command[0] == config.texture_mesh:
+            write_texture_report(dense_dir / 'scene_textured.obj', dense_dir / 'texture_quality.json')
 
     return dense_dir / "scene_textured.obj"
 

@@ -10,6 +10,7 @@ import shutil
 from typing import Any
 
 from app.report_writer import write_scan_report
+from app.scan_metadata import validate_scan_id
 from app.scan_validator import ScanValidationReport, find_scan_root, validate_scan_package
 from app.storage import safe_extract_zip
 
@@ -22,7 +23,7 @@ class PreparedScanPackage:
 
     @property
     def scan_id(self) -> str:
-        return self.validation.scan_id or self.scan_root.name
+        return validate_scan_id(self.validation.scan_id or self.scan_root.name)
 
     @property
     def metadata_dir(self) -> Path:
@@ -54,25 +55,44 @@ def scan_id_from_path(path: Path) -> str:
     name = path.name
     if name.lower().endswith(".zip"):
         name = name[:-4]
-    return name.replace(" ", "_")
+    return validate_scan_id(name.replace(" ", "_"))
 
 
-def prepare_scan_source(scan: Path, destination: Path, *, reset: bool = True) -> Path:
-    """Copy or extract a scan package into destination and return its scan root."""
-    if reset and destination.exists():
-        shutil.rmtree(destination)
+def prepare_scan_source(scan: Path, destination: Path) -> Path:
+    """Prepare a fresh, exclusively owned workspace without replacing prior data.
 
-    destination.mkdir(parents=True, exist_ok=True)
-
-    if scan.suffix.lower() == ".zip":
-        safe_extract_zip(scan, destination)
-    elif scan.is_dir():
-        target = destination / scan.name
-        if target.exists():
-            shutil.rmtree(target)
-        shutil.copytree(scan, target)
-    else:
+    Keep partial preparation on failure for inspection. Retrying requires another
+    destination, so stale or incomplete input can never be merged into a run.
+    """
+    scan = scan.resolve(strict=True)
+    destination = destination.absolute()
+    resolved_destination = destination.resolve()
+    if (
+        scan == resolved_destination
+        or resolved_destination in scan.parents
+        or (scan.is_dir() and scan in resolved_destination.parents)
+    ):
+        raise ValueError("Scan input and preparation destination must not overlap")
+    is_archive = scan.is_file() and scan.suffix.lower() == ".zip"
+    if not is_archive and not scan.is_dir():
         raise ValueError(f"Scan path is not a zip or directory: {scan}")
+
+    try:
+        destination.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"Preparation destination already exists; choose a fresh workspace: {destination}"
+        ) from error
+
+    if is_archive:
+        safe_extract_zip(scan, destination)
+    else:
+        target = destination / scan.name
+        # Do not follow source links. Reject them throughout the copy, including
+        # derived output folders that package metadata validation does not own.
+        shutil.copytree(scan, target, symlinks=True)
+        if any(path.is_symlink() for path in target.rglob("*")):
+            raise ValueError("Scan directories must not contain symbolic links")
 
     return find_scan_root(destination)
 
