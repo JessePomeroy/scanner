@@ -41,7 +41,7 @@ class GeneratedMaskFrame:
     frame_id: int
     image: str
     mask: str
-    confidence: float
+    confidence: float | None
     method: str
     source_frame_ids: tuple[int, ...]
     keep_fraction: float
@@ -267,7 +267,13 @@ def generate_mask_proposals(
     plan = load_mask_authoring_plan(scan_root.resolve() / "metadata", frames)
     if plan is None:
         return None
-    return (generator or PolygonInterpolationMaskGenerator()).generate(scan_root, plan, frames)
+    if generator is None:
+        if plan.authoring_mode == "single_box":
+            from app.sam2_generator import Sam2MaskGenerator
+            generator = Sam2MaskGenerator()
+        else:
+            generator = PolygonInterpolationMaskGenerator()
+    return generator.generate(scan_root, plan, frames)
 
 
 def _compatible_topology(
@@ -412,7 +418,7 @@ def _evaluate_quality(
                 "frame_id": frame.frame_id,
                 "message": "The proposal keeps less than 0.5% of the frame.",
             })
-        if frame.confidence < _LOW_CONFIDENCE:
+        if frame.confidence is not None and frame.confidence < _LOW_CONFIDENCE:
             warnings.append({
                 "code": "low_generator_confidence",
                 "frame_id": frame.frame_id,
@@ -459,7 +465,8 @@ def _select_review_indices(frames: list[GeneratedMaskFrame]) -> tuple[int, ...]:
         return min((abs(index - other) for other in seen), default=count)
 
     low_confidence = {
-        index for index in generated if frames[index].confidence < _LOW_CONFIDENCE
+        index for index in generated
+        if frames[index].confidence is not None and frames[index].confidence < _LOW_CONFIDENCE
     }
     if low_confidence:
         selected.add(min(

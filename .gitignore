@@ -2,6 +2,8 @@
 *.pyc
 __pycache__/
 .venv/
+.venv-sam2/
+backend/models/
 venv/
 
 # Local scan data can be large and device-specific.

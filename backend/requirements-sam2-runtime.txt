@@ -1,0 +1,6 @@
+# Install this first; upstream SAM2's build imports torch even without its CUDA extension.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.7.1+cu126
+torchvision==0.22.1+cu126
+setuptools
+wheel

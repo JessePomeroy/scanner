@@ -94,6 +94,113 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+### SAM2 object processing on the PC
+
+The optional automatic Object workflow uses one box on one saved photo. The PC
+tracks that subject with SAM 2.1 Small, aligns cameras using the full scene, then
+applies the generated masks to OpenMVS geometry and texturing. It produces a
+portable textured OBJ bundle for Blender. Scene reconstruction and the existing
+representative-polygon review workflow keep their existing behavior.
+
+SAM2 runs in a separate Python 3.11 process; the FastAPI process does not import
+PyTorch. From the repository root, with `uv` installed:
+
+```bash
+uv venv --seed --python 3.11 backend/.venv-sam2
+backend/.venv-sam2/bin/python -m pip install -r backend/requirements-sam2-runtime.txt
+SAM2_BUILD_CUDA=0 backend/.venv-sam2/bin/python -m pip install --no-build-isolation -r backend/requirements-sam2.txt
+backend/.venv-sam2/bin/python scripts/install_sam2_model.py
+```
+
+Alternatively, create that environment with `python3.11 -m venv` before the pip
+commands. Installation downloads several GB of runtime packages. It does not
+alter the backend's existing `.venv`. The worker pins PyTorch 2.7.1 with CUDA 12.6,
+TorchVision 0.22.1, and an exact [upstream SAM2 revision](https://github.com/facebookresearch/sam2/tree/2b90b9f5ceec907a1c18123530e92e794ad901a4).
+This avoids carrying the experiment's PyTorch 2.5.1 into the backend; that version
+is affected by the upstream [model-loading advisory](https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6).
+
+The installer downloads only the pinned Small checkpoint and verifies its SHA256.
+Use `--source /path/to/sam2.1_hiera_small.pt` to reuse a verified local copy.
+An existing, different checkpoint is never overwritten. Inference does not
+download models or send capture photos to a cloud service. The optional SAM2
+CUDA cleanup extension is disabled, matching the tested workflow.
+
+Defaults are `backend/.venv-sam2/bin/python` and
+`backend/models/sam2.1_hiera_small.pt`. Operators can override them with
+`SCANNER_SAM2_PYTHON` and `SCANNER_SAM2_CHECKPOINT`; uploaded packages cannot
+select executable code or model files. An NVIDIA CUDA GPU is required. The
+worker exits before COLMAP/OpenMVS starts, releasing its GPU allocations.
+
+Automatic processing is opt-in:
+
+```bash
+curl -F 'file=@scan.zip' \
+  'http://localhost:8000/scans?run_reconstruction=true&object_preset=preview'
+```
+
+Use `object_preset=detail` for the higher-resolution pass. Both presets process
+all capture photos; the 69-photo subset experiment is not an automatic photo
+selection policy. Preview uses prepared images up to 1600 pixels and dense
+reconstruction up to 960; Detail uses 3200 and 1920 respectively. Both use four
+CPU threads, four neighboring views, two-view fusion, no mesh refinement, and
+the tested seam-leveling-off texture policy. They do not run a redundant COLMAP
+dense-stereo pass before OpenMVS densification.
+
+The package must be an `object_scan`, contain 3–300 time-ordered photos, and
+include `metadata/mask_authoring.json` in this explicit single-box format:
+
+```json
+{
+  "schema_version": "1.1",
+  "authoring_mode": "single_box",
+  "coordinate_space": "normalized_capture_image",
+  "mask_convention": "white_keep_black_exclude",
+  "revision": 1,
+  "representative_frames": [{
+    "frame_id": 1,
+    "image": "images/frame_000001.jpg",
+    "regions": [{
+      "operation": "keep",
+      "points": [
+        {"x": 0.30, "y": 0.26}, {"x": 0.59, "y": 0.26},
+        {"x": 0.59, "y": 0.48}, {"x": 0.30, "y": 0.48}
+      ]
+    }]
+  }]
+}
+```
+
+The four corners must describe one axis-aligned rectangle in boundary order,
+bound to an exact frame ID and image path. Coordinates refer to that saved
+photo, not the live camera view. A seed can be in the middle of a capture;
+tracking then runs in both directions. Mixed image sizes/aspects are letterboxed
+for tracking and mapped back to each original photo's dimensions. Originals
+are not resized or replaced.
+
+Do not combine this draft with active capture masks, precomputed reconstruction
+folders, `review_scope=true`, `use_masks=true`, or another scope/mask profile.
+Conflicting inputs fail rather than silently overwriting existing masks or
+changing their meaning. Legacy schema 1.0 polygons are not reinterpreted as boxes.
+
+Valid proposals are promoted under `single_box_automatic_v1`, with report state
+`auto_accepted` and `human_reviewed: false`. Area/position changes are retained as
+warnings, not approval stops. Empty or malformed masks, missing runtime/model,
+worker failures, or fewer than 80% aligned photos fail the job and preserve its
+archive and working package. Reports retain optional mask overlays; they are
+not a claim of segmentation accuracy. No calibrated SAM2 confidence is invented.
+
+SAM2 has a ten-minute worker timeout. Automatic reconstruction has a total
+30-minute Preview or 45-minute Detail budget, plus point-count gates before
+meshing. The existing shared heavy-work lock prevents competing Scanner jobs.
+RAM limits are still a service configuration, not a Python guarantee: configure
+an appropriate systemd `MemoryMax`/`MemorySwapMax` before enabling this on a
+running backend. The 138-photo verification used a 32 GiB, no-swap cap.
+
+This is a backend/API contract. The current iPhone editor still emits the legacy
+representative-frame format; its one-box UI/export/upload wiring is a separate
+client change. Installing these dependencies does not restart or deploy the
+running backend service.
+
 To view job status from an iPhone on the same trusted LAN, bind the backend to
 the workstation network interface:
 
