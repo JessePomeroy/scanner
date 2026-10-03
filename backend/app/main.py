@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import os
 import shutil
-from typing import Annotated, BinaryIO, Iterator
+from typing import Annotated, BinaryIO, Iterator, Literal
 from urllib.parse import quote
 import uuid
 from time import perf_counter
@@ -77,6 +77,7 @@ from app.sparse_review import load_sparse_review_checkpoint, publish_sparse_revi
 from app.storage import safe_extract_zip
 from app.upload_lifecycle import store_job_upload
 from app.object_pipeline import ObjectPresetName, reconstruct_object
+from app.retro_style import RetroStyle, TRIANGLE_BUDGETS
 
 
 @asynccontextmanager
@@ -129,8 +130,16 @@ async def upload_scan(
     mask_profile: MaskProfileName = Query("scene_geometry"),
     review_scope: bool = Query(False),
     object_preset: Annotated[ObjectPresetName | None, Query()] = None,
+    export_style: Annotated[Literal["standard", "retro"], Query()] = "standard",
+    retro_triangles: Annotated[int, Query(ge=500, le=2000)] = 500,
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
+    if type(retro_triangles) is not int or retro_triangles not in TRIANGLE_BUDGETS:
+        raise HTTPException(status_code=400, detail="Retro triangle budget must be 500, 1000 or 2000.")
+    if export_style == "retro" and object_preset is None:
+        raise HTTPException(status_code=400, detail="Retro upload export requires an automatic object preset.")
+    if export_style != "retro" and retro_triangles != 500:
+        raise HTTPException(status_code=400, detail="A Retro triangle budget requires export_style=retro.")
     if object_preset is not None:
         if not run_reconstruction:
             raise HTTPException(status_code=400, detail="An object preset requires explicit reconstruction.")
@@ -173,6 +182,8 @@ async def upload_scan(
             review_scope,
             mask_profile,
             object_preset,
+            export_style=export_style,
+            retro_triangles=retro_triangles,
         )
         return jobs.update(
             scan_id,
@@ -482,11 +493,15 @@ def process_scan(
     review_scope: bool = False,
     mask_profile: MaskProfileName = "scene_geometry",
     object_preset: ObjectPresetName | None = None,
+    *,
+    export_style: Literal["standard", "retro"] = "standard",
+    retro_triangles: int = 500,
 ) -> None:
     try:
         with heavy_work(f"API reconstruction {scan_id}"):
             _process_scan(scan_id, incoming_zip, run_dense, run_openmvs,
-                          scope_mode, use_masks, review_scope, mask_profile, object_preset)
+                          scope_mode, use_masks, review_scope, mask_profile, object_preset,
+                          export_style=export_style, retro_triangles=retro_triangles)
     except HeavyWorkBusy as error:
         record_processing_failure(scan_id, None, error)
 
@@ -501,6 +516,9 @@ def _process_scan(
     review_scope: bool = False,
     mask_profile: MaskProfileName = "scene_geometry",
     object_preset: ObjectPresetName | None = None,
+    *,
+    export_style: Literal["standard", "retro"] = "standard",
+    retro_triangles: int = 500,
 ) -> None:
     processing_dir: Path | None = None
     try:
@@ -517,7 +535,9 @@ def _process_scan(
         if object_preset is not None:
             jobs.update(scan_id, status="processing", stage="reconstructing",
                         message="Starting automatic object reconstruction.")
-            outputs = reconstruct_object(package, object_preset, progress=lambda message: jobs.update(
+            outputs = reconstruct_object(package, object_preset,
+                retro_style=RetroStyle(retro_triangles) if export_style == "retro" else None,
+                progress=lambda message: jobs.update(
                 scan_id, status="processing", stage="reconstructing", message=message,
             ))
             _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,

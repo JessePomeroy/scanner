@@ -58,6 +58,11 @@ Current entry points:
   recipes preserve source objects in the `.blend`, apply box/cylinder and
   loose-component cleanup to copies, verify the retained result, and export
   only those copies to GLB.
+- `export_retro_asset.py`: create a separate, verified low-poly Retro asset from
+  an existing textured OBJ. Supports 500/1000/2000-triangle budgets, 128/256-pixel
+  baked atlases (default: 500 triangles and 256 pixels), optional ordered
+  dithering, packed Blender/GLB files and a
+  portable OBJ bundle. Originals are hash-checked and never overwritten.
 - `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
   source to round-trip the custom ZIP writer through Python `zipfile`.
 - `verify_capture_mask_mapper.swift`: verify identity, aspect-fill crop, and

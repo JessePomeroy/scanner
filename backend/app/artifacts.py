@@ -199,6 +199,13 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         ("textured_bundle", Path("dense/textured_mesh.zip")),
         ("texture_quality", Path("dense/texture_quality.json")),
         ("colmap_intake", Path("metadata/colmap_intake.json")),
+        ("openmvs_dense_point_cloud", Path("dense/scene_dense.ply")),
+        ("retro_blend", Path("exports/retro/retro.blend")),
+        ("retro_glb", Path("exports/retro/retro.glb")),
+        ("retro_bundle", Path("exports/retro/retro-obj.zip")),
+        ("retro_report", Path("exports/retro/retro-report.json")),
+        ("retro_verification", Path("exports/retro/verification.json")),
+        ("retro_export_report", Path("exports/retro/export.json")),
     ]
     dense_cloud = Path("dense/fused.ply")
     sparse_cloud = Path("sparse/sparse_points.ply")

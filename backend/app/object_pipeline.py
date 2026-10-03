@@ -25,6 +25,8 @@ from app.openmvs_runner import (
 from app.scan_metadata import load_scan_metadata
 from app.scan_package import PreparedScanPackage, validate_and_report_scan
 from app.texture_quality import write_texture_report
+from app.retro_export import export_retro_asset
+from app.retro_style import RetroStyle
 
 
 ObjectPresetName = Literal["preview", "detail"]
@@ -51,6 +53,7 @@ def reconstruct_object(
     preset_name: ObjectPresetName,
     *,
     progress: Callable[[str], None] | None = None,
+    retro_style: RetroStyle | None = None,
 ) -> dict[str, str]:
     """Generate/validate masks, align the scene, then reconstruct only the selected object.
 
@@ -172,4 +175,13 @@ def reconstruct_object(
     outputs.update(textured_mesh=str(mesh), openmvs_dense_point_cloud=str(root/"dense/scene_dense.ply"),
                    colmap_intake=str(root/"metadata/colmap_intake.json"),
                    processing_report=str(root/"metadata/processing.json"))
+    if retro_style is not None:
+        outputs.update(export_retro_asset(
+            mesh, root / "exports/retro", retro_style,
+            timeout_seconds=min(600, max(0, deadline - perf_counter())), progress=notify,
+        ))
+        package.record_processing_step("retro_export", {
+            "state": "succeeded", "settings": asdict(retro_style),
+            "report": "exports/retro/export.json", "original_reconstruction_preserved": True,
+        })
     return outputs

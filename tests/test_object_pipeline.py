@@ -4,6 +4,7 @@ from io import BytesIO
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -148,6 +149,51 @@ class ObjectUploadTests(unittest.IsolatedAsyncioTestCase):
                 await self.upload(**options)
             self.assertEqual(caught.exception.status_code,400)
         self.assertEqual(self.jobs.list(),[])
+
+    async def test_retro_upload_is_explicit_and_carries_its_budget_to_the_worker(self):
+        result, background = await self.upload(export_style="retro", retro_triangles=500)
+        self.assertEqual(result.stage, "queued")
+        self.assertEqual(background.tasks[0].kwargs, {"export_style":"retro", "retro_triangles":500})
+        from fastapi import HTTPException
+        for options in ({"object_preset":None, "export_style":"retro"},
+                        {"export_style":"standard", "retro_triangles":2000},
+                        {"export_style":"retro", "retro_triangles":1500}):
+            with self.subTest(options=options), self.assertRaises(HTTPException) as caught:
+                await self.upload(**options)
+            self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(len(self.jobs.list()), 1)
+
+    async def test_retro_upload_defaults_to_500_and_keeps_smoother_options(self):
+        for budget in (500, 1000, 2000):
+            options = {} if budget == 500 else {"retro_triangles":budget}
+            _, background = await self.upload(export_style="retro", **options)
+            self.assertEqual(background.tasks[0].kwargs["retro_triangles"], budget)
+        parameters = self.main.app.openapi()["paths"]["/scans"]["post"]["parameters"]
+        budget = next(item for item in parameters if item["name"] == "retro_triangles")
+        self.assertEqual(budget["schema"]["default"], 500)
+
+    async def test_completed_object_recovery_retains_retro_downloads_without_colmap_fused_cloud(self):
+        from app.job_recovery import reconcile_interrupted_jobs
+
+        self.input_archive()
+        completed = self.main.COMPLETED_DIR / "object-api"
+        scan = completed / "capture"
+        shutil.copytree(self.root / "capture", scan)
+        (scan / "dense").mkdir()
+        (scan / "dense/scene_dense.ply").write_text("ply\nformat ascii 1.0\nelement vertex 3\nend_header\n")
+        retro = scan / "exports/retro"
+        retro.mkdir(parents=True)
+        (retro / "retro.glb").write_bytes(b"owned completed artifact")
+        (retro / "export.json").write_text(json.dumps({"state":"succeeded"}))
+        for stage in ("validating", "reconstructing", "exporting"):
+            self.jobs.update("object-api", status="processing", stage=stage, message="fixture")
+        recovered, = reconcile_interrupted_jobs(
+            self.jobs, processing_dir=self.main.PROCESSING_DIR,
+            completed_dir=self.main.COMPLETED_DIR, failed_dir=self.main.FAILED_DIR,
+        )
+        self.assertEqual(recovered.status, "complete", recovered.message)
+        self.assertEqual(recovered.outputs["retro_glb"], str(retro / "retro.glb"))
+        self.assertEqual(recovered.outputs["openmvs_dense_point_cloud"], str(scan / "dense/scene_dense.ply"))
 
     def input_archive(self):
         source = self.root/"capture"; source.mkdir()

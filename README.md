@@ -201,6 +201,71 @@ representative-frame format; its one-box UI/export/upload wiring is a separate
 client change. Installing these dependencies does not restart or deploy the
 running backend service.
 
+### Retro / PS1-style exports
+
+Retro is a derived export style, not a lower-quality capture mode or PS1 hardware
+emulator. Keep capturing normally: the PC preserves the original reconstruction
+and creates a separate simplified copy. The preset uses a 500-, 1000-, or
+2000-triangle budget (500 by default), a newly unwrapped 256×256 atlas, baked photo color reduced
+to 5 bits per channel, nearest-neighbor filtering and an unlit material. The
+reported triangle count can be slightly below the requested budget. No geometry
+components are automatically removed and no missing surfaces are invented.
+
+Export an existing textured OBJ without reconstructing it again:
+
+```zsh
+backend/.venv/bin/python scripts/export_retro_asset.py \
+  /path/to/scene_textured.obj /path/to/new-retro-output \
+  --triangles 500
+```
+
+Use `--texture-size 128` for a chunkier texture, or `--dither` for deterministic
+ordered dithering. The default is 500 triangles and a 256-pixel atlas without
+dithering; `--triangles 1000` or `--triangles 2000` retain a smoother shape. The input
+must be a textured OBJ with local, valid material/texture dependencies and at
+most three million triangles. The output directory must be new; existing assets
+are never replaced. Blender 5.2 is the native runtime verified for this feature.
+
+For a new automatic Object job, request Retro alongside either reconstruction
+quality preset:
+
+```zsh
+curl -F 'file=@scan.zip' \
+  'http://localhost:8000/scans?run_reconstruction=true&object_preset=preview&export_style=retro'
+```
+
+`export_style` defaults to `standard`, preserving existing behavior. Retro API
+exports require an automatic object preset; their triangle budget must be 500,
+1000 or 2000, and defaults to 500 when omitted. The API uses the default
+256-pixel/no-dither style. Original model
+downloads remain available alongside `retro_blend`, `retro_glb`, `retro_bundle`
+(OBJ/MTL/PNG ZIP), and verification reports. GLB carries its embedded texture,
+unlit material and nearest sampling; OBJ consumers must choose pixelated/unlit
+display themselves because those viewer settings are not portable in MTL.
+
+Export runs under the shared heavy-work lock with four Blender CPU threads and
+a ten-minute timeout, bounded further by the remaining object-job time budget.
+Service-level RAM limits still apply separately. Only a private, validated copy
+of the source is passed to Blender; the original files are hash-checked before
+and after. A fresh Blender process reopens the `.blend` and imports the GLB,
+then the backend verifies their texture/material contract and packages the OBJ.
+Failures retain logs and partial results without replacing the source model.
+
+This is an automated starting point, not hand-authored game topology. Coarse
+silhouettes, thin tags/ribbons, texture projection and existing scan artifacts
+still need visual inspection. Vertex jitter, affine texture warping and other
+renderer effects are not included. Phone and desktop style controls remain
+separate UI work; the CLI and backend API are the implemented entry points.
+
+The offline suite includes export boundaries and color/preset tests. To also
+run the real bake, dithering, triangle-budget and portable-file regression on a
+machine with Blender installed (while no other Scanner work is running):
+
+```zsh
+SCANNER_TEST_NATIVE_RETRO=1 backend/.venv/bin/python -m unittest discover \
+  -s tests -p test_retro_export.py -v
+```
+
 To view job status from an iPhone on the same trusted LAN, bind the backend to
 the workstation network interface:
 

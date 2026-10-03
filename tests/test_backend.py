@@ -3337,7 +3337,7 @@ class BackendTests(unittest.TestCase):
             )
             for recovered in [missing_output, directory_output]:
                 self.assertEqual(recovered.status, "failed")
-                self.assertIn("no safe dense or sparse COLMAP result", recovered.message)
+                self.assertIn("no safe dense or sparse reconstruction result", recovered.message)
                 self.assertNotIn("colmap_output", recovered.outputs)
                 self.assertTrue(Path(recovered.outputs["package_dir"]).is_dir())
 

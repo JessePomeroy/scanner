@@ -12,7 +12,7 @@ from app.schemas import JobRecord, JobStatus
 
 
 _INTERRUPTED_WORKSPACE_OUTPUT = "interrupted_workspace"
-_STANDARD_RESULT_OUTPUTS = {"colmap_output", "scan_report", "textured_mesh"}
+_STANDARD_RESULT_OUTPUTS = {"colmap_output", "openmvs_dense_point_cloud", "scan_report", "textured_mesh"}
 
 
 def reconcile_interrupted_jobs(
@@ -104,14 +104,16 @@ def _recover_completed_job(
     if record.stage == "validating":
         terminal_status = "validated"
         message = "Recovered validated scan after backend restart."
-    elif record.stage == "exporting" and "colmap_output" in recovered_outputs:
+    elif record.stage == "exporting" and (
+        "colmap_output" in recovered_outputs or "openmvs_dense_point_cloud" in recovered_outputs
+    ):
         terminal_status = "complete"
         message = "Recovered completed reconstruction after backend restart."
     elif record.stage == "exporting":
         terminal_status = "failed"
         message = (
             "Completed scan files were preserved, but no safe dense or sparse "
-            "COLMAP result was found after backend restart."
+            "reconstruction result was found after backend restart."
         )
     else:
         terminal_status = "failed"
