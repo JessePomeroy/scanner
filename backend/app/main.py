@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import os
 import shutil
-from typing import BinaryIO, Iterator
+from typing import Annotated, BinaryIO, Iterator
 from urllib.parse import quote
 import uuid
 from time import perf_counter
@@ -76,6 +76,7 @@ from app.schemas import JobRecord, ScanArtifact
 from app.sparse_review import load_sparse_review_checkpoint, publish_sparse_review_checkpoint
 from app.storage import safe_extract_zip
 from app.upload_lifecycle import store_job_upload
+from app.object_pipeline import ObjectPresetName, reconstruct_object
 
 
 @asynccontextmanager
@@ -127,8 +128,15 @@ async def upload_scan(
     use_masks: bool = Query(False),
     mask_profile: MaskProfileName = Query("scene_geometry"),
     review_scope: bool = Query(False),
+    object_preset: Annotated[ObjectPresetName | None, Query()] = None,
 ) -> JobRecord:
     """Upload a scan package and optionally run reconstruction in the background."""
+    if object_preset is not None:
+        if not run_reconstruction:
+            raise HTTPException(status_code=400, detail="An object preset requires explicit reconstruction.")
+        if review_scope or use_masks or mask_profile != "scene_geometry" or scope_mode != "auto_roi":
+            raise HTTPException(status_code=400, detail="Automatic object presets cannot be combined with manual scope or mask options.")
+        run_dense = run_openmvs = True
     if review_scope and not run_reconstruction:
         raise HTTPException(status_code=400, detail="Scope review requires reconstruction.")
     if review_scope and (not run_dense or not run_openmvs):
@@ -164,6 +172,7 @@ async def upload_scan(
             use_masks,
             review_scope,
             mask_profile,
+            object_preset,
         )
         return jobs.update(
             scan_id,
@@ -472,11 +481,12 @@ def process_scan(
     use_masks: bool = False,
     review_scope: bool = False,
     mask_profile: MaskProfileName = "scene_geometry",
+    object_preset: ObjectPresetName | None = None,
 ) -> None:
     try:
         with heavy_work(f"API reconstruction {scan_id}"):
             _process_scan(scan_id, incoming_zip, run_dense, run_openmvs,
-                          scope_mode, use_masks, review_scope, mask_profile)
+                          scope_mode, use_masks, review_scope, mask_profile, object_preset)
     except HeavyWorkBusy as error:
         record_processing_failure(scan_id, None, error)
 
@@ -490,6 +500,7 @@ def _process_scan(
     use_masks: bool = False,
     review_scope: bool = False,
     mask_profile: MaskProfileName = "scene_geometry",
+    object_preset: ObjectPresetName | None = None,
 ) -> None:
     processing_dir: Path | None = None
     try:
@@ -503,6 +514,15 @@ def _process_scan(
         scan_root = find_scan_root(processing_dir)
         package = validate_and_report_scan(scan_root)
         report = package.validation
+        if object_preset is not None:
+            jobs.update(scan_id, status="processing", stage="reconstructing",
+                        message="Starting automatic object reconstruction.")
+            outputs = reconstruct_object(package, object_preset, progress=lambda message: jobs.update(
+                scan_id, status="processing", stage="reconstructing", message=message,
+            ))
+            _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,
+                                     report.image_count, report.frame_count)
+            return
         profile = mask_stage_profile(mask_profile)
         proposal_outputs: dict[str, str] = {}
         mask_generation = None
@@ -754,36 +774,25 @@ def _process_scan(
             )
             outputs["textured_mesh"] = str(textured_mesh)
 
-        jobs.update(
-            scan_id,
-            status="processing",
-            stage="exporting",
-            message="Packaging reconstruction outputs for download.",
-        )
-        publish_delivery_outputs(scan_root, outputs)
-        package = validate_and_report_scan(scan_root)
-        rebased_outputs = rebase_output_paths(
-            outputs,
-            old_root=processing_dir,
-            new_root=COMPLETED_DIR / scan_id,
-        )
-        completed_dir = move_to_completed(scan_id, processing_dir)
-        completed_scan_root = find_scan_root(completed_dir)
-        rebased_outputs["package_dir"] = str(completed_dir)
-        rebased_outputs["scan_report"] = str(
-            completed_scan_root / "metadata" / "scan_report.json"
-        )
-
-        jobs.update(
-            scan_id,
-            status="complete",
-            message="Reconstruction completed.",
-            image_count=report.image_count,
-            frame_count=report.frame_count,
-            outputs=rebased_outputs,
-        )
+        _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,
+                                 report.image_count, report.frame_count)
     except Exception as error:
         record_processing_failure(scan_id, processing_dir, error)
+
+
+def _complete_reconstruction(
+    scan_id: str, processing_dir: Path, scan_root: Path, outputs: dict[str, str],
+    image_count: int, frame_count: int,
+) -> None:
+    jobs.update(scan_id, status="processing", stage="exporting", message="Packaging reconstruction outputs for download.")
+    publish_delivery_outputs(scan_root, outputs)
+    validate_and_report_scan(scan_root)
+    rebased = rebase_output_paths(outputs, old_root=processing_dir, new_root=COMPLETED_DIR/scan_id)
+    completed = move_to_completed(scan_id, processing_dir)
+    completed_root = find_scan_root(completed)
+    rebased.update(package_dir=str(completed), scan_report=str(completed_root/"metadata/scan_report.json"))
+    jobs.update(scan_id, status="complete", message="Reconstruction completed.",
+                image_count=image_count, frame_count=frame_count, outputs=rebased)
 
 
 def resume_masked_alignment(scan_id: str) -> None:

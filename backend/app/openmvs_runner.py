@@ -258,26 +258,14 @@ def build_openmvs_commands(scan_dir: Path, config: OpenMVSConfig | None = None) 
             ]
         )
 
-    texture_input_scene = (
-        scene if config.point_cloud_source == "colmap_fused" else mesh_scene
-    )
+    # Interface-format native runs may save only the mesh PLY, not a mesh MVS.
+    # Keep the calibrated camera scene and pass geometry explicitly at each stage.
+    texture_input_scene = scene if config.point_cloud_source == "colmap_fused" else dense_scene
     texture_input_mesh = mesh_file
     if config.include_refine:
-        refine = [config.refine_mesh]
-        if config.point_cloud_source == "colmap_fused":
-            refine.extend(
-                [
-                    str(scene),
-                    "--mesh-file",
-                    str(mesh_file),
-                ]
-            )
-        else:
-            refine.append(str(mesh_scene))
+        refine = [config.refine_mesh, str(texture_input_scene), "--mesh-file", str(mesh_file)]
         refine.extend(["-o", str(refined_scene)])
         commands.append(refine)
-        if config.point_cloud_source == "openmvs_densify":
-            texture_input_scene = refined_scene
         texture_input_mesh = refined_mesh_file
 
     texture = [

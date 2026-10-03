@@ -118,9 +118,14 @@ def _parse_plan(value: object) -> MaskAuthoringPlan:
             "revision", "representative_frames",
         },
     )
+    modes = {("1.0", "representative_frames"), ("1.1", "single_box")}
+    if (
+        not isinstance(item["schema_version"], str)
+        or not isinstance(item["authoring_mode"], str)
+        or (item["schema_version"], item["authoring_mode"]) not in modes
+    ):
+        raise MaskAuthoringError("Unsupported mask-authoring schema_version/authoring_mode")
     literals = {
-        "schema_version": "1.0",
-        "authoring_mode": "representative_frames",
         "coordinate_space": "normalized_capture_image",
         "mask_convention": "white_keep_black_exclude",
     }
@@ -133,10 +138,36 @@ def _parse_plan(value: object) -> MaskAuthoringPlan:
         raise MaskAuthoringError(
             f"mask_authoring.representative_frames must contain 1-{_MAX_REPRESENTATIVE_FRAMES} frames"
         )
-    return MaskAuthoringPlan(
+    plan = MaskAuthoringPlan(
         revision=revision,
         representative_frames=tuple(_parse_frame(frame, index) for index, frame in enumerate(values)),
+        schema_version=item["schema_version"],
+        authoring_mode=item["authoring_mode"],
     )
+    if plan.authoring_mode == "single_box":
+        single_box_selection(plan)
+    return plan
+
+
+def single_box_selection(
+    plan: MaskAuthoringPlan,
+) -> tuple[MaskAuthoringFrame, tuple[float, float, float, float]]:
+    """Require one explicit rectangular keep selection, never reinterpret legacy polygons."""
+    if plan.authoring_mode != "single_box" or len(plan.representative_frames) != 1:
+        raise MaskAuthoringError("single_box requires exactly one selected frame")
+    selected = plan.representative_frames[0]
+    if len(selected.regions) != 1 or selected.regions[0].operation != "keep":
+        raise MaskAuthoringError("single_box requires exactly one keep rectangle")
+    points = selected.regions[0].points
+    xs, ys = {point.x for point in points}, {point.y for point in points}
+    if len(points) != 4 or len(xs) != 2 or len(ys) != 2:
+        raise MaskAuthoringError("single_box requires four axis-aligned rectangle corners")
+    if {(point.x, point.y) for point in points} != {(x, y) for x in xs for y in ys}:
+        raise MaskAuthoringError("single_box has repeated or missing rectangle corners")
+    for left, right in zip(points, (*points[1:], points[0])):
+        if (left.x == right.x) == (left.y == right.y):
+            raise MaskAuthoringError("single_box corners must follow the rectangle boundary")
+    return selected, (min(xs), min(ys), max(xs), max(ys))
 
 
 def _parse_frame(value: object, index: int) -> MaskAuthoringFrame:

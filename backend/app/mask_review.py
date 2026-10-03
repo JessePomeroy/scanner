@@ -50,7 +50,7 @@ def load_mask_review(scan_root: Path) -> dict[str, object]:
     if payload.get("schema_version") != "1.0":
         raise MaskReviewError("Mask review schema_version must be '1.0'")
     if payload.get("state") not in {
-        "awaiting_review", "needs_correction", "approved", "rejected"
+        "awaiting_review", "needs_correction", "approved", "rejected", "auto_accepted"
     }:
         raise MaskReviewError("Mask review state is invalid")
     if not isinstance(payload.get("frames"), list):
@@ -100,6 +100,21 @@ def approve_mask_review(
     clock: Clock | None = None,
 ) -> dict[str, object]:
     """Promote one exact, reviewed proposal set into active capture masks."""
+    return _promote_mask_proposals(scan_root, automatic=False, clock=clock)
+
+
+def accept_automatic_masks(
+    scan_root: Path,
+    *,
+    clock: Clock | None = None,
+) -> dict[str, object]:
+    """Apply explicit one-box processing policy without claiming human mask approval."""
+    return _promote_mask_proposals(scan_root, automatic=True, clock=clock)
+
+
+def _promote_mask_proposals(
+    scan_root: Path, *, automatic: bool, clock: Clock | None,
+) -> dict[str, object]:
     scan_root = scan_root.resolve()
     metadata_dir = scan_root / "metadata"
     masks_root = scan_root / "masks"
@@ -125,6 +140,11 @@ def approve_mask_review(
 
         metadata = load_scan_metadata(metadata_dir)
         plan = load_mask_authoring_plan(metadata_dir, metadata.frames)
+        if automatic and (
+            plan is None or plan.authoring_mode != "single_box"
+            or payload.get("generator") != "sam2_1_small_temporal_v1"
+        ):
+            raise MaskReviewError("Automatic acceptance requires the explicit SAM2 single-box workflow")
         source_revision = payload.get("source_authoring_revision")
         if (
             plan is None
@@ -195,12 +215,15 @@ def approve_mask_review(
             "mask_count": len(expected),
         }
         approved = dict(payload)
-        approved["state"] = "approved"
+        approved["state"] = "auto_accepted" if automatic else "approved"
         approved["decision"] = {
-            "decision": "approve",
+            "decision": "accept_automatic" if automatic else "approve",
             "decided_at": _timestamp(clock),
             "promoted_mask_count": len(expected),
         }
+        if automatic:
+            approved["decision"]["policy"] = "single_box_automatic_v1"
+            approved["decision"]["human_reviewed"] = False
         report_path = metadata_dir / "mask_generation.json"
         try:
             os.replace(staging, capture)
