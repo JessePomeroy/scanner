@@ -658,12 +658,13 @@ def delete_scan(scan_id: str) -> dict[str, str]:
             elif workspace.is_dir():
                 shutil.rmtree(workspace)
         (INCOMING_DIR / f"{scan_id}.zip").unlink(missing_ok=True)
+        jobs.delete(scan_id)
     except OSError as error:
         if waiting:
+            # A terminal record keeps the scan deletable on the next attempt.
             jobs.update(scan_id, status="failed",
                         message=f"The scan could not be fully deleted: {error}")
         raise HTTPException(status_code=500, detail=f"The scan could not be fully deleted: {error}") from error
-    jobs.delete(scan_id)
     return {"deleted": scan_id}
 
 
@@ -900,7 +901,8 @@ def _run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
             ),
         )
         _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,
-                                 report.image_count, report.frame_count, object_job=True)
+                                 report.image_count, report.frame_count, object_job=True,
+                                 retro_requested=options.export_style == "retro")
     except Exception as error:
         record_processing_failure(scan_id, processing_dir, error)
 
@@ -1192,6 +1194,7 @@ def _process_scan(
 def _complete_reconstruction(
     scan_id: str, processing_dir: Path, scan_root: Path, outputs: dict[str, str],
     image_count: int, frame_count: int, *, object_job: bool = False,
+    retro_requested: bool = False,
 ) -> None:
     jobs.update(scan_id, status="processing", stage="exporting", message="Packaging reconstruction outputs for download.")
     publish_delivery_outputs(scan_root, outputs)
@@ -1207,6 +1210,8 @@ def _complete_reconstruction(
             "Reconstruction completed, but the Blender files could not be made. "
             "The OBJ bundle is available."
         )
+        if retro_requested and "retro_glb" not in rebased:
+            message += " The retro copy could not be made."
         if LIBRARY_DIR is not None:
             try:
                 folder = publish_to_library(LIBRARY_DIR, completed_root.name, rebased)

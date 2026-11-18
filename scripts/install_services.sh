@@ -28,8 +28,8 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 units_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 # The path is substituted into unit files, where these characters change meaning.
-if [[ "$repo" =~ [[:space:]\|\&%\\\"\'] ]]; then
-  echo "This checkout's path contains a space or one of | & % \\ \" ': $repo" >&2
+if [[ "$repo" =~ [[:space:]\|\&%\$\\\"\'] ]]; then
+  echo "This checkout's path contains a space or one of | & % \$ \\ \" ': $repo" >&2
   echo "Move it to a plain path before installing the services." >&2
   exit 1
 fi
@@ -61,15 +61,15 @@ systemctl --user enable scanner-backend.service scanner-job-notifier.service >/d
 
 # Count jobs doing work. If a running backend cannot be asked, assume it is busy.
 running_jobs() {
-  local listing
-  listing=$(curl -fsS -m 10 "http://127.0.0.1:8000/scans?limit=200") || return 1
-  python3 -c '
+  # The listing goes through a pipe: as an argument it would exceed the
+  # kernel's per-argument limit once a few dozen jobs exist.
+  curl -fsS -m 10 "http://127.0.0.1:8000/scans?limit=200" | python3 -c '
 import json, sys
 paused = {"awaiting_box", "awaiting_masks", "awaiting_scope"}
-jobs = json.loads(sys.argv[1])
+jobs = json.load(sys.stdin)
 print(sum(1 for job in jobs
           if job["status"] in ("received", "processing") and job.get("stage") not in paused))
-' "$listing"
+' 2>/dev/null
 }
 
 if systemctl --user is-active --quiet scanner-backend.service && ! $force; then
@@ -87,7 +87,9 @@ fi
 
 systemctl --user restart scanner-backend.service scanner-job-notifier.service
 for _ in $(seq 1 20); do
-  if curl -fsS -m 2 "http://127.0.0.1:8000/health" >/dev/null 2>&1; then
+  # Both checks: another process holding the port would answer the second alone.
+  if systemctl --user is-active --quiet scanner-backend.service \
+      && curl -fsS -m 2 "http://127.0.0.1:8000/health" >/dev/null 2>&1; then
     address=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1 || true)
     echo "Scanner is running. Open http://${address:-localhost}:8000 on this network."
     exit 0

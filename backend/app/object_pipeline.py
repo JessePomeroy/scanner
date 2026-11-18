@@ -202,17 +202,22 @@ def reconstruct_object(
                    processing_report=str(root/"metadata/processing.json"))
     # Step 9 covers every Blender export, so the count never moves backwards.
     notify(step_message(9))
+    # The textured OBJ is already a usable result, so a problem with either
+    # export below is recorded and reported without discarding it.
     if retro_style is not None:
-        outputs.update(export_retro_asset(
-            mesh, root / "exports/retro", retro_style,
-            timeout_seconds=min(600, max(0, deadline - perf_counter())),
-        ))
-        package.record_processing_step("retro_export", {
-            "state": "succeeded", "settings": asdict(retro_style),
-            "report": "exports/retro/export.json", "original_reconstruction_preserved": True,
-        })
-    # The textured OBJ is already a usable result, so a problem making the
-    # Blender files is recorded and reported without discarding it.
+        try:
+            outputs.update(export_retro_asset(
+                mesh, root / "exports/retro", retro_style,
+                timeout_seconds=min(600, max(1, deadline - perf_counter())),
+            ))
+            package.record_processing_step("retro_export", {
+                "state": "succeeded", "settings": asdict(retro_style),
+                "report": "exports/retro/export.json", "original_reconstruction_preserved": True,
+            })
+        except Exception as error:
+            package.record_processing_step("retro_export", {
+                "state": "failed", "settings": asdict(retro_style), "error": str(error),
+            })
     delivery_started = perf_counter()
     try:
         view = export_camera_view(

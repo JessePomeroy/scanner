@@ -311,6 +311,18 @@ class ObjectPipelineDeliveryTests(unittest.TestCase):
         self.assertEqual((outputs["retro_glb"], outputs["model_blend"]), ("r", "b"))
         self.assertEqual(steps["retro_export"]["state"], "succeeded")
 
+    def test_retro_problem_is_recorded_and_the_other_results_are_still_delivered(self):
+        from app.retro_style import RetroStyle
+        with patch("app.object_pipeline.export_retro_asset", side_effect=RuntimeError("Retro verify failed")):
+            outputs, steps, _, _ = self.run_pipeline(
+                {"return_value": {"model_blend": "b"}}, retro_style=RetroStyle(500))
+        self.assertIn("textured_mesh", outputs)
+        self.assertEqual(outputs["model_blend"], "b")
+        self.assertNotIn("retro_glb", outputs)
+        self.assertEqual((steps["retro_export"]["state"], steps["retro_export"]["error"]),
+                         ("failed", "Retro verify failed"))
+        self.assertEqual(steps["model_delivery"]["state"], "succeeded")
+
     def test_blender_problem_is_recorded_but_keeps_the_textured_result(self):
         outputs, steps, _, _ = self.run_pipeline({"side_effect": RuntimeError("Blender verify failed")})
         self.assertIn("textured_mesh", outputs)
@@ -343,7 +355,7 @@ class ObjectCompletionTests(unittest.TestCase):
                     output.write(path, path.relative_to(source.parent))
         self.jobs.create("job")
 
-    def complete(self, *, blender_files=True):
+    def complete(self, *, blender_files=True, **options):
         def reconstructed(package, preset, **kwargs):
             outputs = {"textured_mesh": str(textured_obj(package.scan_root / "dense"))}
             if blender_files:
@@ -355,8 +367,13 @@ class ObjectCompletionTests(unittest.TestCase):
                     outputs[key] = str(model / name)
             return outputs
         with patch.object(self.main, "reconstruct_object", side_effect=reconstructed):
-            self.main.process_scan("job", self.archive, True, True, object_preset="preview")
+            self.main.process_scan("job", self.archive, True, True, object_preset="preview", **options)
         return self.jobs.read("job")
+
+    def test_missing_retro_copy_is_stated_when_one_was_asked_for(self):
+        job = self.complete(export_style="retro", retro_triangles=500)
+        self.assertEqual((job.status, job.message), ("complete", "Model ready. The retro copy could not be made."))
+        self.assertIn("model_blend", job.outputs)
 
     def test_finished_model_is_copied_to_the_library_and_the_message_says_where(self):
         library = self.root / "ScannerModels"

@@ -294,8 +294,11 @@ async function scan(id) {
   const waiting = job.status === "processing" && job.stage === "awaiting_box";
   if (waiting) {
     if (shown !== `box:${id}`) await boxScreen(job);
+    if (!atScan(id)) return;
   } else if (job.status === "complete") {
     if (shown !== `done:${id}`) await resultScreen(job);
+    // A result that could not load its file list is fetched again.
+    if (atScan(id) && shown !== `done:${id}`) timer = setTimeout(() => scan(id), 4000);
     return;
   } else if (job.status === "failed") {
     return failedScreen(job);
@@ -350,7 +353,9 @@ async function boxScreen(job) {
   let photos = [];
   try { photos = (await api(`/scans/${id}/photos`)).photos; } catch (error) {
     if (!atScan(id)) return;
-    return show(`box:${id}`, el("div", {class: "card error"}, error.message));
+    // Not marked as the box screen, so the next poll tries again.
+    return show(`boxwait:${id}`, el("div", {class: "card"}, el("h2", {}, "Loading the photos"),
+      el("p", {class: "muted"}, error.message)));
   }
   if (!atScan(id)) return;
   if (!photos.length) return show(`box:${id}`, el("div", {class: "card error"}, "This scan has no photos."));
@@ -484,7 +489,11 @@ async function boxScreen(job) {
 async function resultScreen(job) {
   const id = job.scan_id;
   let artifacts = [];
-  try { artifacts = await api(`/scans/${id}/artifacts`); } catch (_) {}
+  try { artifacts = await api(`/scans/${id}/artifacts`); } catch (error) {
+    if (!atScan(id)) return;
+    return show(`donewait:${id}`, el("div", {class: "card"}, el("h2", {}, "Loading the model"),
+      el("p", {class: "muted"}, error.message)));
+  }
   if (!atScan(id)) return;
   const byName = Object.fromEntries(artifacts.map((item) => [item.name, item]));
   const size = (bytes) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(0)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -499,7 +508,7 @@ async function resultScreen(job) {
   show(`done:${id}`, el("div", {class: "card result"},
     el("h2", {}, blender ? "Your model is ready" : "Reconstruction finished"),
     blender ? el("img", {src: `/scans/${id}/thumbnail?max_size=768`, alt: "Preview of the finished 3D model"}) : null,
-    blender ? null : el("p", {class: "error"}, job.message || ""),
+    blender && !/could not/.test(job.message || "") ? null : el("p", {class: "error"}, job.message || ""),
     links.length ? el("div", {class: "downloads"}, links) : el("p", {class: "muted"}, "No downloadable files were published."),
     library ? el("p", {class: "muted small"}, "Also saved on the computer in ", el("code", {}, library)) : null,
     el("p", {class: "muted small"}, `${when(job)}${job.image_count ? ` · ${job.image_count} photos` : ""}`)),
