@@ -103,7 +103,7 @@ python3 experiments/scripts/benchmark_evidence.py init \
   --report ScannerBenchmarks/run-001/evidence.json
 ```
 
-See `docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
+See `experiments/docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
 rules, and the Blender comparison record.
 
 The native CachyOS/RTX 3070 environment passes the strict install/visibility

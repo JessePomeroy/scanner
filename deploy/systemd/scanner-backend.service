@@ -17,6 +17,8 @@ ExecStart=@REPO@/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 80
 # reference scan. The cap stops a runaway job from taking the desktop with it.
 MemoryMax=32G
 MemorySwapMax=0
+# If the cap kills a reconstruction tool, fail that job, not the whole backend.
+OOMPolicy=continue
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

@@ -98,6 +98,7 @@ let timer = null;          // polling for the current screen
 let shown = null;          // which screen is drawn, so polling does not redraw it
 let uploading = null;      // {percent, error} while a ZIP is being sent
 let lastPercent = 3;       // progress bar position on the working screen
+let homeKey = null;        // what the home screen last drew
 
 const QUALITY = {preview: ["Fast", "about 8 minutes"], detail: ["Detailed", "about 12 minutes"]};
 const DOWNLOADS = [
@@ -127,7 +128,9 @@ async function api(path, options) {
   if (!response.ok) {
     let detail = null;
     try { detail = (await response.json()).detail; } catch (_) {}
-    throw new Error(typeof detail === "string" ? detail : `The computer answered with an error (${response.status}).`);
+    const error = new Error(typeof detail === "string" ? detail : `The computer answered with an error (${response.status}).`);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -147,6 +150,9 @@ function summary(job) {
   return ["Working", ""];
 }
 
+const atHome = () => location.hash.replace(/^#\/?/, "") === "";
+const atScan = (id) => location.hash === `#/scan/${id}`;
+
 function show(kind, ...nodes) {
   shown = kind;
   view.replaceChildren(...nodes);
@@ -165,7 +171,17 @@ async function home() {
   let jobs = [];
   let problem = null;
   try { jobs = await api("/scans?limit=50"); } catch (error) { problem = error.message; }
-  if (location.hash.replace(/^#\/?/, "") !== "") return;
+  if (!atHome()) return;
+  // Redraw only when something changed, so focus and screen readers are left alone.
+  const key = JSON.stringify([jobs.map((job) => [job.scan_id, job.status, job.stage, job.image_count]),
+                              problem, uploading && [uploading.error, Boolean(uploading)]]);
+  const working = jobs.some((job) => (job.status === "received" || job.status === "processing")
+    && !["awaiting_box", "awaiting_masks", "awaiting_scope"].includes(job.stage));
+  if (shown === "home" && key === homeKey) {
+    timer = setTimeout(home, working ? 4000 : 15000);
+    return;
+  }
+  homeKey = key;
 
   const input = el("input", {type: "file", accept: ".zip,application/zip", hidden: true,
     onchange: () => input.files[0] && upload(input.files[0])});
@@ -196,8 +212,7 @@ async function home() {
     uploading ? uploadCard() : drop,
     problem ? el("div", {class: "card error"}, problem) :
     jobs.length ? el("div", {class: "card"}, el("h2", {}, "Scans"), list) : null);
-  const active = jobs.some((job) => job.status === "received" || job.status === "processing");
-  timer = setTimeout(home, active ? 4000 : 15000);
+  timer = setTimeout(home, working ? 4000 : 15000);
 }
 
 function uploadCard() {
@@ -214,7 +229,7 @@ function uploadCard() {
 function upload(file) {
   if (!/\.zip$/i.test(file.name)) {
     uploading = {percent: 0, error: "That is not a ZIP file. Share the scan from the Scanner app's Scans tab."};
-    return home();
+    return refreshHome();
   }
   uploading = {percent: 0, error: null};
   const form = new FormData();
@@ -229,20 +244,26 @@ function upload(file) {
     if (bar) bar.style.width = `${uploading.percent}%`;
     if (text) text.textContent = uploading.percent < 100 ? `${uploading.percent}%` : "Saving on the computer";
   };
-  request.onerror = () => { uploading.error = "The connection to the computer was lost."; home(); };
+  request.onerror = () => { uploading.error = "The connection to the computer was lost."; refreshHome(); };
   request.onload = () => {
     let body = null;
     try { body = JSON.parse(request.responseText); } catch (_) {}
     if (request.status === 200 && body && body.scan_id) {
       uploading = null;
-      location.hash = `#/scan/${body.scan_id}`;
+      // Follow the upload only if the person is still waiting on the home screen.
+      if (atHome()) location.hash = `#/scan/${body.scan_id}`;
     } else {
       uploading.error = (body && typeof body.detail === "string") ? body.detail : `The computer refused the upload (${request.status}).`;
-      home();
+      refreshHome();
     }
   };
   request.send(form);
-  home();
+  refreshHome();
+}
+
+// Upload events can arrive while another screen is showing; only home redraws.
+function refreshHome() {
+  if (atHome()) home();
 }
 
 // ---------- One scan: box, progress, result ----------
@@ -254,12 +275,22 @@ async function scan(id) {
   try {
     job = await api(`/scans/${id}`);
   } catch (error) {
-    if (location.hash !== `#/scan/${id}`) return;
-    show(`gone:${id}`, el("div", {class: "card"}, el("h2", {}, "This scan is not on the computer"),
-      el("p", {class: "muted"}, error.message), el("a", {class: "button", href: "#/"}, "All scans")));
+    if (!atScan(id)) return;
+    if (error.status === 404) {
+      show(`gone:${id}`, el("div", {class: "card"}, el("h2", {}, "This scan is not on the computer"),
+        el("p", {class: "muted"}, error.message), el("a", {class: "button", href: "#/"}, "All scans")));
+      return;
+    }
+    // A dropped connection or a restarting backend is not the scan's fault:
+    // keep whatever is on screen and try again.
+    if (!shown || !shown.endsWith(`:${id}`)) {
+      show(`wait:${id}`, el("div", {class: "card"}, el("h2", {}, "Trying to reach the computer"),
+        el("p", {class: "muted"}, "This page will carry on by itself when it answers.")));
+    }
+    timer = setTimeout(() => scan(id), 4000);
     return;
   }
-  if (location.hash !== `#/scan/${id}`) return;
+  if (!atScan(id)) return;
   const waiting = job.status === "processing" && job.stage === "awaiting_box";
   if (waiting) {
     if (shown !== `box:${id}`) await boxScreen(job);
@@ -318,13 +349,16 @@ async function boxScreen(job) {
   const id = job.scan_id;
   let photos = [];
   try { photos = (await api(`/scans/${id}/photos`)).photos; } catch (error) {
+    if (!atScan(id)) return;
     return show(`box:${id}`, el("div", {class: "card error"}, error.message));
   }
+  if (!atScan(id)) return;
   if (!photos.length) return show(`box:${id}`, el("div", {class: "card error"}, "This scan has no photos."));
   const stride = Math.max(1, Math.round(photos.length / 12));
   let index = 0;
   let box = null;
   let drag = null;
+  let ready = false;       // the photo on screen is the one a box would be sent for
 
   const saved = JSON.parse(localStorage.getItem("scanner-options") || "{}");
   const options = {preset: saved.preset === "detail" ? "detail" : "preview", retro: saved.retro === true,
@@ -340,9 +374,16 @@ async function boxScreen(job) {
 
   function load() {
     box = null;
+    ready = false;
+    drag = null;
     draw();
     image.src = `/scans/${id}/photos/${photos[index].frame_id}?max_size=1280`;
   }
+  image.addEventListener("load", () => { ready = true; problem.hidden = true; });
+  image.addEventListener("error", () => {
+    problem.textContent = "That photo could not be loaded. Pick another one.";
+    problem.hidden = false;
+  });
   function draw() {
     go.disabled = !box;
     outline.style.display = box ? "block" : "none";
@@ -361,7 +402,7 @@ async function boxScreen(job) {
     return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
   }
   photo.addEventListener("pointerdown", (event) => {
-    if (go.dataset.busy) return;
+    if (go.dataset.busy || !ready) return;
     photo.setPointerCapture(event.pointerId);
     drag = {from: point(event), before: box};
     event.preventDefault();
@@ -395,7 +436,7 @@ async function boxScreen(job) {
     try {
       await api(`/scans/${id}/object-box`, {method: "POST", headers: {"Content-Type": "application/json"},
                                            body: JSON.stringify(body)});
-      scan(id);
+      if (atScan(id)) scan(id);
     } catch (error) {
       delete go.dataset.busy;
       go.textContent = "Make 3D model";
@@ -444,7 +485,7 @@ async function resultScreen(job) {
   const id = job.scan_id;
   let artifacts = [];
   try { artifacts = await api(`/scans/${id}/artifacts`); } catch (_) {}
-  if (location.hash !== `#/scan/${id}`) return;
+  if (!atScan(id)) return;
   const byName = Object.fromEntries(artifacts.map((item) => [item.name, item]));
   const size = (bytes) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(0)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
   const links = DOWNLOADS.filter(([name]) => byName[name]).map(([name, label, note], order) => {
@@ -492,7 +533,10 @@ function deleteButton(job) {
 function route() {
   const match = /^#\/scan\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(location.hash);
   shown = null;
-  if (match) scan(match[1]); else home();
+  homeKey = null;
+  if (match) return scan(match[1]);
+  if (!atHome()) return location.replace("#/");
+  home();
 }
 window.addEventListener("hashchange", route);
 route();

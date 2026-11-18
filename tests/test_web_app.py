@@ -123,6 +123,8 @@ class WebAppTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 self.main.start_object_from_box("job", BackgroundTasks(), {"frame_id": 1, "box": [0.2, 0.2, 0.8, 0.8]})
             attempts.append(caught.exception.status_code)
+            # No terminal record may appear, or the notifier would announce a failure.
+            self.assertEqual(self.jobs.read("job").status, "processing")
             return real_rmtree(path, *args, **kwargs)
 
         with patch.object(self.main.shutil, "rmtree", side_effect=racing):
@@ -130,6 +132,31 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(attempts, [409])
         self.assertFalse((self.main.PROCESSING_DIR / "job").exists())
         self.assertEqual(self.jobs.list(), [])
+
+    def test_paused_scan_that_cannot_be_removed_is_reported_as_failed_not_lost(self):
+        from fastapi import HTTPException
+        self.paused()
+        with patch.object(self.main.shutil, "rmtree", side_effect=OSError("device busy")), \
+                self.assertRaises(HTTPException) as caught:
+            self.main.delete_scan("job")
+        self.assertEqual(caught.exception.status_code, 500)
+        job = self.jobs.read("job")
+        self.assertEqual(job.status, "failed")
+        self.assertIn("device busy", job.message)
+        self.main.delete_scan("job")
+        self.assertEqual(self.jobs.list(), [])
+
+    def test_delete_removes_a_workspace_preserved_under_a_recovery_name(self):
+        self.paused()
+        kept = self.main.FAILED_DIR / "job-interrupted-1"
+        (self.main.PROCESSING_DIR / "job").rename(kept)
+        other = self.main.FAILED_DIR / "job-of-someone-else"
+        other.mkdir()
+        self.jobs.update("job", status="failed", message="fixture",
+                         outputs={"package_dir": str(other), "interrupted_workspace": str(kept)})
+        self.main.delete_scan("job")
+        self.assertFalse(kept.exists())
+        self.assertTrue(other.is_dir())
 
     def test_running_scan_cannot_be_deleted(self):
         from fastapi import BackgroundTasks, HTTPException

@@ -633,19 +633,23 @@ def delete_scan(scan_id: str) -> dict[str, str]:
     if record.status not in ("validated", "complete", "failed") and not waiting:
         raise HTTPException(status_code=409, detail="A scan that is being processed cannot be deleted.")
     if waiting:
-        # Leaving the pause first means a box sent at the same moment cannot start it.
+        # Leaving the pause first means a box sent at the same moment cannot start
+        # it. The record stays non-terminal so nothing announces a failure.
         try:
             jobs.claim(scan_id, expected_status="processing", expected_stage="awaiting_box",
                        status="processing", stage="reconstructing", message="Deleting.")
-            jobs.update(scan_id, status="failed", message="Deleted before a box was drawn.")
         except JobClaimError as error:
             raise HTTPException(status_code=409, detail="This scan has already started.") from error
     workspaces = {PROCESSING_DIR / scan_id, COMPLETED_DIR / scan_id, FAILED_DIR / scan_id}
-    declared = record.outputs.get("package_dir")
-    if declared is not None:
+    for name in ("package_dir", "interrupted_workspace"):
+        declared = record.outputs.get(name)
+        if declared is None:
+            continue
         # Restart recovery can preserve a workspace under a suffixed name.
         path = Path(declared)
-        if path.parent.absolute() == FAILED_DIR.absolute() and path.name.startswith(scan_id):
+        if path.parent.absolute() == FAILED_DIR.absolute() and (
+            path.name == scan_id or path.name.startswith(f"{scan_id}-interrupted-")
+        ):
             workspaces.add(FAILED_DIR / path.name)
     try:
         for workspace in workspaces:
@@ -655,6 +659,9 @@ def delete_scan(scan_id: str) -> dict[str, str]:
                 shutil.rmtree(workspace)
         (INCOMING_DIR / f"{scan_id}.zip").unlink(missing_ok=True)
     except OSError as error:
+        if waiting:
+            jobs.update(scan_id, status="failed",
+                        message=f"The scan could not be fully deleted: {error}")
         raise HTTPException(status_code=500, detail=f"The scan could not be fully deleted: {error}") from error
     jobs.delete(scan_id)
     return {"deleted": scan_id}

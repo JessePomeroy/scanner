@@ -15,8 +15,9 @@ does the reconstruction.
    buttons. On the workstation a notification offers **Open in Blender**, and
    the files are in `~/ScannerModels/<capture time>/`.
 
-A phone build from before this flow has no **Draw the Box** button: upload,
-then open the page yourself and pick the scan marked **Draw a box**.
+**Draw the Box** needs a phone build that includes the one-box upload. On an
+earlier build, upload, then open the page yourself and pick the scan marked
+**Draw a box**.
 
 You can close the page while it works. If another model is being built, the
 new one waits and starts by itself.
@@ -80,22 +81,22 @@ a half times the triangles) and **Also make a retro low-poly version** (a separa
    ```
 
    It prints the address to open. Run it again after pulling new code; it will
-   not restart the backend while a model is being built.
+   not restart the backend while a model is being built (`--force` overrides).
 
 5. On the phone, open the **Jobs** tab and enter that address as the backend
    URL. This is needed once.
 
 ## Settings
 
-The service unit in `deploy/systemd/` sets these. Change them there and run
-`scripts/install_services.sh` again.
+The service unit in `deploy/systemd/` sets the first three. To change any of
+them, edit the unit there and run `scripts/install_services.sh` again.
 
-| Variable | Meaning | Default in the unit |
+| Variable | Meaning | Value |
 | --- | --- | --- |
 | `SCANNER_SCANS_DIR` | Uploads, working files and job records | `backend/scans` |
 | `SCANNER_LIBRARY_DIR` | Where finished models are copied; unset means no copy | `~/ScannerModels` |
 | `SCANNER_OBJECT_UPLOADS` | `one_box` sends every Object upload through the box flow, including uploads from older phone builds | `one_box` |
-| `SCANNER_SAM2_PYTHON`, `SCANNER_SAM2_CHECKPOINT` | SAM2 interpreter and model file | `backend/.venv-sam2/bin/python`, `backend/models/sam2.1_hiera_small.pt` |
+| `SCANNER_SAM2_PYTHON`, `SCANNER_SAM2_CHECKPOINT` | SAM2 interpreter and model file | Not set; the code defaults to `backend/.venv-sam2/bin/python` and `backend/models/sam2.1_hiera_small.pt` |
 
 The unit caps the backend at 32 GiB of RAM with no swap. The reference scan
 peaked near 6 GiB (Fast) and 20 GiB (Detailed).

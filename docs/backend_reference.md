@@ -294,9 +294,10 @@ backend currently has no authentication, so do not expose this listener to the
 public internet or an untrusted network.
 
 Updated API, reconstruction CLI, and desktop workers share one fail-fast heavy-job
-admission lock per OS user. A busy initial reconstruction fails with a clear
-message; a busy reviewed continuation stays at its checkpoint for manual retry.
-There is no automatic queue. Native workers inherit the lock so a surviving
+admission lock per OS user. One-box Object jobs wait for it and start by
+themselves. In the older review flow a busy initial reconstruction fails with a
+clear message, and a busy reviewed continuation stays at its checkpoint for
+manual retry. Native workers inherit the lock so a surviving
 child still excludes competing jobs if its Python supervisor exits. Existing
 desktop memory limits remain separate: this guard cannot limit another app's RAM.
 
