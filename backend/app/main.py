@@ -15,7 +15,7 @@ import uuid
 from time import monotonic, perf_counter, sleep
 
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -146,6 +146,16 @@ LIBRARY_DIR = (
 )
 ADMISSION_POLL_SECONDS = 5.0
 ADMISSION_WAIT_SECONDS = 12 * 60 * 60
+
+
+WEB_DIR = Path(__file__).resolve().parent / "web"
+
+
+@app.get("/", include_in_schema=False)
+def web_app() -> FileResponse:
+    """The one page a person needs: upload, draw the box, watch, download."""
+    return FileResponse(WEB_DIR / "index.html", media_type="text/html",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/health")
@@ -571,6 +581,83 @@ def get_scan_photo(
         media_type="image/jpeg",
         headers={"Cache-Control": "private, max-age=3600"},
     )
+
+
+@app.get("/scans/{scan_id}/thumbnail")
+def get_scan_thumbnail(
+    scan_id: str,
+    max_size: int = Query(256, ge=64, le=1024),
+) -> Response:
+    """A small picture of the scan: the finished model, else its first photo."""
+    from PIL import Image
+
+    scan_root = _stored_scan_root(scan_id, get_scan_status(scan_id))
+    candidates = [(scan_root / "exports/model", "preview.png", "PNG")]
+    try:
+        frames = load_scan_metadata(scan_root / "metadata").frames
+    except Exception:
+        frames = ()
+    if frames:
+        first = Path(frames[0].image)
+        if len(first.parts) == 2 and first.parts[0] == "images":
+            candidates.append((scan_root / "images", first.name, "JPEG"))
+    for directory, name, image_format in candidates:
+        path = directory / name
+        if directory.is_symlink() or path.is_symlink() or not path.is_file():
+            continue
+        try:
+            with Image.open(path) as image:
+                image.draft("RGB", (max_size, max_size))
+                reduced = image.convert("RGBA" if image_format == "PNG" else "RGB")
+                reduced.thumbnail((max_size, max_size))
+                buffer = BytesIO()
+                reduced.save(buffer, image_format, **({"quality": 80} if image_format == "JPEG" else {}))
+        except Exception:
+            continue
+        return Response(
+            buffer.getvalue(),
+            media_type=f"image/{image_format.lower()}",
+            headers={"Cache-Control": "private, max-age=60"},
+        )
+    raise HTTPException(status_code=404, detail="No picture is available for this scan.")
+
+
+@app.delete("/scans/{scan_id}")
+def delete_scan(scan_id: str) -> dict[str, str]:
+    """Remove a finished or not-yet-started scan: its upload, working files and record.
+
+    A copy in the model library is kept. Jobs doing work cannot be deleted.
+    """
+    record = get_scan_status(scan_id)
+    waiting = record.status == "processing" and record.stage == "awaiting_box"
+    if record.status not in ("validated", "complete", "failed") and not waiting:
+        raise HTTPException(status_code=409, detail="A scan that is being processed cannot be deleted.")
+    if waiting:
+        # Leaving the pause first means a box sent at the same moment cannot start it.
+        try:
+            jobs.claim(scan_id, expected_status="processing", expected_stage="awaiting_box",
+                       status="processing", stage="reconstructing", message="Deleting.")
+            jobs.update(scan_id, status="failed", message="Deleted before a box was drawn.")
+        except JobClaimError as error:
+            raise HTTPException(status_code=409, detail="This scan has already started.") from error
+    workspaces = {PROCESSING_DIR / scan_id, COMPLETED_DIR / scan_id, FAILED_DIR / scan_id}
+    declared = record.outputs.get("package_dir")
+    if declared is not None:
+        # Restart recovery can preserve a workspace under a suffixed name.
+        path = Path(declared)
+        if path.parent.absolute() == FAILED_DIR.absolute() and path.name.startswith(scan_id):
+            workspaces.add(FAILED_DIR / path.name)
+    try:
+        for workspace in workspaces:
+            if workspace.is_symlink():
+                workspace.unlink()
+            elif workspace.is_dir():
+                shutil.rmtree(workspace)
+        (INCOMING_DIR / f"{scan_id}.zip").unlink(missing_ok=True)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"The scan could not be fully deleted: {error}") from error
+    jobs.delete(scan_id)
+    return {"deleted": scan_id}
 
 
 @app.get("/scans/{scan_id}/artifacts", response_model=list[ScanArtifact])

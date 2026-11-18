@@ -200,10 +200,12 @@ def reconstruct_object(
     outputs.update(textured_mesh=str(mesh), openmvs_dense_point_cloud=str(root/"dense/scene_dense.ply"),
                    colmap_intake=str(root/"metadata/colmap_intake.json"),
                    processing_report=str(root/"metadata/processing.json"))
+    # Step 9 covers every Blender export, so the count never moves backwards.
+    notify(step_message(9))
     if retro_style is not None:
         outputs.update(export_retro_asset(
             mesh, root / "exports/retro", retro_style,
-            timeout_seconds=min(600, max(0, deadline - perf_counter())), progress=notify,
+            timeout_seconds=min(600, max(0, deadline - perf_counter())),
         ))
         package.record_processing_step("retro_export", {
             "state": "succeeded", "settings": asdict(retro_style),
@@ -211,7 +213,6 @@ def reconstruct_object(
         })
     # The textured OBJ is already a usable result, so a problem making the
     # Blender files is recorded and reported without discarding it.
-    notify(step_message(9))
     delivery_started = perf_counter()
     try:
         view = export_camera_view(

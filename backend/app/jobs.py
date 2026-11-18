@@ -171,6 +171,11 @@ class JobStore:
                 return JobRecord.model_validate_json(raw)
             return JobRecord.parse_raw(raw)
 
+    def delete(self, scan_id: str) -> None:
+        """Forget a job record. The caller owns removing the job's files."""
+        with self._lock:
+            self._record_path(scan_id).unlink(missing_ok=True)
+
     def list(self, *, limit: int = 50) -> list[JobRecord]:
         with self._lock:
             return self._list_records(limit=limit)
