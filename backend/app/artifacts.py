@@ -225,10 +225,13 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         break
 
     outputs: dict[str, str] = {}
-    model_published = _export_succeeded(lexical_root, resolved_root, Path("exports/model/export.json"))
+    # Files left by an export that failed its reopening check are not results.
+    verified = {
+        prefix: _export_succeeded(lexical_root, resolved_root, Path(f"exports/{folder}/export.json"))
+        for prefix, folder in (("model_", "model"), ("retro_", "retro"))
+    }
     for name, relative in candidates:
-        if name.startswith("model_") and not model_published:
-            # Files left by a delivery that failed its reopening check are not results.
+        if any(name.startswith(prefix) and not passed for prefix, passed in verified.items()):
             continue
         try:
             descriptor, _ = _open_owned_regular_file(

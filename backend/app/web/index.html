@@ -491,8 +491,12 @@ async function resultScreen(job) {
   let artifacts = [];
   try { artifacts = await api(`/scans/${id}/artifacts`); } catch (error) {
     if (!atScan(id)) return;
-    return show(`donewait:${id}`, el("div", {class: "card"}, el("h2", {}, "Loading the model"),
-      el("p", {class: "muted"}, error.message)));
+    // Only an unreachable or failing backend is worth retrying. A refusal is
+    // final, so fall through and show the result with no files and Delete.
+    if (!error.status || error.status >= 500) {
+      return show(`donewait:${id}`, el("div", {class: "card"}, el("h2", {}, "Loading the model"),
+        el("p", {class: "muted"}, error.message)));
+    }
   }
   if (!atScan(id)) return;
   const byName = Object.fromEntries(artifacts.map((item) => [item.name, item]));

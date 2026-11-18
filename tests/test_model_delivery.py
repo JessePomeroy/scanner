@@ -416,6 +416,14 @@ class ObjectCompletionTests(unittest.TestCase):
         self.assertEqual(Path(found["model_blend"]).name, "model.blend")
         self.assertEqual(Path(found["model_preview"]).name, "preview.png")
         self.assertIn("textured_bundle", found)
+        # The same rule holds for a Retro export that did not pass its checks.
+        retro = scan / "exports/retro"
+        retro.mkdir()
+        (retro / "retro.glb").write_text("half-made")
+        (retro / "export.json").write_text(json.dumps({"state": "failed"}))
+        self.assertNotIn("retro_glb", discover_standard_output_paths(scan))
+        (retro / "export.json").write_text(json.dumps({"state": "succeeded"}))
+        self.assertIn("retro_glb", discover_standard_output_paths(scan))
 
 
 class NotificationTests(unittest.TestCase):
