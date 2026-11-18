@@ -8,9 +8,11 @@ Copies never replace an existing folder; the job's own files stay where they are
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 
 
 LIBRARY_FILES = (
@@ -48,19 +50,22 @@ def publish_to_library(library: Path, scan_name: str, outputs: Mapping[str, str]
     if not sources:
         raise ValueError("no finished model files to copy")
     library.mkdir(parents=True, exist_ok=True)
-    for attempt in range(1, 1000):
-        folder = library / (name if attempt == 1 else f"{name}-{attempt}")
-        try:
-            folder.mkdir()
-            break
-        except FileExistsError:
-            continue
-    else:
-        raise FileExistsError(f"too many library folders named {name}")
+    # Copy under a hidden name first so a visible folder is always complete.
+    partial = Path(tempfile.mkdtemp(prefix=f".{name}.partial-", dir=library))
     try:
         for source, filename in sources:
-            shutil.copyfile(source, folder / filename)
+            shutil.copyfile(source, partial / filename)
+        partial.chmod(0o755)
+        for attempt in range(1, 1000):
+            folder = library / (name if attempt == 1 else f"{name}-{attempt}")
+            if folder.exists() or folder.is_symlink():
+                continue
+            try:
+                os.rename(partial, folder)
+            except OSError:
+                continue
+            return folder
+        raise FileExistsError(f"too many library folders named {name}")
     except Exception:
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
         raise
-    return folder

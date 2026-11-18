@@ -109,7 +109,9 @@ def render_preview(bpy, destination: Path, view: dict[str, object] | None) -> di
     camera_data = bpy.data.cameras.new("Preview")
     camera = bpy.data.objects.new("Preview", camera_data)
     scene.collection.objects.link(camera)
-    camera.location = center - direction * diagonal * 1.25
+    # A 50 mm lens sees about 0.36 x distance to each side; 1.45 x the diagonal
+    # keeps the whole bounding sphere in frame.
+    camera.location = center - direction * diagonal * 1.45
     camera.rotation_euler = Matrix((right, up, -direction)).transposed().to_euler()
     camera_data.lens = 50
     camera_data.clip_start = diagonal * 0.001

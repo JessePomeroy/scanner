@@ -141,7 +141,7 @@ if OBJECT_UPLOAD_POLICY not in ("", "one_box"):
     raise RuntimeError("SCANNER_OBJECT_UPLOADS must be unset or 'one_box'")
 # Finished models are also copied here, one folder per scan. Unset: no copy.
 LIBRARY_DIR = (
-    Path(os.environ["SCANNER_LIBRARY_DIR"]).expanduser()
+    Path(os.environ["SCANNER_LIBRARY_DIR"]).expanduser().absolute()
     if os.environ.get("SCANNER_LIBRARY_DIR") else None
 )
 ADMISSION_POLL_SECONDS = 5.0
@@ -693,6 +693,8 @@ def _prepare_upload(scan_id: str, incoming_zip: Path) -> PreparedUpload | None:
         )
         processing_dir = prepare_processing_dir(scan_id, incoming_zip)
         scan_root = find_scan_root(processing_dir)
+        # Only this backend may declare a job paused or queued.
+        clear_object_box_checkpoint(scan_root)
         return PreparedUpload(processing_dir, scan_root, validate_and_report_scan(scan_root))
     except Exception as error:
         record_processing_failure(scan_id, processing_dir, error)
@@ -786,8 +788,10 @@ def _run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
     processing_dir = PROCESSING_DIR / scan_id
     try:
         scan_root = find_scan_root(processing_dir)
-        # From here native work may exist, so a restart must not start it again.
-        clear_object_box_checkpoint(scan_root)
+        # Removing the queued checkpoint is this run's claim. From here native
+        # work may exist, so a restart must not start the job again.
+        if not clear_object_box_checkpoint(scan_root):
+            return
         package = validate_and_report_scan(scan_root)
         report = package.validation
         jobs.update(scan_id, status="processing", stage="reconstructing",

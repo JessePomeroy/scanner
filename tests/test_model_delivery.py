@@ -224,6 +224,20 @@ class ModelLibraryTests(unittest.TestCase):
             publish_to_library(self.root / "library", "scan", self.files)
         self.assertEqual(list((self.root / "library").iterdir()), [])
 
+    def test_visible_folder_appears_only_after_every_file_is_copied(self):
+        library = self.root / "library"
+        seen = []
+        real = shutil.copyfile
+
+        def watching(source, destination):
+            seen.append(sorted(path.name for path in library.iterdir() if not path.name.startswith(".")))
+            return real(source, destination)
+
+        with patch("app.model_library.shutil.copyfile", side_effect=watching):
+            folder = publish_to_library(library, "scan", self.files)
+        self.assertEqual(seen, [[]] * 5)
+        self.assertEqual([path.name for path in library.iterdir()], [folder.name])
+
 
 class ObjectPipelineDeliveryTests(unittest.TestCase):
     def setUp(self):
@@ -231,7 +245,7 @@ class ObjectPipelineDeliveryTests(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         single_box_scan(self.root)
 
-    def run_pipeline(self, delivery):
+    def run_pipeline(self, delivery, **options):
         frames = load_scan_metadata(self.root / "metadata").frames
         with patch.object(Sam2Runtime, "validate"), patch("app.sam2_generator.subprocess.run", side_effect=fake_worker):
             generation = generate_mask_proposals(self.root, frames)
@@ -256,7 +270,8 @@ class ObjectPipelineDeliveryTests(unittest.TestCase):
                  for name, options in patches.items()}
         messages = []
         with patch("app.object_pipeline.subprocess.run", side_effect=native_command):
-            outputs = reconstruct_object(validate_and_report_scan(self.root), "preview", progress=messages.append)
+            outputs = reconstruct_object(validate_and_report_scan(self.root), "preview",
+                                         progress=messages.append, **options)
         steps = json.loads((self.root / "metadata/processing.json").read_text())["steps"]
         return outputs, steps, messages, mocks
 
@@ -274,6 +289,27 @@ class ObjectPipelineDeliveryTests(unittest.TestCase):
         self.assertEqual(messages[-1], f"Step {len(OBJECT_STEPS)} of {len(OBJECT_STEPS)}: Making Blender files.")
         numbers = [int(message.split()[1]) for message in messages]
         self.assertEqual(numbers, sorted(numbers))
+
+    def test_retro_export_runs_before_the_optional_blender_files_and_both_fit_the_time_budget(self):
+        from app.retro_style import RetroStyle
+        order = []
+
+        def retro(mesh, destination, style, **kwargs):
+            order.append(("retro", kwargs["timeout_seconds"]))
+            return {"retro_glb": "r"}
+
+        def delivery(mesh, destination, **kwargs):
+            order.append(("model", kwargs["timeout_seconds"]))
+            return {"model_blend": "b"}
+
+        with patch("app.object_pipeline.export_retro_asset", side_effect=retro):
+            outputs, steps, _, mocks = self.run_pipeline({"side_effect": delivery}, retro_style=RetroStyle(500))
+        self.assertEqual([name for name, _ in order], ["retro", "model"])
+        for _, timeout in order:
+            self.assertTrue(0 < timeout <= 600)
+        self.assertTrue(0 < mocks["export_camera_view"].call_args.kwargs["timeout_seconds"] <= 120)
+        self.assertEqual((outputs["retro_glb"], outputs["model_blend"]), ("r", "b"))
+        self.assertEqual(steps["retro_export"]["state"], "succeeded")
 
     def test_blender_problem_is_recorded_but_keeps_the_textured_result(self):
         outputs, steps, _, _ = self.run_pipeline({"side_effect": RuntimeError("Blender verify failed")})
@@ -351,12 +387,18 @@ class ObjectCompletionTests(unittest.TestCase):
         self.assertIn("could not be copied to the model library", job.message)
         self.assertIn("textured_bundle", job.outputs)
 
-    def test_restart_recovery_rediscovers_blender_files(self):
+    def test_restart_recovery_rediscovers_only_verified_blender_files(self):
         job = self.complete()
         scan = Path(job.outputs["package_dir"]) / "scan_2026_11_18_09_30_00_abcdef"
         found = discover_standard_output_paths(scan)
+        self.assertNotIn("model_blend", found)
+        (scan / "exports/model/export.json").write_text(json.dumps({"state": "failed"}))
+        self.assertNotIn("model_blend", discover_standard_output_paths(scan))
+        (scan / "exports/model/export.json").write_text(json.dumps({"state": "succeeded"}))
+        found = discover_standard_output_paths(scan)
         self.assertEqual(Path(found["model_blend"]).name, "model.blend")
         self.assertEqual(Path(found["model_preview"]).name, "preview.png")
+        self.assertIn("textured_bundle", found)
 
 
 class NotificationTests(unittest.TestCase):
@@ -410,7 +452,50 @@ class NotificationTests(unittest.TestCase):
             notifier.show(details)
         command = run.call_args.args[0]
         self.assertIn("--action=blender=Open in Blender", command)
+        self.assertIn("--expire-time=0", command)
+        self.assertNotIn("timeout", run.call_args.kwargs)
         self.assertEqual(opened, [("folder", self.root)])
+
+    def test_opened_app_runs_outside_the_notifier_service(self):
+        with patch.object(notifier.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), \
+                patch.object(notifier.subprocess, "Popen") as popen:
+            notifier.open_path("blender", self.root / "model.blend")
+            notifier.open_path("folder", self.root)
+        blender, folder = (call.args[0] for call in popen.call_args_list)
+        scope = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "--"]
+        self.assertEqual(blender, [*scope, "/usr/bin/blender", str(self.root / "model.blend")])
+        self.assertEqual(folder, [*scope, "xdg-open", str(self.root)])
+
+    def test_one_bad_record_or_a_missing_notify_send_never_blocks_later_jobs(self):
+        jobs = self.root / "jobs"
+        jobs.mkdir()
+        (jobs / "bad-status.json").write_text(json.dumps({"scan_id": "bad-status", "status": ["complete"]}))
+        (jobs / "bad-bytes.json").write_bytes(b"\xff\xfe not utf-8")
+        (jobs / "list.json").write_text("[1, 2]")
+        (jobs / "boom.json").write_text(json.dumps({"scan_id": "boom", "status": "complete", "outputs": {}}))
+        (jobs / "ok.json").write_text(json.dumps({"scan_id": "ok", "status": "failed", "message": "m"}))
+        state = self.root / "state/notified.json"
+        shown = []
+
+        def show(details):
+            if details["title"] == "Scanner job finished":
+                raise RuntimeError("unexpected")
+            shown.append(details["title"])
+            return True
+
+        notified: set[str] = set()
+        with patch.object(notifier, "JOBS_DIR", jobs), patch.object(notifier, "STATE_FILE", state), \
+                patch.object(notifier, "show", side_effect=show):
+            notifier.notify_new(notified)
+        self.assertEqual((shown, notified), (["Scanner could not finish a model"], {"boom", "ok"}))
+        self.assertEqual(json.loads(state.read_text()), ["boom", "ok"])
+        again: set[str] = set()
+        with patch.object(notifier, "JOBS_DIR", jobs), patch.object(notifier, "STATE_FILE", state), \
+                patch.object(notifier.shutil, "which", return_value=None):
+            notifier.notify_new(again)
+        # Nothing could be shown, so nothing is marked and every job is retried.
+        self.assertEqual(again, set())
+        self.assertEqual(json.loads(state.read_text()), ["boom", "ok"])
 
 
 if __name__ == "__main__":

@@ -523,6 +523,33 @@ class ObjectBoxAPITests(unittest.TestCase):
         self.assertEqual(recovered.status, "failed")
         self.assertIn("restarted", recovered.message)
 
+    def test_package_cannot_declare_itself_queued(self):
+        source = self.root / "source-phone-job/capture"
+        source.mkdir(parents=True)
+        phone_scan(source)
+        publish_object_box_checkpoint(source, ObjectBoxOptions("detail"), "queued")
+        archive = self.main.INCOMING_DIR / "phone-job.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            for path in sorted(source.rglob("*")):
+                if path.is_file():
+                    output.write(path, path.relative_to(source.parent))
+        self.jobs.create("phone-job")
+        with patch.object(self.main, "OBJECT_UPLOAD_POLICY", "one_box"), \
+                patch.object(self.main, "_stage_object_job") as staged:
+            self.main.process_scan("phone-job", archive, True, True, "auto_roi", False, True, "scene_geometry")
+        staged.assert_called_once()
+        self.assertEqual(self.main.queued_object_jobs(), {})
+
+    def test_job_whose_queue_claim_is_gone_does_not_run(self):
+        self.paused()
+        _, background = self.start()
+        from app.object_box import clear_object_box_checkpoint
+        self.assertTrue(clear_object_box_checkpoint(self.main.PROCESSING_DIR / "phone-job/capture"))
+        with patch.object(self.main, "reconstruct_object") as reconstruct:
+            background.tasks[0].func(*background.tasks[0].args)
+        reconstruct.assert_not_called()
+        self.assertEqual(self.jobs.read("phone-job").stage, "reconstructing")
+
     def test_paused_job_survives_a_backend_restart(self):
         from app.job_recovery import reconcile_interrupted_jobs
         self.paused()

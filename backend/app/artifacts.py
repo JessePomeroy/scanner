@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from contextlib import ExitStack
 import errno
 import io
+import json
 import mimetypes
 import os
 from pathlib import Path
@@ -224,7 +225,11 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         break
 
     outputs: dict[str, str] = {}
+    model_published = _export_succeeded(lexical_root, resolved_root, Path("exports/model/export.json"))
     for name, relative in candidates:
+        if name.startswith("model_") and not model_published:
+            # Files left by a delivery that failed its reopening check are not results.
+            continue
         try:
             descriptor, _ = _open_owned_regular_file(
                 lexical_root,
@@ -236,6 +241,21 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         os.close(descriptor)
         outputs[name] = str(resolved_root / relative)
     return outputs
+
+
+def _export_succeeded(lexical_root: Path, resolved_root: Path, relative: Path) -> bool:
+    try:
+        descriptor, info = _open_owned_regular_file(lexical_root, resolved_root, relative)
+    except (ArtifactUnavailableError, UnsafeArtifactPathError):
+        return False
+    with os.fdopen(descriptor, "rb") as stream:
+        if info.st_size > 1024 * 1024:
+            return False
+        try:
+            state = json.loads(stream.read())
+        except (UnicodeError, json.JSONDecodeError):
+            return False
+    return isinstance(state, dict) and state.get("state") == "succeeded"
 
 
 def bundle_textured_mesh(

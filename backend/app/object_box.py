@@ -146,8 +146,13 @@ def load_object_box_checkpoint(
     return ObjectBoxOptions(**payload["options"])
 
 
-def clear_object_box_checkpoint(scan_root: Path) -> None:
-    (scan_root.resolve() / "metadata" / CHECKPOINT_FILENAME).unlink(missing_ok=True)
+def clear_object_box_checkpoint(scan_root: Path) -> bool:
+    """Remove the checkpoint; False means there was none to remove."""
+    try:
+        (scan_root.resolve() / "metadata" / CHECKPOINT_FILENAME).unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def check_object_box_workspace(scan_root: Path) -> None:

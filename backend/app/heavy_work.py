@@ -93,9 +93,9 @@ def check_legacy_workers(*, excluding: str | None = None) -> None:
             capture_output=True, text=True, timeout=3, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise HeavyWorkUnavailable(f'Cannot inspect legacy Scanner workers: {error}') from error
+        raise HeavyWorkBusy(f'Cannot inspect legacy Scanner workers: {error}') from error
     if result.returncode:
-        raise HeavyWorkUnavailable('Cannot inspect legacy Scanner workers; check the user service manager.')
+        raise HeavyWorkBusy('Cannot inspect legacy Scanner workers; check the user service manager.')
     units = [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
     competing = [unit for unit in units if unit != own_unit]
     if competing:

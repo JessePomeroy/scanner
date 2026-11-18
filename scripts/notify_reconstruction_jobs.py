@@ -24,8 +24,7 @@ STATE_FILE = Path(
         Path.home() / ".local/state/scanner/notified-jobs.json",
     )
 )
-TERMINAL_STATUSES = {"complete", "failed"}
-ACTION_WAIT_SECONDS = 15 * 60
+TERMINAL_STATUSES = ("complete", "failed")
 
 
 def read_terminal_jobs() -> dict[str, dict]:
@@ -33,7 +32,7 @@ def read_terminal_jobs() -> dict[str, dict]:
     for path in JOBS_DIR.glob("*.json"):
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         if isinstance(record, dict) and record.get("status") in TERMINAL_STATUSES:
             jobs[str(record.get("scan_id", path.stem))] = record
@@ -99,46 +98,62 @@ def notification(record: dict) -> dict:
 def open_path(action: str, path: Path) -> None:
     blender = shutil.which("blender")
     command = [blender, str(path)] if action == "blender" and blender else ["xdg-open", str(path)]
-    subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    # Start the app in its own systemd scope. As a plain child it would belong
+    # to this service and be killed, unsaved work included, whenever the
+    # notifier restarts.
+    launcher = (["systemd-run", "--user", "--scope", "--collect", "--quiet", "--"]
+                if shutil.which("systemd-run") else [])
+    subprocess.Popen([*launcher, *command], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def show(details: dict) -> None:
+def show(details: dict) -> bool:
+    """Send one notification; False means it was not sent and should be retried."""
+    if shutil.which("notify-send") is None:
+        return False
     command = ["notify-send", "--app-name=Scanner", f"--urgency={details['urgency']}"]
     actions = details["actions"]
+    if not actions:
+        return subprocess.run([*command, details["title"], details["body"]], check=False).returncode == 0
+    # Jobs finish unattended, so the buttons must still work hours later.
+    command.append("--expire-time=0")
     for name, (label, _) in actions.items():
         command.append(f"--action={name}={label}")
     command += [details["title"], details["body"]]
-    if not actions:
-        subprocess.run(command, check=False)
-        return
 
     def wait_for_choice() -> None:
         # With actions, notify-send stays alive until the notification closes.
         try:
-            result = subprocess.run(command, capture_output=True, text=True,
-                                    timeout=ACTION_WAIT_SECONDS, check=False)
-        except (OSError, subprocess.TimeoutExpired):
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+        except OSError:
             return
         choice = result.stdout.strip()
         if choice in actions:
             open_path(choice, actions[choice][1])
 
     threading.Thread(target=wait_for_choice, daemon=True).start()
+    return True
+
+
+def notify_new(notified: set[str]) -> None:
+    """Notify each newly finished job once; one bad record never blocks the rest."""
+    for scan_id, record in read_terminal_jobs().items():
+        if scan_id in notified:
+            continue
+        try:
+            sent = show(notification(record))
+        except Exception as error:
+            print(f"Skipping notification for {scan_id}: {error}", flush=True)
+            sent = True
+        if sent:
+            notified.add(scan_id)
+            save_state(notified)
 
 
 def main() -> None:
     notified = load_state()
     while True:
-        changed = False
-        for scan_id, record in read_terminal_jobs().items():
-            if scan_id in notified:
-                continue
-            show(notification(record))
-            notified.add(scan_id)
-            changed = True
-        if changed:
-            save_state(notified)
+        notify_new(notified)
         time.sleep(2)
 
 

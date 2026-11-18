@@ -200,6 +200,15 @@ def reconstruct_object(
     outputs.update(textured_mesh=str(mesh), openmvs_dense_point_cloud=str(root/"dense/scene_dense.ply"),
                    colmap_intake=str(root/"metadata/colmap_intake.json"),
                    processing_report=str(root/"metadata/processing.json"))
+    if retro_style is not None:
+        outputs.update(export_retro_asset(
+            mesh, root / "exports/retro", retro_style,
+            timeout_seconds=min(600, max(0, deadline - perf_counter())), progress=notify,
+        ))
+        package.record_processing_step("retro_export", {
+            "state": "succeeded", "settings": asdict(retro_style),
+            "report": "exports/retro/export.json", "original_reconstruction_preserved": True,
+        })
     # The textured OBJ is already a usable result, so a problem making the
     # Blender files is recorded and reported without discarding it.
     notify(step_message(9))
@@ -208,6 +217,7 @@ def reconstruct_object(
         view = export_camera_view(
             colmap.executable, root / "sparse/0", root / "exports/preview-cameras",
             Path(seed_frame.image).name,
+            timeout_seconds=min(120, max(1, deadline - perf_counter())),
         )
         outputs.update(export_blender_model(
             mesh, root / "exports/model", view=view,
@@ -223,14 +233,5 @@ def reconstruct_object(
         package.record_processing_step("model_delivery", {
             "state": "failed", "error": str(error),
             "elapsed_seconds": perf_counter() - delivery_started,
-        })
-    if retro_style is not None:
-        outputs.update(export_retro_asset(
-            mesh, root / "exports/retro", retro_style,
-            timeout_seconds=min(600, max(0, deadline - perf_counter())), progress=notify,
-        ))
-        package.record_processing_step("retro_export", {
-            "state": "succeeded", "settings": asdict(retro_style),
-            "report": "exports/retro/export.json", "original_reconstruction_preserved": True,
         })
     return outputs
