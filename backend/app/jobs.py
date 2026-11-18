@@ -39,7 +39,7 @@ _ALLOWED_STAGE_TRANSITIONS: dict[JobStage, set[JobStage]] = {
     "queued": {"queued", "validating"},
     "validating": {"validating", "reconstructing", "awaiting_masks", "awaiting_box"},
     "reconstructing": {
-        "reconstructing", "awaiting_masks", "awaiting_scope", "meshing", "exporting"
+        "reconstructing", "awaiting_box", "awaiting_masks", "awaiting_scope", "meshing", "exporting"
     },
     "awaiting_box": {"awaiting_box", "reconstructing"},
     "awaiting_masks": {"awaiting_masks", "reconstructing"},

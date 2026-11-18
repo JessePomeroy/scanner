@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 import shutil
 
@@ -21,8 +22,13 @@ def reconcile_interrupted_jobs(
     processing_dir: Path,
     completed_dir: Path,
     failed_dir: Path,
+    queued: Collection[str] = (),
 ) -> list[JobRecord]:
-    """Resolve every active job without deleting partial or completed scan data."""
+    """Resolve every active job without deleting partial or completed scan data.
+
+    ``queued`` names jobs that were waiting to start and have run no native
+    work; the caller starts them again, so they are left exactly as they are.
+    """
     reconciled: list[JobRecord] = []
     for record in jobs.list_active():
         processing_path = processing_dir / record.scan_id
@@ -37,6 +43,10 @@ def reconcile_interrupted_jobs(
                     failed_dir,
                 )
             reconciled.append(_recover_completed_job(jobs, record, completed_path))
+            continue
+
+        if record.scan_id in queued and processing_path.is_dir():
+            reconciled.append(record)
             continue
 
         if record.stage in {"awaiting_box", "awaiting_masks", "awaiting_scope"} and processing_path.is_dir():

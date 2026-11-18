@@ -14,13 +14,14 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
-from app.heavy_work import HeavyWorkBusy
+from app.heavy_work import HeavyWorkBusy, HeavyWorkUnavailable
 from app.jobs import JobStore
 from app.mask_authoring import load_mask_authoring_plan, single_box_selection
 from app.object_box import (
     ObjectBoxError,
     ObjectBoxOptions,
     apply_object_box,
+    check_object_box_workspace,
     load_object_box_checkpoint,
     needs_object_box,
     parse_box,
@@ -33,10 +34,29 @@ from heavy_work_fixture import isolated_heavy_work
 from test_sam2_generator import single_box_scan
 
 
-def phone_scan(root: Path, *, capture_outline: bool = False, mode: str = "object_scan") -> Path:
+def older_draft(root: Path) -> dict:
+    """The five-photo keep/erase draft current phone builds save."""
+    frames = load_scan_metadata(root / "metadata").frames
+    return {
+        "schema_version": "1.0", "authoring_mode": "representative_frames", "revision": 2,
+        "coordinate_space": "normalized_capture_image", "mask_convention": "white_keep_black_exclude",
+        "representative_frames": [{"frame_id": frames[0].id, "image": frames[0].image, "regions": [{
+            "operation": "keep",
+            "points": [{"x": .1, "y": .1}, {"x": .9, "y": .1}, {"x": .5, "y": .9}],
+        }]}],
+    }
+
+
+def phone_scan(
+    root: Path, *, capture_outline: bool = False, mode: str = "object_scan",
+    draft: bool = False, box: bool = False,
+) -> Path:
     """A package as the phone exports it: no box, optionally a capture-time outline."""
     single_box_scan(root)
-    (root / "metadata/mask_authoring.json").unlink()
+    if draft:
+        (root / "metadata/mask_authoring.json").write_text(json.dumps(older_draft(root)))
+    elif not box:
+        (root / "metadata/mask_authoring.json").unlink()
     session_path = root / "metadata/session.json"
     session = json.loads(session_path.read_text())
     session["scan_mode"] = mode
@@ -61,7 +81,8 @@ class ObjectBoxRequestTests(unittest.TestCase):
     def test_box_must_be_four_ordered_unit_numbers_with_real_area(self):
         self.assertEqual(parse_box([0.1, 0.2, 0.6, 0.9]), (0.1, 0.2, 0.6, 0.9))
         for value in ([0.1, 0.2, 0.6], "0.1,0.2,0.6,0.9", [0.6, 0.2, 0.1, 0.9], [0.1, 0.2, 0.11, 0.9],
-                      [0.1, 0.2, 1.2, 0.9], [0.1, 0.2, float("nan"), 0.9], [True, 0.2, 0.6, 0.9], None):
+                      [0.1, 0.2, 1.2, 0.9], [0.1, 0.2, float("nan"), 0.9], [True, 0.2, 0.6, 0.9],
+                      [0.1, 0.2, float("inf"), 0.9], [0, 0, 10 ** 400, 1], [-10 ** 400, 0, 1, 1], None):
             with self.subTest(value=value), self.assertRaises(ObjectBoxError):
                 parse_box(value)
 
@@ -100,8 +121,6 @@ class ObjectBoxWorkspaceTests(unittest.TestCase):
         plan.update(schema_version="1.0", authoring_mode="representative_frames")
         path.write_text(json.dumps(plan))
         self.assertTrue(needs_object_box(self.root))
-        path.write_text("{not json")
-        self.assertTrue(needs_object_box(self.root))
         path.unlink()
         self.assertTrue(needs_object_box(self.root))
 
@@ -117,9 +136,9 @@ class ObjectBoxWorkspaceTests(unittest.TestCase):
         self.assertIsNone(validate_and_report_scan(self.root).validation.reconstruction_scope)
 
     def test_capture_outline_and_older_draft_are_set_aside_not_deleted(self):
-        phone_scan(self.root, capture_outline=True)
-        draft = {"older": "five-photo draft"}
-        (self.root / "metadata/mask_authoring.json").write_text(json.dumps(draft))
+        phone_scan(self.root, capture_outline=True, draft=True)
+        draft = older_draft(self.root)
+        validate_and_report_scan(self.root)
         mask = (self.root / "masks/capture/frame_000000.jpg.png").read_bytes()
         applied = apply_object_box(self.root, 1, (0.2, 0.2, 0.8, 0.8))
         self.assertEqual(len(applied["superseded"]), 3)
@@ -144,11 +163,56 @@ class ObjectBoxWorkspaceTests(unittest.TestCase):
             apply_object_box(self.root, 2, (0.1, 0.1, 0.9, 0.9))
         self.assertEqual((self.root / "metadata/mask_authoring.json").read_bytes(), first)
 
+    def test_failure_while_saving_leaves_the_workspace_exactly_as_it_was(self):
+        phone_scan(self.root, capture_outline=True, draft=True)
+
+        def snapshot():
+            return {str(path.relative_to(self.root)): path.read_bytes()
+                    for path in sorted(self.root.rglob("*")) if path.is_file()}
+
+        before = snapshot()
+        from app import object_box
+        real = object_box._write_json_atomic
+
+        def no_space_for_manifest(path, payload):
+            if path.name == ".manifest.json.box":
+                raise OSError(28, "No space left on device")
+            real(path, payload)
+
+        with patch.object(object_box, "_write_json_atomic", side_effect=no_space_for_manifest), \
+                self.assertRaisesRegex(ObjectBoxError, "unchanged"):
+            apply_object_box(self.root, 1, (0.2, 0.2, 0.8, 0.8))
+        self.assertEqual(snapshot(), before)
+        self.assertFalse((self.root / "superseded").exists())
+        validate_and_report_scan(self.root)
+        apply_object_box(self.root, 1, (0.2, 0.2, 0.8, 0.8))
+        self.assertIsNone(validate_and_report_scan(self.root).validation.reconstruction_scope)
+
+    def test_workspace_check_refuses_an_existing_superseded_folder_and_links(self):
+        phone_scan(self.root, capture_outline=True)
+        check_object_box_workspace(self.root)
+        (self.root / "metadata/manifest.json").rename(self.root / "manifest-real.json")
+        (self.root / "metadata/manifest.json").symlink_to(self.root / "manifest-real.json")
+        with self.assertRaisesRegex(ObjectBoxError, "unsafe"):
+            check_object_box_workspace(self.root)
+        (self.root / "metadata/manifest.json").unlink()
+        (self.root / "manifest-real.json").rename(self.root / "metadata/manifest.json")
+        (self.root / "superseded").mkdir()
+        with self.assertRaisesRegex(ObjectBoxError, "already"):
+            check_object_box_workspace(self.root)
+
     def test_checkpoint_round_trips_and_rejects_tampering(self):
         phone_scan(self.root)
         options = ObjectBoxOptions("detail", "retro", 2000)
         path = publish_object_box_checkpoint(self.root, options)
         self.assertEqual(load_object_box_checkpoint(self.root), options)
+        with self.assertRaises(ObjectBoxError):
+            load_object_box_checkpoint(self.root, "queued")
+        publish_object_box_checkpoint(self.root, options, "queued")
+        self.assertEqual(load_object_box_checkpoint(self.root, "queued"), options)
+        with self.assertRaises(ObjectBoxError):
+            load_object_box_checkpoint(self.root)
+        path = publish_object_box_checkpoint(self.root, options)
         validate_and_report_scan(self.root)
         payload = json.loads(path.read_text())
         payload["options"]["preset"] = "ultra"
@@ -256,6 +320,74 @@ class ObjectBoxAPITests(unittest.TestCase):
             self.start()
         self.assertEqual(caught.exception.status_code, 409)
 
+    def test_losing_a_start_race_is_refused_without_touching_the_workspace(self):
+        from fastapi import HTTPException
+        from app.jobs import JobClaimError
+        self.paused(capture_outline=True)
+        with patch.object(self.jobs, "claim", side_effect=JobClaimError("claimed elsewhere")), \
+                self.assertRaises(HTTPException) as caught:
+            self.start()
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertTrue((self.main.PROCESSING_DIR / "phone-job/capture/masks/capture").is_dir())
+
+    def test_box_that_cannot_be_saved_returns_the_job_to_its_pause_for_a_retry(self):
+        from fastapi import HTTPException
+        self.paused(capture_outline=True)
+        with patch.object(self.main, "apply_object_box", side_effect=ObjectBoxError("unchanged")), \
+                self.assertRaises(HTTPException) as caught:
+            self.start()
+        self.assertEqual(caught.exception.status_code, 500)
+        job = self.jobs.read("phone-job")
+        self.assertEqual((job.status, job.stage), ("processing", "awaiting_box"))
+        claimed, background = self.start()
+        self.assertEqual((claimed.stage, len(background.tasks)), ("reconstructing", 1))
+
+    def test_unexpected_apply_failure_fails_the_job_and_preserves_the_workspace(self):
+        from fastapi import HTTPException
+        self.paused()
+        with patch.object(self.main, "apply_object_box", side_effect=OSError("rename failed")), \
+                self.assertRaises(HTTPException) as caught:
+            self.start()
+        self.assertEqual(caught.exception.status_code, 500)
+        job = self.jobs.read("phone-job")
+        self.assertEqual(job.status, "failed")
+        self.assertTrue((self.main.FAILED_DIR / "phone-job/capture/images").is_dir())
+
+    def test_package_that_already_has_a_superseded_folder_fails_before_asking_for_a_box(self):
+        source = self.root / "source-phone-job/capture"
+        source.mkdir(parents=True)
+        phone_scan(source)
+        (source / "superseded").mkdir()
+        (source / "superseded/note.txt").write_text("from an earlier job copy")
+        archive = self.main.INCOMING_DIR / "phone-job.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            for path in sorted(source.rglob("*")):
+                if path.is_file():
+                    output.write(path, path.relative_to(source.parent))
+        self.jobs.create("phone-job")
+        self.main.process_scan("phone-job", archive, True, True, object_preset="preview")
+        job = self.jobs.read("phone-job")
+        self.assertEqual(job.status, "failed")
+        self.assertIn("already has an object box", job.message)
+
+    def test_package_with_its_own_box_and_a_capture_outline_starts_without_a_pause(self):
+        archive = self.archive(capture_outline=True, box=True)
+        seen = {}
+
+        def reconstructed(package, preset, **kwargs):
+            seen["scope"] = package.validation.reconstruction_scope
+            return {}
+
+        with patch.object(self.main, "reconstruct_object", side_effect=reconstructed):
+            self.main.process_scan("phone-job", archive, True, True, object_preset="preview")
+        self.assertEqual(self.jobs.read("phone-job").status, "complete", self.jobs.read("phone-job").message)
+        self.assertEqual(seen, {"scope": None})
+        scan = self.main.COMPLETED_DIR / "phone-job/capture"
+        frames = load_scan_metadata(scan / "metadata").frames
+        _, box = single_box_selection(load_mask_authoring_plan(scan / "metadata", frames))
+        self.assertEqual(box, (0.2, 0.2, 0.8, 0.8))
+        self.assertTrue((scan / "superseded/masks/capture").is_dir())
+
     def test_scene_capture_fails_early_with_a_plain_reason(self):
         archive = self.archive(mode="scene_scan")
         self.main.process_scan("phone-job", archive, True, True, object_preset="preview")
@@ -265,10 +397,16 @@ class ObjectBoxAPITests(unittest.TestCase):
         self.assertTrue((self.main.FAILED_DIR / "phone-job/capture/images").is_dir())
 
     def test_policy_routes_older_phone_object_uploads_to_the_box_step(self):
-        archive = self.archive(capture_outline=True)
+        archive = self.archive(capture_outline=True, draft=True)
         with patch.object(self.main, "OBJECT_UPLOAD_POLICY", "one_box"):
-            self.main.process_scan("phone-job", archive, True, True, "auto_roi", False, True, "scene_geometry")
+            self.main.process_scan("phone-job", archive, True, True, "auto_roi", False, True, "object_foreground")
         self.assertEqual(self.jobs.read("phone-job").stage, "awaiting_box")
+        _, background = self.start()
+        with patch.object(self.main, "reconstruct_object", return_value={}):
+            background.tasks[0].func(*background.tasks[0].args)
+        self.assertEqual(self.jobs.read("phone-job").status, "complete", self.jobs.read("phone-job").message)
+        scan = self.main.COMPLETED_DIR / "phone-job/capture"
+        self.assertEqual(json.loads((scan / "superseded/mask_authoring.json").read_text()), older_draft(scan))
 
     def test_policy_leaves_scene_uploads_on_their_requested_path(self):
         archive = self.archive(mode="scene_scan")
@@ -325,6 +463,65 @@ class ObjectBoxAPITests(unittest.TestCase):
         job = self.jobs.read("phone-job")
         self.assertEqual((job.status, job.message), ("failed", "Scanner is busy."))
         self.assertTrue((self.main.FAILED_DIR / "phone-job/capture/metadata/mask_authoring.json").is_file())
+
+    def test_permanent_admission_problem_fails_at_once_instead_of_waiting(self):
+        self.paused()
+        _, background = self.start()
+        attempts = []
+
+        def unavailable(label):
+            attempts.append(label)
+            raise HeavyWorkUnavailable("Cannot inspect legacy Scanner workers: systemctl is unavailable.")
+
+        with patch.object(self.main, "reserve_heavy_work", side_effect=unavailable):
+            background.tasks[0].func(*background.tasks[0].args)
+        job = self.jobs.read("phone-job")
+        self.assertEqual((job.status, len(attempts)), ("failed", 1))
+        self.assertIn("Cannot inspect", job.message)
+
+    def test_job_queued_behind_another_resumes_after_a_backend_restart(self):
+        from app.job_recovery import reconcile_interrupted_jobs
+        self.paused(capture_outline=True)
+        self.start(preset="detail")
+        self.jobs.update("phone-job", status="processing", stage="reconstructing",
+                         message="Waiting to start automatically.")
+        queued = self.main.queued_object_jobs()
+        self.assertEqual(queued, {"phone-job": ObjectBoxOptions("detail")})
+        recovered, = reconcile_interrupted_jobs(
+            self.jobs, processing_dir=self.main.PROCESSING_DIR,
+            completed_dir=self.main.COMPLETED_DIR, failed_dir=self.main.FAILED_DIR, queued=set(queued),
+        )
+        self.assertEqual((recovered.status, recovered.stage), ("processing", "reconstructing"))
+        seen = {}
+
+        def reconstructed(package, preset, **kwargs):
+            # Once admitted, the job must no longer look restartable.
+            seen.update(preset=preset, queued=self.main.queued_object_jobs())
+            return {}
+
+        with patch.object(self.main, "reconstruct_object", side_effect=reconstructed):
+            self.main.run_object_job("phone-job", queued["phone-job"])
+        self.assertEqual(seen, {"preset": "detail", "queued": {}})
+        self.assertEqual(self.jobs.read("phone-job").status, "complete")
+
+    def test_interrupted_running_job_is_not_mistaken_for_a_queued_one(self):
+        from app.job_recovery import reconcile_interrupted_jobs
+        self.paused()
+        _, background = self.start()
+
+        def interrupted(package, preset, **kwargs):
+            raise KeyboardInterrupt
+
+        with patch.object(self.main, "reconstruct_object", side_effect=interrupted), \
+                self.assertRaises(KeyboardInterrupt):
+            background.tasks[0].func(*background.tasks[0].args)
+        self.assertEqual(self.main.queued_object_jobs(), {})
+        recovered, = reconcile_interrupted_jobs(
+            self.jobs, processing_dir=self.main.PROCESSING_DIR,
+            completed_dir=self.main.COMPLETED_DIR, failed_dir=self.main.FAILED_DIR,
+        )
+        self.assertEqual(recovered.status, "failed")
+        self.assertIn("restarted", recovered.message)
 
     def test_paused_job_survives_a_backend_restart(self):
         from app.job_recovery import reconcile_interrupted_jobs

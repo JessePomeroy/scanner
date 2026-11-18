@@ -29,7 +29,11 @@ class HeavyWorkBusy(RuntimeError):
 
 
 class HeavyWorkUnavailable(HeavyWorkBusy):
-    """Admission cannot be checked safely; use the same fail-closed lifecycle."""
+    """Admission cannot be checked safely; use the same fail-closed lifecycle.
+
+    Unlike plain contention this will not clear by waiting, so queues must not
+    retry it.
+    """
 
 
 _current: ContextVar[tuple[int, tuple[int, int, int | None]] | None] = ContextVar(
@@ -78,9 +82,9 @@ def check_legacy_workers(*, excluding: str | None = None) -> None:
         return
     own_unit = _current_worker_unit()
     if excluding is not None and excluding != own_unit:
-        raise HeavyWorkBusy('Worker service identity does not match this process cgroup.')
+        raise HeavyWorkUnavailable('Worker service identity does not match this process cgroup.')
     if shutil.which('systemctl') is None:
-        raise HeavyWorkBusy('Cannot inspect legacy Scanner workers: systemctl is unavailable.')
+        raise HeavyWorkUnavailable('Cannot inspect legacy Scanner workers: systemctl is unavailable.')
     try:
         result = subprocess.run(
             ['systemctl', '--user', 'list-units', 'scanner-reconstruct-*.service',
@@ -89,9 +93,9 @@ def check_legacy_workers(*, excluding: str | None = None) -> None:
             capture_output=True, text=True, timeout=3, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise HeavyWorkBusy(f'Cannot inspect legacy Scanner workers: {error}') from error
+        raise HeavyWorkUnavailable(f'Cannot inspect legacy Scanner workers: {error}') from error
     if result.returncode:
-        raise HeavyWorkBusy('Cannot inspect legacy Scanner workers; check the user service manager.')
+        raise HeavyWorkUnavailable('Cannot inspect legacy Scanner workers; check the user service manager.')
     units = [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
     competing = [unit for unit in units if unit != own_unit]
     if competing:

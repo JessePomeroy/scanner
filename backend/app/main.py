@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 import os
 import shutil
+from threading import Thread
 from typing import Annotated, BinaryIO, Iterator, Literal
 from urllib.parse import quote
 import uuid
@@ -88,6 +89,8 @@ from app.object_box import (
     ObjectBoxError,
     ObjectBoxOptions,
     apply_object_box,
+    check_object_box_workspace,
+    clear_object_box_checkpoint,
     frame_for_box,
     load_object_box_checkpoint,
     needs_object_box,
@@ -95,18 +98,24 @@ from app.object_box import (
     publish_object_box_checkpoint,
 )
 from app.object_pipeline import ObjectPresetName, reconstruct_object
+from app.mask_authoring import load_mask_authoring_plan, single_box_selection
 from app.scan_package import PreparedScanPackage
 from app.retro_style import RetroStyle, TRIANGLE_BUDGETS
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    queued = queued_object_jobs()
     reconcile_interrupted_jobs(
         jobs,
         processing_dir=PROCESSING_DIR,
         completed_dir=COMPLETED_DIR,
         failed_dir=FAILED_DIR,
+        queued=set(queued),
     )
+    for scan_id, options in queued.items():
+        Thread(target=run_object_job, args=(scan_id, options),
+               name=f"object-job-{scan_id}", daemon=True).start()
     yield
 
 
@@ -460,6 +469,7 @@ def start_object_from_box(
     scan_root = _active_scan_root(scan_id)
     try:
         defaults = load_object_box_checkpoint(scan_root)
+        check_object_box_workspace(scan_root)
     except ObjectBoxError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     try:
@@ -480,6 +490,18 @@ def start_object_from_box(
         raise HTTPException(status_code=409, detail="This scan has already started.") from error
     try:
         applied = apply_object_box(scan_root, request.frame_id, request.box)
+    except ObjectBoxError as error:
+        # Nothing in the workspace changed, so the same job can take a box again.
+        jobs.update(scan_id, status="processing", stage="awaiting_box",
+                    message="The box could not be saved. Draw it again to retry.")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    except Exception as error:
+        record_processing_failure(scan_id, PROCESSING_DIR / scan_id, error)
+        raise HTTPException(
+            status_code=500, detail="The box could not be applied to this scan."
+        ) from error
+    try:
+        publish_object_box_checkpoint(scan_root, request.options, "queued")
         validate_and_report_scan(scan_root).record_processing_step("object_box", applied)
     except Exception as error:
         record_processing_failure(scan_id, PROCESSING_DIR / scan_id, error)
@@ -680,6 +702,7 @@ def _stage_object_job(scan_id: str, prepared: PreparedUpload, options: ObjectBox
                 "The one-box flow needs an Object scan; this capture was saved in Scene mode."
             )
         if needs_object_box(prepared.scan_root):
+            check_object_box_workspace(prepared.scan_root)
             publish_object_box_checkpoint(prepared.scan_root, options)
             jobs.update(
                 scan_id,
@@ -694,10 +717,35 @@ def _stage_object_job(scan_id: str, prepared: PreparedUpload, options: ObjectBox
                 },
             )
             return
+        if report.reconstruction_scope is not None:
+            # The package chose its box but still carries a capture-time
+            # outline. Re-applying the same box sets that outline aside.
+            metadata_dir = prepared.scan_root / "metadata"
+            plan = load_mask_authoring_plan(metadata_dir, load_scan_metadata(metadata_dir).frames)
+            selected, box = single_box_selection(plan)
+            applied = apply_object_box(prepared.scan_root, selected.frame_id, box)
+            validate_and_report_scan(prepared.scan_root).record_processing_step("object_box", applied)
+        publish_object_box_checkpoint(prepared.scan_root, options, "queued")
     except Exception as error:
         record_processing_failure(scan_id, prepared.processing_dir, error)
         return
     run_object_job(scan_id, options)
+
+
+def queued_object_jobs() -> dict[str, ObjectBoxOptions]:
+    """Find jobs that had their box and were only waiting for the computer."""
+    queued: dict[str, ObjectBoxOptions] = {}
+    for record in jobs.list_active():
+        if record.status != "processing" or record.stage not in ("validating", "reconstructing"):
+            continue
+        workspace = PROCESSING_DIR / record.scan_id
+        if workspace.is_symlink() or not workspace.is_dir():
+            continue
+        try:
+            queued[record.scan_id] = load_object_box_checkpoint(find_scan_root(workspace), "queued")
+        except (ObjectBoxError, ScanValidationError):
+            continue
+    return queued
 
 
 def run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
@@ -732,6 +780,8 @@ def _run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
     processing_dir = PROCESSING_DIR / scan_id
     try:
         scan_root = find_scan_root(processing_dir)
+        # From here native work may exist, so a restart must not start it again.
+        clear_object_box_checkpoint(scan_root)
         package = validate_and_report_scan(scan_root)
         report = package.validation
         jobs.update(scan_id, status="processing", stage="reconstructing",
