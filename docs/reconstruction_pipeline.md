@@ -30,17 +30,17 @@ available for slower quality checks and difficult scans.
 
 ## Backend Planning
 
-Use `scripts/plan_reconstruction_backend.py` to validate a scan package and
+Use `experiments/scripts/plan_reconstruction_backend.py` to validate a scan package and
 write a JSON command plan without executing a reconstruction backend:
 
 ```bash
-python3 scripts/plan_reconstruction_backend.py scan.zip --backend colmap_openmvs
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip --backend colmap_openmvs
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend colmap_openmvs \
   --openmvs-point-cloud-source colmap_fused \
   --scope-mode unbounded
-python3 scripts/plan_reconstruction_backend.py scan.zip --backend meshroom
-python3 scripts/plan_reconstruction_backend.py scan.zip --backend alicevision
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip --backend meshroom
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip --backend alicevision
 ```
 
 By default, reports and extracted scan files are written to

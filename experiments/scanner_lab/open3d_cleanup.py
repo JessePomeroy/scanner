@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.point_cloud_processor import PointCloudProcessingConfig, process_point_cloud
+from scanner_lab.point_cloud_processor import PointCloudProcessingConfig, process_point_cloud
 
 
 def cleanup_outputs(scan_dir: Path) -> Path:

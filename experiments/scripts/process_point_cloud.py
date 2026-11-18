@@ -7,10 +7,11 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "experiments"))
 
-from app.point_cloud_processor import (  # noqa: E402
+from scanner_lab.point_cloud_processor import (  # noqa: E402
     PointCloudProcessingConfig,
     SUPPORTED_POINT_CLOUD_PROCESSORS,
     build_processing_summary,

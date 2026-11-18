@@ -7,10 +7,11 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "experiments"))
 
-from app.benchmark_evidence import (  # noqa: E402
+from scanner_lab.benchmark_evidence import (  # noqa: E402
     BenchmarkEvidenceError,
     append_stage,
     ensure_report_open,

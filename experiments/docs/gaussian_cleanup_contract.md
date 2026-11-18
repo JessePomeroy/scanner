@@ -8,7 +8,7 @@ Gaussian cleanup has two distinct states:
    PLY, SPZ, or Gaussian GLB delivery artifacts are generated.
 
 Viewer hiding alone is never publication proof. When a cleanup recipe is used,
-the neural backend plan inserts `scripts/cleanup_gaussian_ply.py` after
+the neural backend plan inserts `experiments/scripts/cleanup_gaussian_ply.py` after
 `ns-export gaussian-splat` and before every `splat-transform` conversion.
 
 ## Recipe

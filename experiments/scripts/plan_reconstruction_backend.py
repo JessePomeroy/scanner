@@ -7,12 +7,13 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "experiments"))
 
-from app.reconstruction_backends import BackendPlanConfig, SUPPORTED_BACKENDS, build_backend_plan  # noqa: E402
+from scanner_lab.reconstruction_backends import BackendPlanConfig, SUPPORTED_BACKENDS, build_backend_plan  # noqa: E402
 from app.colmap_runner import prepare_colmap_output_directories  # noqa: E402
-from app.reconstruction_plan import shell_join, write_command_plan_report  # noqa: E402
+from scanner_lab.reconstruction_plan import shell_join, write_command_plan_report  # noqa: E402
 from app.scan_package import prepare_scan_source, scan_id_from_path, validate_and_report_scan  # noqa: E402
 
 

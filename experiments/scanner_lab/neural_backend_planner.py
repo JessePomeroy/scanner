@@ -220,7 +220,7 @@ def build_neural_backend_plan(scan_root: Path, config: NeuralBackendConfig) -> N
             cleanup_dir = workspace / "cleanup"
             publication_ply = cleanup_dir / "splat.cleaned.ply"
             cleanup_report = cleanup_dir / "gaussian_cleanup_report.json"
-            cleanup_script = Path(__file__).resolve().parents[2] / "scripts" / "cleanup_gaussian_ply.py"
+            cleanup_script = Path(__file__).resolve().parents[1] / "scripts" / "cleanup_gaussian_ply.py"
             commands.append(
                 [
                     "python3",

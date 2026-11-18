@@ -8,10 +8,11 @@ from pathlib import Path
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "experiments"))
 
-from app.gaussian_cleanup import (  # noqa: E402
+from scanner_lab.gaussian_cleanup import (  # noqa: E402
     GaussianCleanupError,
     cleanup_gaussian_ply,
     load_gaussian_cleanup_recipe,

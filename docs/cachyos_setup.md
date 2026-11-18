@@ -203,7 +203,7 @@ comparison record exists yet.
 ## 7. Continue the Paired Benchmark
 
 Only after strict mode passes, continue with
-[`benchmark_runbook.md`](benchmark_runbook.md). The current development runner
+[`benchmark_runbook.md`](../experiments/docs/benchmark_runbook.md). The current development runner
 also exposes the explicit recovery strategy
 `--openmvs-point-cloud-source colmap_fused --scope-mode unbounded`; it meshes
 the view-aware `InterfaceCOLMAP` cloud and skips `DensifyPointCloud`. That path
@@ -216,4 +216,4 @@ environment output, elapsed times, and peak VRAM measurements with the
 benchmark evidence.
 
 The detailed source review and unresolved compatibility questions are recorded
-in [`research/cachyos_reconstruction_setup.md`](research/cachyos_reconstruction_setup.md).
+in [`research/cachyos_reconstruction_setup.md`](../experiments/docs/research/cachyos_reconstruction_setup.md).
