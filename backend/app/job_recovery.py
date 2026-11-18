@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 import shutil
 
@@ -12,7 +13,7 @@ from app.schemas import JobRecord, JobStatus
 
 
 _INTERRUPTED_WORKSPACE_OUTPUT = "interrupted_workspace"
-_STANDARD_RESULT_OUTPUTS = {"colmap_output", "scan_report", "textured_mesh"}
+_STANDARD_RESULT_OUTPUTS = {"colmap_output", "openmvs_dense_point_cloud", "scan_report", "textured_mesh"}
 
 
 def reconcile_interrupted_jobs(
@@ -21,8 +22,13 @@ def reconcile_interrupted_jobs(
     processing_dir: Path,
     completed_dir: Path,
     failed_dir: Path,
+    queued: Collection[str] = (),
 ) -> list[JobRecord]:
-    """Resolve every active job without deleting partial or completed scan data."""
+    """Resolve every active job without deleting partial or completed scan data.
+
+    ``queued`` names jobs that were waiting to start and have run no native
+    work; the caller starts them again, so they are left exactly as they are.
+    """
     reconciled: list[JobRecord] = []
     for record in jobs.list_active():
         processing_path = processing_dir / record.scan_id
@@ -39,7 +45,11 @@ def reconcile_interrupted_jobs(
             reconciled.append(_recover_completed_job(jobs, record, completed_path))
             continue
 
-        if record.stage in {"awaiting_masks", "awaiting_scope"} and processing_path.is_dir():
+        if record.scan_id in queued and processing_path.is_dir():
+            reconciled.append(record)
+            continue
+
+        if record.stage in {"awaiting_box", "awaiting_masks", "awaiting_scope"} and processing_path.is_dir():
             # These are durable user-review checkpoints, not interrupted
             # background command. Leave its workspace in place for resume.
             reconciled.append(record)
@@ -104,14 +114,16 @@ def _recover_completed_job(
     if record.stage == "validating":
         terminal_status = "validated"
         message = "Recovered validated scan after backend restart."
-    elif record.stage == "exporting" and "colmap_output" in recovered_outputs:
+    elif record.stage == "exporting" and (
+        "colmap_output" in recovered_outputs or "openmvs_dense_point_cloud" in recovered_outputs
+    ):
         terminal_status = "complete"
         message = "Recovered completed reconstruction after backend restart."
     elif record.stage == "exporting":
         terminal_status = "failed"
         message = (
             "Completed scan files were preserved, but no safe dense or sparse "
-            "COLMAP result was found after backend restart."
+            "reconstruction result was found after backend restart."
         )
     else:
         terminal_status = "failed"

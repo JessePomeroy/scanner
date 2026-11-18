@@ -8,10 +8,10 @@ Use the planner to inspect inputs and suggested commands without installing
 large model dependencies:
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
-python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
-python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
-python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend depth_anything
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend lingbot
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
 ```
 
 By default, reports and extracted scan files are written to
@@ -26,7 +26,7 @@ The planner prefers `metadata/video.json` / `video/` input when available, then
 falls back to `images/`:
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
 ```
 
 Start with reduced frame counts or lower resolution before attempting full scan
@@ -41,7 +41,7 @@ planner defaults to the small encoder (`vits`) because larger Depth Anything V2
 checkpoints carry non-commercial terms.
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend depth_anything
 ```
 
 Depth outputs are support data. They are not a replacement for textured mesh
@@ -54,7 +54,7 @@ They currently expect video input and should be treated as viewer/point-cloud
 experiments.
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend lingbot
 ```
 
 If the scan has no video, the planner will still report available images but
@@ -67,7 +67,7 @@ native Linux RTX workstation is available. The planner targets Nerfstudio
 Splatfacto:
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
 ```
 
 The generated command plan:
@@ -112,7 +112,7 @@ Always preserve `exports/splat/splat.ply` as the editable master. Repeat
 `--splat-delivery-format` to request other outputs:
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip \
+python3 experiments/scripts/plan_neural_backend.py scan.zip \
   --backend gaussian_splatting \
   --splat-delivery-format sog \
   --splat-delivery-format html \
@@ -128,7 +128,7 @@ delivery conversion, copy and edit the example recipe and pass it to the plan:
 
 ```bash
 cp docs/examples/gaussian_cleanup_recipe.json gaussian_cleanup.json
-python3 scripts/plan_neural_backend.py scan.zip \
+python3 experiments/scripts/plan_neural_backend.py scan.zip \
   --backend gaussian_splatting \
   --splat-cleanup-recipe gaussian_cleanup.json
 ```

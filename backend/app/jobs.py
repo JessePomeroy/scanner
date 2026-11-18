@@ -28,6 +28,7 @@ _ACTIVE_STAGES: set[JobStage] = {
     "queued",
     "validating",
     "reconstructing",
+    "awaiting_box",
     "awaiting_masks",
     "awaiting_scope",
     "meshing",
@@ -36,10 +37,11 @@ _ACTIVE_STAGES: set[JobStage] = {
 _ALLOWED_STAGE_TRANSITIONS: dict[JobStage, set[JobStage]] = {
     "received": {"queued", "validating"},
     "queued": {"queued", "validating"},
-    "validating": {"validating", "reconstructing", "awaiting_masks"},
+    "validating": {"validating", "reconstructing", "awaiting_masks", "awaiting_box"},
     "reconstructing": {
-        "reconstructing", "awaiting_masks", "awaiting_scope", "meshing", "exporting"
+        "reconstructing", "awaiting_box", "awaiting_masks", "awaiting_scope", "meshing", "exporting"
     },
+    "awaiting_box": {"awaiting_box", "reconstructing"},
     "awaiting_masks": {"awaiting_masks", "reconstructing"},
     "awaiting_scope": {"awaiting_scope", "reconstructing", "meshing", "exporting"},
     "meshing": {"meshing", "exporting"},
@@ -168,6 +170,11 @@ class JobStore:
             if hasattr(JobRecord, "model_validate_json"):
                 return JobRecord.model_validate_json(raw)
             return JobRecord.parse_raw(raw)
+
+    def delete(self, scan_id: str) -> None:
+        """Forget a job record. The caller owns removing the job's files."""
+        with self._lock:
+            self._record_path(scan_id).unlink(missing_ok=True)
 
     def list(self, *, limit: int = 50) -> list[JobRecord]:
         with self._lock:

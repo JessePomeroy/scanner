@@ -1,12 +1,20 @@
-# Local Reconstruction Experiments
+# Scripts
 
-This folder is reserved for prototype scripts used while developing the local
-COLMAP/OpenMVS reconstruction workflow.
+Service helpers, command-line runners and checks. Planners for engines outside
+the everyday flow live in `experiments/scripts/`.
 
-Keep scripts here focused and disposable until the behavior is stable enough to
-move into `backend/app`.
+Used by the running service:
 
-Current entry points:
+- `install_services.sh`: install or refresh the two user services for this
+  checkout; `--dry-run` prints the units without changing anything.
+- `notify_reconstruction_jobs.py`: desktop notification when a job finishes,
+  with Open in Blender and Show folder for a finished model.
+- `install_sam2_model.py`: download and verify the pinned SAM2 checkpoint.
+- `blender/prepare_scan_asset.py`, `blender/model_preview.py`,
+  `blender/retro_asset.py`: the Blender side of model delivery and Retro
+  export. The backend runs them; they can also be run by hand.
+
+Command-line entry points:
 
 - `inspect_scan.py`: validate typed package metadata and file-reference
   integrity, print capture counts and compatibility warnings, and optionally
@@ -58,6 +66,11 @@ Current entry points:
   recipes preserve source objects in the `.blend`, apply box/cylinder and
   loose-component cleanup to copies, verify the retained result, and export
   only those copies to GLB.
+- `export_retro_asset.py`: create a separate, verified low-poly Retro asset from
+  an existing textured OBJ. Supports 500/1000/2000-triangle budgets, 128/256-pixel
+  baked atlases (default: 500 triangles and 256 pixels), optional ordered
+  dithering, packed Blender/GLB files and a
+  portable OBJ bundle. Originals are hash-checked and never overwritten.
 - `verify_scan_zip_writer.swift`: compile with the iOS `ScanPackageWriter`
   source to round-trip the custom ZIP writer through Python `zipfile`.
 - `verify_capture_mask_mapper.swift`: verify identity, aspect-fill crop, and
@@ -83,14 +96,14 @@ Initialize the official benchmark evidence record before running any Linux
 reconstruction command:
 
 ```bash
-python3 scripts/benchmark_evidence.py init \
+python3 experiments/scripts/benchmark_evidence.py init \
   --scan scan_2026_07_15_00_41_09.zip \
   --expected-sha256 ef9a6e0aefa564facf17357252e7fa2bd2cec55882a107461abad5c6459cb779 \
   --scanner-baseline-commit d5f19d9 \
   --report ScannerBenchmarks/run-001/evidence.json
 ```
 
-See `docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
+See `experiments/docs/benchmark_runbook.md` for stage wrapping, artifact finalization, stop
 rules, and the Blender comparison record.
 
 The native CachyOS/RTX 3070 environment passes the strict install/visibility

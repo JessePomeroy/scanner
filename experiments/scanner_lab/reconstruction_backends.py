@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.alicevision_runner import AliceVisionConfig, build_alicevision_plan
+from scanner_lab.alicevision_runner import AliceVisionConfig, build_alicevision_plan
 from app.colmap_runner import ColmapConfig, build_colmap_dense_commands, build_colmap_sparse_commands
-from app.meshroom_runner import MeshroomConfig, build_meshroom_plan
+from scanner_lab.meshroom_runner import MeshroomConfig, build_meshroom_plan
 from app.openmvs_runner import (
     OpenMVSConfig,
     OpenMVSPointCloudSource,
@@ -15,7 +15,7 @@ from app.openmvs_runner import (
     build_openmvs_commands,
     openmvs_mesh_input_cloud_path,
 )
-from app.reconstruction_plan import CommandPlan
+from scanner_lab.reconstruction_plan import CommandPlan
 
 
 SUPPORTED_BACKENDS = ("colmap_openmvs", "meshroom", "alicevision")

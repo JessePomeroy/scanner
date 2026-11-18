@@ -1,0 +1,27 @@
+[Unit]
+Description=Scanner backend: phone uploads to Blender-ready models
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/backend
+Environment=SCANNER_SCANS_DIR=@REPO@/backend/scans
+# Finished models are copied here, one folder per scan.
+Environment=SCANNER_LIBRARY_DIR=%h/ScannerModels
+# Object uploads from any phone build use the one-box flow.
+Environment=SCANNER_OBJECT_UPLOADS=one_box
+Environment=PATH=%h/.local/bin:/opt/cuda/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@REPO@/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Reconstruction peaked near 6 GiB (Fast) and 20 GiB (Detailed) on the 138-photo
+# reference scan. The cap stops a runaway job from taking the desktop with it.
+MemoryMax=32G
+MemorySwapMax=0
+# If the cap kills a reconstruction tool, fail that job, not the whole backend.
+OOMPolicy=continue
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

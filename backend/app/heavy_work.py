@@ -29,7 +29,11 @@ class HeavyWorkBusy(RuntimeError):
 
 
 class HeavyWorkUnavailable(HeavyWorkBusy):
-    """Admission cannot be checked safely; use the same fail-closed lifecycle."""
+    """Admission cannot be checked safely; use the same fail-closed lifecycle.
+
+    Unlike plain contention this will not clear by waiting, so queues must not
+    retry it.
+    """
 
 
 _current: ContextVar[tuple[int, tuple[int, int, int | None]] | None] = ContextVar(
@@ -78,9 +82,9 @@ def check_legacy_workers(*, excluding: str | None = None) -> None:
         return
     own_unit = _current_worker_unit()
     if excluding is not None and excluding != own_unit:
-        raise HeavyWorkBusy('Worker service identity does not match this process cgroup.')
+        raise HeavyWorkUnavailable('Worker service identity does not match this process cgroup.')
     if shutil.which('systemctl') is None:
-        raise HeavyWorkBusy('Cannot inspect legacy Scanner workers: systemctl is unavailable.')
+        raise HeavyWorkUnavailable('Cannot inspect legacy Scanner workers: systemctl is unavailable.')
     try:
         result = subprocess.run(
             ['systemctl', '--user', 'list-units', 'scanner-reconstruct-*.service',

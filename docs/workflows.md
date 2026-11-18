@@ -1,5 +1,9 @@
 # Workflows
 
+> **Reference for the older and command-line paths.** The everyday path is in
+> the [README](../README.md). Some planners named here now live in
+> `experiments/`.
+
 ## Local Mac Workflow
 
 Use the MacBook for capture iteration and package validation:
@@ -28,7 +32,7 @@ The default local matcher is `sequential_matcher`; use
 To inspect a backend command plan without running native reconstruction tools:
 
 ```bash
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend colmap_openmvs
 ```
 
@@ -41,10 +45,10 @@ never reset or merged with a new package.
 Alternate dry-run planners are available for Meshroom/AliceVision research:
 
 ```bash
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend meshroom
 
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend alicevision
 ```
 
@@ -122,10 +126,10 @@ ambiguous.
 To plan neural backend experiments without installing model dependencies:
 
 ```bash
-python3 scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
-python3 scripts/plan_neural_backend.py scan.zip --backend depth_anything
-python3 scripts/plan_neural_backend.py scan.zip --backend lingbot
-python3 scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend mast3r_slam
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend depth_anything
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend lingbot
+python3 experiments/scripts/plan_neural_backend.py scan.zip --backend gaussian_splatting
 ```
 
 For Gaussian scene training, the planner deliberately chooses exported image
@@ -133,7 +137,7 @@ keyframes before the optional video. The iPhone video is capped at 30 seconds,
 but keyframes cover the full scan. The default Gaussian delivery plan preserves
 an editable PLY master and produces SOG plus a standalone HTML viewer.
 
-See `docs/neural_backends.md` for backend-specific notes and license cautions.
+See `experiments/docs/neural_backends.md` for backend-specific notes and license cautions.
 
 ## High-Resolution Keyframe Capture
 
@@ -487,17 +491,17 @@ reconstruction computer**. Starting Linux should launch the agent through
 To compare backend command plans on the workstation before a long run:
 
 ```bash
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend colmap_openmvs \
   --work-dir ~/ScannerPlans/colmap
 
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend colmap_openmvs \
   --openmvs-point-cloud-source colmap_fused \
   --scope-mode unbounded \
   --work-dir ~/ScannerPlans/colmap-fused
 
-python3 scripts/plan_reconstruction_backend.py scan.zip \
+python3 experiments/scripts/plan_reconstruction_backend.py scan.zip \
   --backend meshroom \
   --work-dir ~/ScannerPlans/meshroom
 ```
@@ -581,7 +585,7 @@ python3 scripts/crop_point_cloud.py input.ply cropped.ply --center 0 0 0 --radiu
 To dry-run point-cloud cleanup or downsampling after any backend produces a PLY:
 
 ```bash
-python3 scripts/process_point_cloud.py input.ply output.ply \
+python3 experiments/scripts/process_point_cloud.py input.ply output.ply \
   --processor open3d \
   --voxel-size 0.03 \
   --dry-run
@@ -591,7 +595,7 @@ Open3D is the default processing backend. ThreeCrate is available as an
 experimental optional processor and is not installed by default:
 
 ```bash
-python3 scripts/process_point_cloud.py input.ply output.ply \
+python3 experiments/scripts/process_point_cloud.py input.ply output.ply \
   --processor threecrate \
   --voxel-size 0.03 \
   --dry-run

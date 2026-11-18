@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scanner</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f1f4f0; --card: #ffffff; --ink: #142e35; --muted: #58746d; --line: #cfd9d0;
+    --accent: #136899; --accent-ink: #ffffff; --warn: #834d37; --track: #dbe3dc; --ok: #24505d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1d21; --card: #172a30; --ink: #e6ece8; --muted: #a2b5a3; --line: #2b444c;
+      --accent: #58b0e0; --accent-ink: #06202c; --warn: #e2a48c; --track: #24393f; --ok: #a2b5a3;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 0 16px calc(32px + env(safe-area-inset-bottom));
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 12px; padding: 18px 0 14px; }
+  header h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  header a { margin-left: auto; color: var(--accent); text-decoration: none; font-size: 15px; }
+  h2 { font-size: 18px; margin: 0 0 6px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+  button, .button {
+    font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+    border-radius: 10px; padding: 11px 16px; min-height: 44px; cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  button.primary, .button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.danger { color: var(--warn); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .wide { width: 100%; }
+
+  .drop { border: 2px dashed var(--line); text-align: center; padding: 28px 18px; }
+  .drop.over { border-color: var(--accent); }
+  .bar { height: 10px; background: var(--track); border-radius: 999px; overflow: hidden; margin: 12px 0 8px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
+
+  .scans { list-style: none; margin: 0; padding: 0; }
+  .scans a { display: flex; gap: 14px; align-items: center; padding: 10px; margin: 0 -10px; border-radius: 12px; color: inherit; text-decoration: none; }
+  .scans a:hover { background: var(--bg); }
+  .scans li + li { border-top: 1px solid var(--line); }
+  .thumb { width: 64px; height: 64px; border-radius: 10px; background: var(--track) center/cover no-repeat; flex: none; }
+  .scans .what { font-weight: 600; }
+  .tag { margin-left: auto; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+  .tag.act { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .tag.bad { color: var(--warn); }
+
+  .photo { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0 auto 12px; touch-action: none; user-select: none; -webkit-user-select: none; cursor: crosshair; border-radius: 10px; overflow: hidden; background: var(--track); }
+  .photo img { display: block; max-width: 100%; max-height: 62vh; pointer-events: none; }
+  .box { position: absolute; border: 3px solid #ffffff; outline: 2px solid var(--accent); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45); border-radius: 4px; display: none; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg label { padding: 9px 14px; cursor: pointer; min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+  .seg input { position: absolute; opacity: 0; }
+  .seg input:checked + span { color: var(--accent); font-weight: 700; }
+  .seg label:has(input:checked) { background: var(--bg); }
+  .seg label:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: -3px; }
+  .seg small { display: block; color: var(--muted); font-weight: 400; }
+  .check { display: flex; gap: 10px; align-items: center; min-height: 44px; }
+  .check input { width: 20px; height: 20px; }
+  select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); min-height: 44px; }
+  .result img { display: block; width: 100%; max-width: 420px; margin: 0 auto 12px; border-radius: 12px; background: var(--track); }
+  .downloads { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 14px; }
+  .downloads .button { flex-direction: column; gap: 0; }
+  .downloads small { font-weight: 400; opacity: .85; }
+  .error { color: var(--warn); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; word-break: break-all; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Scanner</h1>
+    <a href="#/" id="home-link" hidden>All scans</a>
+  </header>
+  <div id="view" aria-live="polite"></div>
+</main>
+
+<script>
+"use strict";
+const view = document.getElementById("view");
+const homeLink = document.getElementById("home-link");
+let timer = null;          // polling for the current screen
+let shown = null;          // which screen is drawn, so polling does not redraw it
+let uploading = null;      // {percent, error} while a ZIP is being sent
+let lastPercent = 3;       // progress bar position on the working screen
+let homeKey = null;        // what the home screen last drew
+
+const QUALITY = {preview: ["Fast", "about 8 minutes"], detail: ["Detailed", "about 12 minutes"]};
+const DOWNLOADS = [
+  ["model_blend", "Blender file", ".blend"],
+  ["model_glb", "GLB", "for other 3D apps"],
+  ["textured_bundle", "OBJ with textures", ".zip"],
+  ["retro_glb", "Retro GLB", "low-poly"],
+  ["retro_blend", "Retro Blender file", "low-poly .blend"],
+];
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (value === true) node.setAttribute(key, "");
+    else if (value !== false && value != null) node.setAttribute(key, value);
+  }
+  for (const child of children.flat()) {
+    if (child != null) node.append(child.nodeType ? child : document.createTextNode(child));
+  }
+  return node;
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = null;
+    try { detail = (await response.json()).detail; } catch (_) {}
+    const error = new Error(typeof detail === "string" ? detail : `The computer answered with an error (${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+function when(job) {
+  const value = job.created_at ? new Date(job.created_at) : null;
+  if (!value || isNaN(value)) return "";
+  return value.toLocaleString([], {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"});
+}
+
+function summary(job) {
+  if (job.status === "complete") return ["Ready", ""];
+  if (job.status === "failed") return ["Did not finish", "bad"];
+  if (job.status === "validated") return ["Uploaded", ""];
+  if (job.stage === "awaiting_box") return ["Draw a box", "act"];
+  if (job.stage === "awaiting_masks" || job.stage === "awaiting_scope") return ["Waiting in the phone app", ""];
+  return ["Working", ""];
+}
+
+const atHome = () => location.hash.replace(/^#\/?/, "") === "";
+const atScan = (id) => location.hash === `#/scan/${id}`;
+
+function show(kind, ...nodes) {
+  shown = kind;
+  view.replaceChildren(...nodes);
+}
+
+function stop() {
+  clearTimeout(timer);
+  timer = null;
+}
+
+// ---------- Home: upload and the list of scans ----------
+
+async function home() {
+  stop();
+  homeLink.hidden = true;
+  let jobs = [];
+  let problem = null;
+  try { jobs = await api("/scans?limit=50"); } catch (error) { problem = error.message; }
+  if (!atHome()) return;
+  // Redraw only when something changed, so focus and screen readers are left alone.
+  const key = JSON.stringify([jobs.map((job) => [job.scan_id, job.status, job.stage, job.image_count]),
+                              problem, uploading && [uploading.error, Boolean(uploading)]]);
+  const working = jobs.some((job) => (job.status === "received" || job.status === "processing")
+    && !["awaiting_box", "awaiting_masks", "awaiting_scope"].includes(job.stage));
+  if (shown === "home" && key === homeKey) {
+    timer = setTimeout(home, working ? 4000 : 15000);
+    return;
+  }
+  homeKey = key;
+
+  const input = el("input", {type: "file", accept: ".zip,application/zip", hidden: true,
+    onchange: () => input.files[0] && upload(input.files[0])});
+  const drop = el("div", {class: "card drop"},
+    el("h2", {}, "Add a scan"),
+    el("p", {class: "muted"}, "Choose the ZIP the Scanner app exported, or drop it here."),
+    el("button", {class: "primary", onclick: () => input.click()}, "Choose scan ZIP"), input);
+  drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (event) => {
+    event.preventDefault();
+    drop.classList.remove("over");
+    const file = event.dataTransfer.files[0];
+    if (file) upload(file);
+  });
+
+  const list = el("ul", {class: "scans"}, jobs.map((job) => {
+    const [label, tone] = summary(job);
+    const photos = job.image_count ? `${job.image_count} photos` : "";
+    return el("li", {}, el("a", {href: `#/scan/${job.scan_id}`},
+      el("span", {class: "thumb", style: `background-image:url("/scans/${job.scan_id}/thumbnail?max_size=128")`}),
+      el("span", {}, el("span", {class: "what"}, when(job) || "Scan"), el("br"),
+        el("span", {class: "muted small"}, photos)),
+      el("span", {class: `tag ${tone}`}, label)));
+  }));
+
+  show("home",
+    uploading ? uploadCard() : drop,
+    problem ? el("div", {class: "card error"}, problem) :
+    jobs.length ? el("div", {class: "card"}, el("h2", {}, "Scans"), list) : null);
+  timer = setTimeout(home, working ? 4000 : 15000);
+}
+
+function uploadCard() {
+  if (uploading.error) {
+    return el("div", {class: "card"}, el("h2", {}, "The upload did not finish"),
+      el("p", {class: "error"}, uploading.error),
+      el("button", {onclick: () => { uploading = null; home(); }}, "Try again"));
+  }
+  return el("div", {class: "card"}, el("h2", {}, "Sending the scan"),
+    el("div", {class: "bar"}, el("i", {id: "upload-bar", style: `width:${uploading.percent}%`})),
+    el("p", {class: "muted small", id: "upload-text"}, `${uploading.percent}%`));
+}
+
+function upload(file) {
+  if (!/\.zip$/i.test(file.name)) {
+    uploading = {percent: 0, error: "That is not a ZIP file. Share the scan from the Scanner app's Scans tab."};
+    return refreshHome();
+  }
+  uploading = {percent: 0, error: null};
+  const form = new FormData();
+  form.append("file", file);
+  const request = new XMLHttpRequest();
+  request.open("POST", "/scans?run_reconstruction=true&object_preset=preview");
+  request.upload.onprogress = (event) => {
+    if (!event.lengthComputable) return;
+    uploading.percent = Math.round(event.loaded / event.total * 100);
+    const bar = document.getElementById("upload-bar");
+    const text = document.getElementById("upload-text");
+    if (bar) bar.style.width = `${uploading.percent}%`;
+    if (text) text.textContent = uploading.percent < 100 ? `${uploading.percent}%` : "Saving on the computer";
+  };
+  request.onerror = () => { uploading.error = "The connection to the computer was lost."; refreshHome(); };
+  request.onload = () => {
+    let body = null;
+    try { body = JSON.parse(request.responseText); } catch (_) {}
+    if (request.status === 200 && body && body.scan_id) {
+      uploading = null;
+      // Follow the upload only if the person is still waiting on the home screen.
+      if (atHome()) location.hash = `#/scan/${body.scan_id}`;
+    } else {
+      uploading.error = (body && typeof body.detail === "string") ? body.detail : `The computer refused the upload (${request.status}).`;
+      refreshHome();
+    }
+  };
+  request.send(form);
+  refreshHome();
+}
+
+// Upload events can arrive while another screen is showing; only home redraws.
+function refreshHome() {
+  if (atHome()) home();
+}
+
+// ---------- One scan: box, progress, result ----------
+
+async function scan(id) {
+  stop();
+  homeLink.hidden = false;
+  let job;
+  try {
+    job = await api(`/scans/${id}`);
+  } catch (error) {
+    if (!atScan(id)) return;
+    if (error.status === 404) {
+      show(`gone:${id}`, el("div", {class: "card"}, el("h2", {}, "This scan is not on the computer"),
+        el("p", {class: "muted"}, error.message), el("a", {class: "button", href: "#/"}, "All scans")));
+      return;
+    }
+    // A dropped connection or a restarting backend is not the scan's fault:
+    // keep whatever is on screen and try again.
+    if (!shown || !shown.endsWith(`:${id}`)) {
+      show(`wait:${id}`, el("div", {class: "card"}, el("h2", {}, "Trying to reach the computer"),
+        el("p", {class: "muted"}, "This page will carry on by itself when it answers.")));
+    }
+    timer = setTimeout(() => scan(id), 4000);
+    return;
+  }
+  if (!atScan(id)) return;
+  const waiting = job.status === "processing" && job.stage === "awaiting_box";
+  if (waiting) {
+    if (shown !== `box:${id}`) await boxScreen(job);
+    if (!atScan(id)) return;
+  } else if (job.status === "complete") {
+    if (shown !== `done:${id}`) await resultScreen(job);
+    // A result that could not load its file list is fetched again.
+    if (atScan(id) && shown !== `done:${id}`) timer = setTimeout(() => scan(id), 4000);
+    return;
+  } else if (job.status === "failed") {
+    return failedScreen(job);
+  } else if (job.status === "validated") {
+    return show(`plain:${id}`, el("div", {class: "card"}, el("h2", {}, "Uploaded"),
+      el("p", {class: "muted"}, "This scan was only checked. Upload it again from this page to make a model."),
+      deleteButton(job)));
+  } else {
+    progressScreen(job);
+  }
+  timer = setTimeout(() => scan(id), waiting ? 5000 : 2000);
+}
+
+function progressScreen(job) {
+  const id = job.scan_id;
+  const step = /^Step (\d+) of (\d+): (.*?)\.?$/.exec(job.message || "");
+  const review = job.stage === "awaiting_masks" || job.stage === "awaiting_scope";
+  let title = "Working on it";
+  let detail = job.message || "";
+  // A message without a step number keeps the bar where it was.
+  let percent = shown === `work:${id}` ? lastPercent : 3;
+  if (review) {
+    title = "Waiting in the phone app";
+    detail = "This scan was sent with the older review steps. Finish them in the Scanner app's Jobs tab.";
+  } else if (step) {
+    title = step[3];
+    detail = `Step ${step[1]} of ${step[2]}`;
+    percent = Math.round((Number(step[1]) - 0.5) / Number(step[2]) * 100);
+  } else if (job.stage === "exporting") {
+    title = "Finishing";
+    percent = 98;
+  } else if (job.stage === "queued" || job.stage === "validating" || job.stage === "received") {
+    title = "Checking the scan";
+    detail = job.image_count ? `${job.image_count} photos` : "";
+  }
+  if (shown !== `work:${id}`) {
+    show(`work:${id}`, el("div", {class: "card"},
+      el("h2", {id: "work-title"}, title),
+      el("div", {class: "bar", hidden: review}, el("i", {id: "work-bar"})),
+      el("p", {class: "muted", id: "work-detail"}, detail),
+      review ? null : el("p", {class: "muted small"}, "You can close this page. The computer keeps going and the model will be here when you come back.")));
+  }
+  document.getElementById("work-title").textContent = title;
+  document.getElementById("work-detail").textContent = detail;
+  lastPercent = percent;
+  const bar = document.getElementById("work-bar");
+  if (bar) bar.style.width = `${percent}%`;
+}
+
+async function boxScreen(job) {
+  const id = job.scan_id;
+  let photos = [];
+  try { photos = (await api(`/scans/${id}/photos`)).photos; } catch (error) {
+    if (!atScan(id)) return;
+    // Not marked as the box screen, so the next poll tries again.
+    return show(`boxwait:${id}`, el("div", {class: "card"}, el("h2", {}, "Loading the photos"),
+      el("p", {class: "muted"}, error.message)));
+  }
+  if (!atScan(id)) return;
+  if (!photos.length) return show(`box:${id}`, el("div", {class: "card error"}, "This scan has no photos."));
+  const stride = Math.max(1, Math.round(photos.length / 12));
+  let index = 0;
+  let box = null;
+  let drag = null;
+  let ready = false;       // the photo on screen is the one a box would be sent for
+
+  const saved = JSON.parse(localStorage.getItem("scanner-options") || "{}");
+  const options = {preset: saved.preset === "detail" ? "detail" : "preview", retro: saved.retro === true,
+                   triangles: [500, 1000, 2000].includes(saved.triangles) ? saved.triangles : 500};
+  const remember = () => localStorage.setItem("scanner-options", JSON.stringify(options));
+
+  const image = el("img", {alt: "A photo from the scan", draggable: "false"});
+  const outline = el("div", {class: "box"});
+  const photo = el("div", {class: "photo", role: "img", "aria-label": "Photo from the scan. Drag to draw a box around the object."}, image, outline);
+  const hint = el("p", {class: "muted", id: "box-hint"}, "Drag a box around the whole object.");
+  const go = el("button", {class: "primary wide", disabled: true, onclick: start}, "Make 3D model");
+  const problem = el("p", {class: "error", hidden: true});
+
+  function load() {
+    box = null;
+    ready = false;
+    drag = null;
+    draw();
+    image.src = `/scans/${id}/photos/${photos[index].frame_id}?max_size=1280`;
+  }
+  image.addEventListener("load", () => { ready = true; problem.hidden = true; });
+  image.addEventListener("error", () => {
+    problem.textContent = "That photo could not be loaded. Pick another one.";
+    problem.hidden = false;
+  });
+  function draw() {
+    go.disabled = !box;
+    outline.style.display = box ? "block" : "none";
+    if (!box) return;
+    outline.style.left = `${box[0] * 100}%`;
+    outline.style.top = `${box[1] * 100}%`;
+    outline.style.width = `${(box[2] - box[0]) * 100}%`;
+    outline.style.height = `${(box[3] - box[1]) * 100}%`;
+  }
+  function point(event) {
+    const rect = photo.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+            Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))];
+  }
+  function span(a, b) {
+    return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+  }
+  photo.addEventListener("pointerdown", (event) => {
+    if (go.dataset.busy || !ready) return;
+    photo.setPointerCapture(event.pointerId);
+    drag = {from: point(event), before: box};
+    event.preventDefault();
+  });
+  photo.addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    box = span(drag.from, point(event));
+    draw();
+  });
+  const finish = (event) => {
+    if (!drag) return;
+    const next = span(drag.from, point(event));
+    // A tap or a sliver is not a box; keep whatever was drawn before.
+    box = (next[2] - next[0] >= 0.03 && next[3] - next[1] >= 0.03) ? next : drag.before;
+    drag = null;
+    hint.textContent = box ? "Box set. Drag again to redraw it." : "Drag a box around the whole object.";
+    draw();
+  };
+  photo.addEventListener("pointerup", finish);
+  photo.addEventListener("pointercancel", () => { if (drag) { box = drag.before; drag = null; draw(); } });
+
+  async function start() {
+    if (!box) return;
+    go.disabled = true;
+    go.dataset.busy = "1";
+    go.textContent = "Starting";
+    problem.hidden = true;
+    const body = {frame_id: photos[index].frame_id, box, preset: options.preset,
+                  export_style: options.retro ? "retro" : "standard"};
+    if (options.retro) body.retro_triangles = options.triangles;
+    try {
+      await api(`/scans/${id}/object-box`, {method: "POST", headers: {"Content-Type": "application/json"},
+                                           body: JSON.stringify(body)});
+      if (atScan(id)) scan(id);
+    } catch (error) {
+      delete go.dataset.busy;
+      go.textContent = "Make 3D model";
+      problem.textContent = error.message;
+      problem.hidden = false;
+      draw();
+    }
+  }
+
+  const position = el("span", {class: "muted small"});
+  const move = (delta) => {
+    index = (index + delta * stride + photos.length * stride) % photos.length;
+    position.textContent = `Photo ${index + 1} of ${photos.length}`;
+    hint.textContent = "Drag a box around the whole object.";
+    load();
+  };
+  const triangles = el("select", {"aria-label": "Retro triangle count", hidden: !options.retro,
+    onchange: () => { options.triangles = Number(triangles.value); remember(); }},
+    [500, 1000, 2000].map((count) => el("option", {value: count, selected: count === options.triangles}, `${count} triangles`)));
+  const quality = el("div", {class: "seg", role: "radiogroup", "aria-label": "Quality"},
+    Object.entries(QUALITY).map(([key, [name, time]]) => el("label", {},
+      el("input", {type: "radio", name: "quality", value: key, checked: key === options.preset,
+        onchange: () => { options.preset = key; remember(); }}),
+      el("span", {}, name), el("small", {}, time))));
+  const retro = el("label", {class: "check"},
+    el("input", {type: "checkbox", checked: options.retro, onchange: (event) => {
+      options.retro = event.target.checked; triangles.hidden = !options.retro; remember(); }}),
+    el("span", {}, "Also make a retro low-poly version"));
+
+  show(`box:${id}`, el("div", {class: "card"},
+    el("h2", {}, "Where is the object?"), hint, photo,
+    el("div", {class: "row", style: "justify-content:center;margin-bottom:14px"},
+      el("button", {onclick: () => move(-1), "aria-label": "Previous photo"}, "‹"),
+      position,
+      el("button", {onclick: () => move(1), "aria-label": "Next photo"}, "›")),
+    el("p", {class: "muted small"}, "If the object is cut off in this photo, pick another one."),
+    el("div", {class: "row", style: "margin-bottom:6px"}, quality),
+    el("div", {class: "row", style: "margin-bottom:14px"}, retro, triangles),
+    problem, go),
+    el("div", {class: "row"}, deleteButton(job)));
+  position.textContent = `Photo 1 of ${photos.length}`;
+  load();
+}
+
+async function resultScreen(job) {
+  const id = job.scan_id;
+  let artifacts = [];
+  try { artifacts = await api(`/scans/${id}/artifacts`); } catch (error) {
+    if (!atScan(id)) return;
+    // Only an unreachable or failing backend is worth retrying. A refusal is
+    // final, so fall through and show the result with no files and Delete.
+    if (!error.status || error.status >= 500) {
+      return show(`donewait:${id}`, el("div", {class: "card"}, el("h2", {}, "Loading the model"),
+        el("p", {class: "muted"}, error.message)));
+    }
+  }
+  if (!atScan(id)) return;
+  const byName = Object.fromEntries(artifacts.map((item) => [item.name, item]));
+  const size = (bytes) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(0)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  const links = DOWNLOADS.filter(([name]) => byName[name]).map(([name, label, note], order) => {
+    const item = byName[name];
+    const path = item.relative_path.split("/").map(encodeURIComponent).join("/");
+    return el("a", {class: `button ${order === 0 ? "primary" : ""}`, href: `/scans/${id}/files/${path}`, download: item.filename},
+      label, el("small", {}, `${note} · ${size(item.byte_count)}`));
+  });
+  const blender = Boolean(byName.model_blend);
+  const library = job.outputs && job.outputs.library_dir;
+  show(`done:${id}`, el("div", {class: "card result"},
+    el("h2", {}, blender ? "Your model is ready" : "Reconstruction finished"),
+    blender ? el("img", {src: `/scans/${id}/thumbnail?max_size=768`, alt: "Preview of the finished 3D model"}) : null,
+    blender && !/could not/.test(job.message || "") ? null : el("p", {class: "error"}, job.message || ""),
+    links.length ? el("div", {class: "downloads"}, links) : el("p", {class: "muted"}, "No downloadable files were published."),
+    library ? el("p", {class: "muted small"}, "Also saved on the computer in ", el("code", {}, library)) : null,
+    el("p", {class: "muted small"}, `${when(job)}${job.image_count ? ` · ${job.image_count} photos` : ""}`)),
+    el("div", {class: "row"}, deleteButton(job)));
+}
+
+function failedScreen(job) {
+  show(`fail:${job.scan_id}`, el("div", {class: "card"},
+    el("h2", {}, "This scan did not finish"),
+    el("p", {class: "error"}, job.message || "The computer did not say why."),
+    el("p", {class: "muted small"}, "Nothing was lost on the phone. You can upload the same scan again.")),
+    el("div", {class: "row"}, el("a", {class: "button", href: "#/"}, "All scans"), deleteButton(job)));
+}
+
+function deleteButton(job) {
+  const button = el("button", {class: "danger", onclick: async () => {
+    const kept = job.outputs && job.outputs.library_dir ? " The copy in the model folder is kept." : "";
+    if (!confirm(`Delete this scan from the computer?${kept}`)) return;
+    button.disabled = true;
+    try {
+      await api(`/scans/${job.scan_id}`, {method: "DELETE"});
+      location.hash = "#/";
+    } catch (error) {
+      button.disabled = false;
+      alert(error.message);
+    }
+  }}, "Delete scan");
+  return button;
+}
+
+function route() {
+  const match = /^#\/scan\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(location.hash);
+  shown = null;
+  homeKey = null;
+  if (match) return scan(match[1]);
+  if (!atHome()) return location.replace("#/");
+  home();
+}
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

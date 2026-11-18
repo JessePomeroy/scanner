@@ -1,5 +1,9 @@
 # Roadmap
 
+> **Historical.** This is the July-September feature roadmap. The current
+> direction is narrower: see the [README](../README.md). Planners and engines
+> it mentions now live in `experiments/`.
+
 This roadmap is ordered around the current goal: produce useful Blender assets
 from iPhone scans, with Mac validation and native Linux GPU reconstruction on a
 dual-boot RTX 3070 PC.
@@ -140,7 +144,7 @@ dual-boot RTX 3070 PC.
 ## Scene Scope and Cleanup
 
 The research comparison in
-[`research/reconstruction_scope_competitor_research.md`](research/reconstruction_scope_competitor_research.md)
+[`research/reconstruction_scope_competitor_research.md`](../experiments/docs/research/reconstruction_scope_competitor_research.md)
 shows that mature photogrammetry tools layer capture guidance, per-image masks,
 a post-alignment 3D reconstruction region, and reversible cleanup. The scanner
 should follow that layered approach instead of treating one fixed screen-space

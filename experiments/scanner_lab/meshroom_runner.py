@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.reconstruction_plan import CommandPlan
+from scanner_lab.reconstruction_plan import CommandPlan
 
 
 @dataclass(frozen=True)

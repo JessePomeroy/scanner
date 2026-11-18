@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from contextlib import ExitStack
 import errno
 import io
+import json
 import mimetypes
 import os
 from pathlib import Path
@@ -199,6 +200,18 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         ("textured_bundle", Path("dense/textured_mesh.zip")),
         ("texture_quality", Path("dense/texture_quality.json")),
         ("colmap_intake", Path("metadata/colmap_intake.json")),
+        ("openmvs_dense_point_cloud", Path("dense/scene_dense.ply")),
+        ("model_blend", Path("exports/model/model.blend")),
+        ("model_glb", Path("exports/model/model.glb")),
+        ("model_preview", Path("exports/model/preview.png")),
+        ("model_verification", Path("exports/model/verification.json")),
+        ("model_export_report", Path("exports/model/export.json")),
+        ("retro_blend", Path("exports/retro/retro.blend")),
+        ("retro_glb", Path("exports/retro/retro.glb")),
+        ("retro_bundle", Path("exports/retro/retro-obj.zip")),
+        ("retro_report", Path("exports/retro/retro-report.json")),
+        ("retro_verification", Path("exports/retro/verification.json")),
+        ("retro_export_report", Path("exports/retro/export.json")),
     ]
     dense_cloud = Path("dense/fused.ply")
     sparse_cloud = Path("sparse/sparse_points.ply")
@@ -212,7 +225,14 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         break
 
     outputs: dict[str, str] = {}
+    # Files left by an export that failed its reopening check are not results.
+    verified = {
+        prefix: _export_succeeded(lexical_root, resolved_root, Path(f"exports/{folder}/export.json"))
+        for prefix, folder in (("model_", "model"), ("retro_", "retro"))
+    }
     for name, relative in candidates:
+        if any(name.startswith(prefix) and not passed for prefix, passed in verified.items()):
+            continue
         try:
             descriptor, _ = _open_owned_regular_file(
                 lexical_root,
@@ -224,6 +244,21 @@ def discover_standard_output_paths(scan_root: Path) -> dict[str, str]:
         os.close(descriptor)
         outputs[name] = str(resolved_root / relative)
     return outputs
+
+
+def _export_succeeded(lexical_root: Path, resolved_root: Path, relative: Path) -> bool:
+    try:
+        descriptor, info = _open_owned_regular_file(lexical_root, resolved_root, relative)
+    except (ArtifactUnavailableError, UnsafeArtifactPathError):
+        return False
+    with os.fdopen(descriptor, "rb") as stream:
+        if info.st_size > 1024 * 1024:
+            return False
+        try:
+            state = json.loads(stream.read())
+        except (UnicodeError, json.JSONDecodeError):
+            return False
+    return isinstance(state, dict) and state.get("state") == "succeeded"
 
 
 def bundle_textured_mesh(

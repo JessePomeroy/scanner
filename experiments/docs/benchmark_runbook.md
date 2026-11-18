@@ -3,7 +3,7 @@
 Status: CachyOS/RTX toolchain verified and mesh feasibility recovered; the
 formal paired benchmark is incomplete.
 
-Prepare the workstation with [`cachyos_setup.md`](cachyos_setup.md). The base
+Prepare the workstation with [`cachyos_setup.md`](../../docs/cachyos_setup.md). The base
 package script is not the entry gate: the pinned COLMAP/OpenMVS and isolated
 Nerfstudio/gsplat toolchains must also be installed before this run begins.
 
@@ -139,7 +139,7 @@ SCAN=~/ScannerBenchmarks/input/scan_2026_07_15_00_41_09.zip
 RUN=~/ScannerBenchmarks/run-001
 mkdir -p "$RUN"/{logs,plans,mesh,gaussian,blender,comparison}
 
-python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" init \
+python3 "$SCANNER_REPO/experiments/scripts/benchmark_evidence.py" init \
   --scan "$SCAN" \
   --expected-sha256 ef9a6e0aefa564facf17357252e7fa2bd2cec55882a107461abad5c6459cb779 \
   --scanner-baseline-commit d5f19d9 \
@@ -198,7 +198,7 @@ OpenMVS commands are replayed stage by stage, launch each one from that scan's
 Preview the new path with the current evidence-tool checkout:
 
 ```bash
-python3 "$SCANNER_REPO/scripts/plan_reconstruction_backend.py" "$SCAN" \
+python3 "$SCANNER_REPO/experiments/scripts/plan_reconstruction_backend.py" "$SCAN" \
   --backend colmap_openmvs \
   --matcher sequential_matcher \
   --openmvs-point-cloud-source colmap_fused \
@@ -230,7 +230,7 @@ Wrap each real command from the plans separately so failures and timings remain
 visible:
 
 ```bash
-python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" run \
+python3 "$SCANNER_REPO/experiments/scripts/benchmark_evidence.py" run \
   --report "$RUN/evidence.json" \
   --stage mesh_colmap_feature_extractor \
   --log "$RUN/logs/mesh_colmap_feature_extractor.log" \
@@ -303,7 +303,7 @@ Gaussian path must end with:
 Finalize evidence and hash artifacts:
 
 ```bash
-python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" finalize \
+python3 "$SCANNER_REPO/experiments/scripts/benchmark_evidence.py" finalize \
   --report "$RUN/evidence.json" \
   --artifact mesh_glb="$RUN/blender/scene.glb" \
   --artifact mesh_blend="$RUN/blender/scene.blend" \
@@ -325,7 +325,7 @@ python3 "$SCANNER_REPO/scripts/benchmark_evidence.py" finalize \
 
 ## Blender Review
 
-Use `docs/benchmark_comparison_template.md`. Each result receives at most 15
+Use `experiments/docs/benchmark_comparison_template.md`. Each result receives at most 15
 minutes of crop/orientation/scale/material or viewer setup. Save comparable
 stills or short renders for an orbit near the captured path, a low-to-high
 move, and a gentle push or pull. Do not remodel, retopologize, repair holes, or

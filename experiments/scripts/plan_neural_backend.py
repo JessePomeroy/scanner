@@ -8,10 +8,11 @@ from pathlib import Path
 import shlex
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "experiments"))
 
-from app.neural_backend_planner import (  # noqa: E402
+from scanner_lab.neural_backend_planner import (  # noqa: E402
     DEFAULT_SPLAT_DELIVERY_FORMATS,
     NeuralBackendConfig,
     SUPPORTED_NEURAL_BACKENDS,

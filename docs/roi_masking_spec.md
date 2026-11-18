@@ -396,7 +396,7 @@ Backend:
   flags, filenames, and optional refinement.
 - `backend/app/colmap_runner.py`: split/retain undistortion as a resumable stage;
   add optional diagnostic COLMAP fusion rather than requiring it for OpenMVS.
-- `backend/app/reconstruction_backends.py`: include scope configuration and
+- `experiments/scanner_lab/reconstruction_backends.py`: include scope configuration and
   scoped artifacts in command plans.
 - `backend/app/main.py`: orchestrate scope preparation and granular job stages.
 - `backend/app/schemas.py` and `backend/app/jobs.py`: typed scope/progress data.
@@ -404,7 +404,7 @@ Backend:
   fallback policy, reports, and point-budget decisions.
 - New `backend/app/mask_processor.py`: validate and undistort/rename masks.
 - Later `backend/app/arkit_colmap_alignment.py`: robust similarity transform.
-- `backend/app/point_cloud_processor.py`: density profiles, count reporting,
+- `experiments/scanner_lab/point_cloud_processor.py`: density profiles, count reporting,
   color/normal preservation checks, and bounded processing.
 
 iOS:

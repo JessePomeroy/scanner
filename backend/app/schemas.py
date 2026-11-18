@@ -47,6 +47,7 @@ JobStage = Literal[
     "queued",
     "validating",
     "reconstructing",
+    "awaiting_box",
     "awaiting_masks",
     "awaiting_scope",
     "meshing",

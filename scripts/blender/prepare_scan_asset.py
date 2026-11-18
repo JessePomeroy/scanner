@@ -44,6 +44,11 @@ class BlenderAssetOptions:
     cleanup_report: Path | None = None
     obj_forward_axis: str = DEFAULT_OBJ_FORWARD_AXIS
     obj_up_axis: str = DEFAULT_OBJ_UP_AXIS
+    asset_style: str = "standard"
+    triangle_budget: int = 500
+    texture_size: int = 256
+    dither: bool = False
+    retro_report: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,11 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
     )
     parser.add_argument("--texture-dir", type=Path, default=None, help="Optional folder for relinking image textures.")
     parser.add_argument("--export-glb", type=Path, default=None, help="Optional GLB export path after saving .blend.")
+    parser.add_argument("--asset-style", choices=("standard", "retro"), default="standard")
+    parser.add_argument("--triangle-budget", type=int, choices=(500, 1000, 2000), default=500)
+    parser.add_argument("--texture-size", type=int, choices=(128, 256), default=256)
+    parser.add_argument("--dither", action="store_true", help="Apply ordered dithering to the new Retro atlas.")
+    parser.add_argument("--retro-report", type=Path, help="Required with --asset-style retro.")
     parser.add_argument(
         "--cleanup-recipe",
         type=Path,
@@ -140,6 +150,13 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         parser.error("--cleanup-recipe and --cleanup-report must be provided together")
     if _axis_dimension(parsed.obj_forward_axis) == _axis_dimension(parsed.obj_up_axis):
         parser.error("--obj-forward-axis and --obj-up-axis must use different axes")
+    if parsed.asset_style == "retro" and (
+        parsed.export_glb is None or parsed.retro_report is None
+        or parsed.decimate_ratio is not None or parsed.cleanup_recipe is not None
+    ):
+        parser.error("Retro requires --export-glb and --retro-report, without decimation or cleanup options")
+    if parsed.asset_style != "retro" and (parsed.retro_report or parsed.dither or parsed.triangle_budget != 500 or parsed.texture_size != 256):
+        parser.error("Retro settings require --asset-style retro")
 
     return BlenderAssetOptions(
         input_path=parsed.input,
@@ -154,6 +171,11 @@ def parse_blender_args(args: list[str]) -> BlenderAssetOptions:
         cleanup_report=parsed.cleanup_report,
         obj_forward_axis=parsed.obj_forward_axis,
         obj_up_axis=parsed.obj_up_axis,
+        asset_style=parsed.asset_style,
+        triangle_budget=parsed.triangle_budget,
+        texture_size=parsed.texture_size,
+        dither=parsed.dither,
+        retro_report=parsed.retro_report,
     )
 
 
@@ -187,6 +209,18 @@ def prepare_asset(options: BlenderAssetOptions) -> None:
     configure_units(bpy, options.set_units)
     apply_scale(bpy, imported_objects, options.scale)
     set_origins(bpy, imported_objects, options.origin)
+    if options.asset_style == "retro":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from retro_asset import RetroStyle, prepare_retro_asset
+
+        if options.export_glb is None or options.retro_report is None or options.decimate_ratio is not None or options.cleanup_recipe is not None:
+            raise ValueError("Retro requires separate GLB/report outputs and cannot be combined with cleanup/decimation")
+        if options.texture_dir is not None:
+            relink_textures(bpy, options.texture_dir)
+        pack_textures(bpy)
+        prepare_retro_asset(bpy, imported_objects, options.output_path, options.export_glb,
+                            options.retro_report, RetroStyle(options.triangle_budget, options.texture_size, options.dither))
+        return
     cleanup_evidence = None
     retained_objects = imported_objects
     if cleanup_recipe is not None:

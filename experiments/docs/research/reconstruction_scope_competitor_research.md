@@ -58,12 +58,12 @@ segmentation and not a 3D crop:
 
 Relevant implementation:
 
-- [`CaptureMaskEditorView.swift`](../../ios/ScannerApp/CaptureMaskEditorView.swift)
-- [`CaptureMaskCoordinateMapper.swift`](../../ios/ScannerApp/CaptureMaskCoordinateMapper.swift)
-- [`ScanCaptureManager.swift`](../../ios/ScannerApp/ScanCaptureManager.swift)
-- [`mask_undistorter.py`](../../backend/app/mask_undistorter.py)
-- [`openmvs_runner.py`](../../backend/app/openmvs_runner.py)
-- [`roi_masking_spec.md`](../roi_masking_spec.md)
+- [`CaptureMaskEditorView.swift`](../../../ios/ScannerApp/CaptureMaskEditorView.swift)
+- [`CaptureMaskCoordinateMapper.swift`](../../../ios/ScannerApp/CaptureMaskCoordinateMapper.swift)
+- [`ScanCaptureManager.swift`](../../../ios/ScannerApp/ScanCaptureManager.swift)
+- [`mask_undistorter.py`](../../../backend/app/mask_undistorter.py)
+- [`openmvs_runner.py`](../../../backend/app/openmvs_runner.py)
+- [`roi_masking_spec.md`](../../../docs/roi_masking_spec.md)
 
 ## What other tools do
 
@@ -290,7 +290,7 @@ Upgrade the single fixed polygon into a proposal workflow:
   last frames before submission.
 
 This matches the direction already described in
-[`roi_masking_spec.md`](../roi_masking_spec.md) and addresses the OpenMVS
+[`roi_masking_spec.md`](../../../docs/roi_masking_spec.md) and addresses the OpenMVS
 maintainer's false-negative warning.
 
 ### 4. Layer 2D masks and 3D scope rather than choosing one
