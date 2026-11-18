@@ -1,0 +1,13 @@
+[Unit]
+Description=Scanner desktop notifications for finished models
+After=scanner-backend.service
+
+[Service]
+Type=simple
+Environment=SCANNER_SCANS_DIR=@REPO@/backend/scans
+ExecStart=/usr/bin/python3 @REPO@/scripts/notify_reconstruction_jobs.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
