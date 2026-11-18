@@ -18,6 +18,7 @@ from app.mask_authoring import load_mask_authoring_plan, single_box_selection
 from app.mask_generator import MaskGenerationError, generate_mask_proposals
 from app.mask_processor import stage_openmvs_texture_masks
 from app.mask_review import accept_automatic_masks
+from app.model_delivery import export_blender_model, export_camera_view
 from app.mask_undistorter import convert_capture_mask_set
 from app.openmvs_runner import (
     OpenMVSConfig, build_openmvs_commands, inspect_openmvs_dense_cloud, validate_openmvs_config_masks,
@@ -58,6 +59,7 @@ OBJECT_STEPS = (
     "Building 3D points",
     "Building the surface",
     "Adding color",
+    "Making Blender files",
 )
 _PHASE_STEPS = {
     "features": 2, "matching": 3, "mapping": 4, "undistortion": 5, "mask-camera-export": 5,
@@ -97,7 +99,7 @@ def reconstruct_object(
     plan = load_mask_authoring_plan(root / "metadata", metadata.frames)
     if plan is None:
         raise ValueError("Automatic object processing requires a single_box selection")
-    single_box_selection(plan)
+    seed_frame, _ = single_box_selection(plan)
     for path in (root / "database.db", root / "sparse", root / "dense", root / "object_logs"):
         if path.exists() or path.is_symlink():
             raise ValueError("Automatic object processing requires a fresh reconstruction workspace")
@@ -198,6 +200,30 @@ def reconstruct_object(
     outputs.update(textured_mesh=str(mesh), openmvs_dense_point_cloud=str(root/"dense/scene_dense.ply"),
                    colmap_intake=str(root/"metadata/colmap_intake.json"),
                    processing_report=str(root/"metadata/processing.json"))
+    # The textured OBJ is already a usable result, so a problem making the
+    # Blender files is recorded and reported without discarding it.
+    notify(step_message(9))
+    delivery_started = perf_counter()
+    try:
+        view = export_camera_view(
+            colmap.executable, root / "sparse/0", root / "exports/preview-cameras",
+            Path(seed_frame.image).name,
+        )
+        outputs.update(export_blender_model(
+            mesh, root / "exports/model", view=view,
+            timeout_seconds=min(600, max(1, deadline - perf_counter())),
+        ))
+        package.record_processing_step("model_delivery", {
+            "state": "succeeded", "report": "exports/model/export.json",
+            "preview_view": "capture_photo" if view is not None else "default",
+            "elapsed_seconds": perf_counter() - delivery_started,
+            "original_reconstruction_preserved": True,
+        })
+    except Exception as error:
+        package.record_processing_step("model_delivery", {
+            "state": "failed", "error": str(error),
+            "elapsed_seconds": perf_counter() - delivery_started,
+        })
     if retro_style is not None:
         outputs.update(export_retro_asset(
             mesh, root / "exports/retro", retro_style,

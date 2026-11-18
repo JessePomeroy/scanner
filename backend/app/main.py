@@ -97,6 +97,7 @@ from app.object_box import (
     parse_object_box_request,
     publish_object_box_checkpoint,
 )
+from app.model_library import publish_to_library
 from app.object_pipeline import ObjectPresetName, reconstruct_object
 from app.mask_authoring import load_mask_authoring_plan, single_box_selection
 from app.scan_package import PreparedScanPackage
@@ -138,6 +139,11 @@ jobs = JobStore(JOBS_DIR)
 OBJECT_UPLOAD_POLICY = os.environ.get("SCANNER_OBJECT_UPLOADS", "").strip().lower()
 if OBJECT_UPLOAD_POLICY not in ("", "one_box"):
     raise RuntimeError("SCANNER_OBJECT_UPLOADS must be unset or 'one_box'")
+# Finished models are also copied here, one folder per scan. Unset: no copy.
+LIBRARY_DIR = (
+    Path(os.environ["SCANNER_LIBRARY_DIR"]).expanduser()
+    if os.environ.get("SCANNER_LIBRARY_DIR") else None
+)
 ADMISSION_POLL_SECONDS = 5.0
 ADMISSION_WAIT_SECONDS = 12 * 60 * 60
 
@@ -796,7 +802,7 @@ def _run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
             ),
         )
         _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,
-                                 report.image_count, report.frame_count)
+                                 report.image_count, report.frame_count, object_job=True)
     except Exception as error:
         record_processing_failure(scan_id, processing_dir, error)
 
@@ -1087,7 +1093,7 @@ def _process_scan(
 
 def _complete_reconstruction(
     scan_id: str, processing_dir: Path, scan_root: Path, outputs: dict[str, str],
-    image_count: int, frame_count: int,
+    image_count: int, frame_count: int, *, object_job: bool = False,
 ) -> None:
     jobs.update(scan_id, status="processing", stage="exporting", message="Packaging reconstruction outputs for download.")
     publish_delivery_outputs(scan_root, outputs)
@@ -1096,7 +1102,21 @@ def _complete_reconstruction(
     completed = move_to_completed(scan_id, processing_dir)
     completed_root = find_scan_root(completed)
     rebased.update(package_dir=str(completed), scan_report=str(completed_root/"metadata/scan_report.json"))
-    jobs.update(scan_id, status="complete", message="Reconstruction completed.",
+    message = "Reconstruction completed."
+    if object_job:
+        message = (
+            "Model ready." if "model_blend" in rebased else
+            "Reconstruction completed, but the Blender files could not be made. "
+            "The OBJ bundle is available."
+        )
+        if LIBRARY_DIR is not None:
+            try:
+                folder = publish_to_library(LIBRARY_DIR, completed_root.name, rebased)
+                rebased["library_dir"] = str(folder)
+                message += f" Saved to {folder}."
+            except Exception as error:
+                message += f" It could not be copied to the model library: {error}"
+    jobs.update(scan_id, status="complete", message=message,
                 image_count=image_count, frame_count=frame_count, outputs=rebased)
 
 
