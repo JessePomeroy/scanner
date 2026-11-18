@@ -146,6 +146,46 @@ struct VerifyScanUploadClient {
             maskProfile: .objectForeground
         )
 
+        let objectBoxTransport = StubScanUploadTransport { request, _ in
+            let queryItems = URLComponents(
+                url: request.url!,
+                resolvingAgainstBaseURL: false
+            )?.queryItems ?? []
+            try require(
+                queryItems.map(\.name) == ["run_reconstruction", "object_preset"],
+                "Expected the one-box flow to send only its two options"
+            )
+            try require(
+                queryItems.first(where: { $0.name == "object_preset" })?.value == "preview",
+                "Expected the one-box flow to request the fast preset"
+            )
+            return (
+                successPayload,
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+            )
+        }
+        _ = try await HTTPScanUploadClient(transport: objectBoxTransport).uploadScan(
+            archiveURL: archiveURL,
+            baseURL: URL(string: "http://127.0.0.1:8000/api")!,
+            flow: .objectBox
+        )
+        try require(
+            ReconstructionBackendEndpoint.pageURL(
+                baseURL: URL(string: "http://192.168.1.10:8000")!,
+                scanID: "abc"
+            )?.absoluteString == "http://192.168.1.10:8000/#/scan/abc",
+            "Expected the scan page link at the backend root"
+        )
+        try require(
+            ReconstructionBackendEndpoint.pageURL(baseURL: URL(string: "http://example.com")!) == nil,
+            "Expected no page link for a backend the app refuses to contact"
+        )
+
         do {
             _ = try await client.uploadScan(
                 archiveURL: archiveURL,
@@ -300,6 +340,19 @@ struct VerifyScanUploadClient {
             store.notice?.message.contains("Check the Jobs tab") == true,
             "Expected processing-history handoff"
         )
+
+        let boxStore = ScanUploadStore(client: memoryClient)
+        await boxStore.upload(
+            archiveURL: archiveURL,
+            baseURLString: "https://example.com",
+            flow: .objectBox
+        )
+        try require(boxStore.notice?.kind == .success, "Expected one-box success notice")
+        try require(
+            boxStore.notice?.pageURL?.absoluteString == "https://example.com/#/scan/uploaded-job",
+            "Expected the one-box notice to link to the box page"
+        )
+        try require(store.notice?.pageURL == nil, "Expected no page link for the review flow")
 
         let failedJob = try JSONDecoder().decode(
             ReconstructionJob.self,

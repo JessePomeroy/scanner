@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ScanGalleryView: View {
     @AppStorage("scanner.backendBaseURL") private var backendURLString = "http://localhost:8000"
+    @AppStorage("scanner.showAdvancedControls") private var showAdvancedControls = false
+    @Environment(\.openURL) private var openURL
     @StateObject private var gallery = ScanGalleryStore()
     @StateObject private var uploadStore: ScanUploadStore
     @State private var shareURL: URL?
@@ -54,14 +56,16 @@ struct ScanGalleryView: View {
 
                                     Spacer(minLength: 0)
 
-                                    Button {
-                                        maskEditorURL = scan.url
-                                    } label: {
-                                        Image(systemName: "paintbrush.pointed")
+                                    if showAdvancedControls {
+                                        Button {
+                                            maskEditorURL = scan.url
+                                        } label: {
+                                            Image(systemName: "paintbrush.pointed")
+                                        }
+                                        .disabled(!scan.hasEditableFolder || uploadStore.isUploading)
+                                        .buttonStyle(.borderless)
+                                        .accessibilityLabel("Edit scene mask draft for \(scan.displayName)")
                                     }
-                                    .disabled(!scan.hasEditableFolder || uploadStore.isUploading)
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel("Edit scene mask draft for \(scan.displayName)")
 
                                     if uploadStore.isUploading(scan.url) {
                                         ProgressView()
@@ -73,7 +77,7 @@ struct ScanGalleryView: View {
                                                 await uploadStore.upload(
                                                     archiveURL: scan.url,
                                                     baseURLString: backendURLString,
-                                                    maskProfile: scan.maskProfile
+                                                    flow: scan.uploadFlow
                                                 )
                                             }
                                         } label: {
@@ -179,6 +183,12 @@ struct ScanGalleryView: View {
                     }
                 )
             ) {
+                if let pageURL = uploadStore.notice?.pageURL {
+                    Button("Draw the Box") {
+                        openURL(pageURL)
+                        uploadStore.clearNotice()
+                    }
+                }
                 Button("OK", role: .cancel) {
                     uploadStore.clearNotice()
                 }
@@ -225,6 +235,11 @@ struct ScanGalleryItem: Identifiable, Equatable {
 
     var maskProfile: ReconstructionMaskProfile {
         metadata.usesForegroundAlignment ? .objectForeground : .sceneGeometry
+    }
+
+    /// Object scans use the one-box flow; everything else keeps the review flow.
+    var uploadFlow: ScanUploadFlow {
+        metadata.captureMode == .object ? .objectBox : .review(maskProfile)
     }
 
     var detailText: String {

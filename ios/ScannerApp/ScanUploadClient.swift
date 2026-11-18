@@ -12,20 +12,59 @@ enum ReconstructionMaskProfile: String, Equatable, Sendable {
     }
 }
 
+/// How the workstation should process an uploaded scan.
+enum ScanUploadFlow: Equatable, Sendable {
+    /// The workstation pauses for one box around the object, then builds the model.
+    case objectBox
+    /// The earlier flow with mask and 3D-region review steps.
+    case review(ReconstructionMaskProfile)
+
+    var queryItems: [URLQueryItem] {
+        switch self {
+        case .objectBox:
+            return [
+                URLQueryItem(name: "run_reconstruction", value: "true"),
+                URLQueryItem(name: "object_preset", value: "preview"),
+            ]
+        case .review(let maskProfile):
+            return [
+                URLQueryItem(name: "run_reconstruction", value: "true"),
+                URLQueryItem(name: "run_dense", value: "true"),
+                URLQueryItem(name: "run_openmvs", value: "true"),
+                URLQueryItem(name: "scope_mode", value: "auto_roi"),
+                URLQueryItem(name: "mask_profile", value: maskProfile.rawValue),
+                URLQueryItem(name: "review_scope", value: "true"),
+            ]
+        }
+    }
+}
+
 protocol ScanUploading {
     func uploadScan(
         archiveURL: URL,
         baseURL: URL,
-        maskProfile: ReconstructionMaskProfile
+        flow: ScanUploadFlow
     ) async throws -> ReconstructionJob
 }
 
 extension ScanUploading {
+    func uploadScan(
+        archiveURL: URL,
+        baseURL: URL,
+        maskProfile: ReconstructionMaskProfile
+    ) async throws -> ReconstructionJob {
+        try await uploadScan(
+            archiveURL: archiveURL,
+            baseURL: baseURL,
+            flow: .review(maskProfile)
+        )
+    }
+
     func uploadScan(archiveURL: URL, baseURL: URL) async throws -> ReconstructionJob {
         try await uploadScan(
             archiveURL: archiveURL,
             baseURL: baseURL,
-            maskProfile: .sceneGeometry
+            flow: .review(.sceneGeometry)
         )
     }
 }
@@ -110,7 +149,7 @@ struct HTTPScanUploadClient: ScanUploading {
     func uploadScan(
         archiveURL: URL,
         baseURL: URL,
-        maskProfile: ReconstructionMaskProfile
+        flow: ScanUploadFlow
     ) async throws -> ReconstructionJob {
         try Self.validateArchive(archiveURL)
         let scansEndpoint = try ReconstructionBackendEndpoint.scansURL(baseURL: baseURL)
@@ -120,14 +159,7 @@ struct HTTPScanUploadClient: ScanUploading {
         ) else {
             throw ReconstructionJobClientError.invalidBaseURL
         }
-        endpointComponents.queryItems = [
-            URLQueryItem(name: "run_reconstruction", value: "true"),
-            URLQueryItem(name: "run_dense", value: "true"),
-            URLQueryItem(name: "run_openmvs", value: "true"),
-            URLQueryItem(name: "scope_mode", value: "auto_roi"),
-            URLQueryItem(name: "mask_profile", value: maskProfile.rawValue),
-            URLQueryItem(name: "review_scope", value: "true"),
-        ]
+        endpointComponents.queryItems = flow.queryItems
         guard let endpoint = endpointComponents.url else {
             throw ReconstructionJobClientError.invalidBaseURL
         }
@@ -218,7 +250,7 @@ struct InMemoryScanUploadClient: ScanUploading {
     func uploadScan(
         archiveURL: URL,
         baseURL: URL,
-        maskProfile: ReconstructionMaskProfile
+        flow: ScanUploadFlow
     ) async throws -> ReconstructionJob {
         try await handler(archiveURL, baseURL)
     }
