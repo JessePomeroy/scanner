@@ -28,6 +28,7 @@ _ACTIVE_STAGES: set[JobStage] = {
     "queued",
     "validating",
     "reconstructing",
+    "awaiting_box",
     "awaiting_masks",
     "awaiting_scope",
     "meshing",
@@ -36,10 +37,11 @@ _ACTIVE_STAGES: set[JobStage] = {
 _ALLOWED_STAGE_TRANSITIONS: dict[JobStage, set[JobStage]] = {
     "received": {"queued", "validating"},
     "queued": {"queued", "validating"},
-    "validating": {"validating", "reconstructing", "awaiting_masks"},
+    "validating": {"validating", "reconstructing", "awaiting_masks", "awaiting_box"},
     "reconstructing": {
         "reconstructing", "awaiting_masks", "awaiting_scope", "meshing", "exporting"
     },
+    "awaiting_box": {"awaiting_box", "reconstructing"},
     "awaiting_masks": {"awaiting_masks", "reconstructing"},
     "awaiting_scope": {"awaiting_scope", "reconstructing", "meshing", "exporting"},
     "meshing": {"meshing", "exporting"},

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 import os
 import shutil
 from typing import Annotated, BinaryIO, Iterator, Literal
 from urllib.parse import quote
 import uuid
-from time import perf_counter
+from time import monotonic, perf_counter, sleep
 
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -27,7 +29,13 @@ from app.artifacts import (
 from app.colmap_runner import ColmapConfig, run_colmap_dense_pipeline, run_colmap_pipeline
 from app.density_budget import inspect_ply_point_budget
 from app.job_recovery import reconcile_interrupted_jobs
-from app.heavy_work import HeavyWorkBusy, Reservation, heavy_work, reserve_heavy_work
+from app.heavy_work import (
+    HeavyWorkBusy,
+    HeavyWorkUnavailable,
+    Reservation,
+    heavy_work,
+    reserve_heavy_work,
+)
 from app.jobs import InvalidScanIDError, JobClaimError, JobStore
 from app.mask_undistorter import convert_capture_mask_set
 from app.mask_generator import MaskGenerationError, generate_mask_proposals
@@ -76,7 +84,18 @@ from app.schemas import JobRecord, ScanArtifact
 from app.sparse_review import load_sparse_review_checkpoint, publish_sparse_review_checkpoint
 from app.storage import safe_extract_zip
 from app.upload_lifecycle import store_job_upload
+from app.object_box import (
+    ObjectBoxError,
+    ObjectBoxOptions,
+    apply_object_box,
+    frame_for_box,
+    load_object_box_checkpoint,
+    needs_object_box,
+    parse_object_box_request,
+    publish_object_box_checkpoint,
+)
 from app.object_pipeline import ObjectPresetName, reconstruct_object
+from app.scan_package import PreparedScanPackage
 from app.retro_style import RetroStyle, TRIANGLE_BUDGETS
 
 
@@ -104,6 +123,14 @@ for directory in [INCOMING_DIR, PROCESSING_DIR, COMPLETED_DIR, FAILED_DIR, JOBS_
     directory.mkdir(parents=True, exist_ok=True)
 
 jobs = JobStore(JOBS_DIR)
+
+# "one_box" sends every Object upload through the one-box flow, including
+# uploads from phone builds that still request the older review steps.
+OBJECT_UPLOAD_POLICY = os.environ.get("SCANNER_OBJECT_UPLOADS", "").strip().lower()
+if OBJECT_UPLOAD_POLICY not in ("", "one_box"):
+    raise RuntimeError("SCANNER_OBJECT_UPLOADS must be unset or 'one_box'")
+ADMISSION_POLL_SECONDS = 5.0
+ADMISSION_WAIT_SECONDS = 12 * 60 * 60
 
 
 @app.get("/health")
@@ -420,6 +447,104 @@ def resume_scan_job(scan_id: str, background_tasks: BackgroundTasks) -> JobRecor
     return claimed
 
 
+@app.post("/scans/{scan_id}/object-box", response_model=JobRecord)
+def start_object_from_box(
+    scan_id: str,
+    background_tasks: BackgroundTasks,
+    payload: dict[str, object] = Body(...),
+) -> JobRecord:
+    """Accept one box on one photo and start the paused Object job."""
+    record = get_scan_status(scan_id)
+    if record.status != "processing" or record.stage != "awaiting_box":
+        raise HTTPException(status_code=409, detail="The scan is not waiting for an object box.")
+    scan_root = _active_scan_root(scan_id)
+    try:
+        defaults = load_object_box_checkpoint(scan_root)
+    except ObjectBoxError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    try:
+        request = parse_object_box_request(payload, defaults)
+        frame_for_box(scan_root, request.frame_id)
+    except ObjectBoxError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        claimed = jobs.claim(
+            scan_id,
+            expected_status="processing",
+            expected_stage="awaiting_box",
+            status="processing",
+            stage="reconstructing",
+            message="Box saved. Starting.",
+        )
+    except JobClaimError as error:
+        raise HTTPException(status_code=409, detail="This scan has already started.") from error
+    try:
+        applied = apply_object_box(scan_root, request.frame_id, request.box)
+        validate_and_report_scan(scan_root).record_processing_step("object_box", applied)
+    except Exception as error:
+        record_processing_failure(scan_id, PROCESSING_DIR / scan_id, error)
+        raise HTTPException(
+            status_code=500, detail="The box could not be applied to this scan."
+        ) from error
+    background_tasks.add_task(run_object_job, scan_id, request.options)
+    return claimed
+
+
+@app.get("/scans/{scan_id}/photos")
+def list_scan_photos(scan_id: str) -> dict[str, object]:
+    """List the photos a client can offer for drawing the object box."""
+    scan_root = _stored_scan_root(scan_id, get_scan_status(scan_id))
+    try:
+        frames = load_scan_metadata(scan_root / "metadata").frames
+    except Exception as error:
+        raise HTTPException(status_code=409, detail="The scan photos are unavailable.") from error
+    return {
+        "photos": [
+            {"frame_id": frame.id, "width": frame.resolution[0], "height": frame.resolution[1]}
+            for frame in frames
+        ]
+    }
+
+
+@app.get("/scans/{scan_id}/photos/{frame_id}")
+def get_scan_photo(
+    scan_id: str,
+    frame_id: int,
+    max_size: int = Query(1280, ge=64, le=2048),
+) -> Response:
+    """Serve a reduced copy of one saved photo; box coordinates stay normalized."""
+    from PIL import Image
+
+    scan_root = _stored_scan_root(scan_id, get_scan_status(scan_id))
+    try:
+        frame = frame_for_box(scan_root, frame_id)
+    except ObjectBoxError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=409, detail="The scan photos are unavailable.") from error
+    images_dir = scan_root / "images"
+    path = scan_root / frame.image
+    if (
+        path.parent != images_dir or images_dir.is_symlink()
+        or path.is_symlink() or not path.is_file()
+    ):
+        raise HTTPException(status_code=404, detail="That photo is unavailable.")
+    try:
+        with Image.open(path) as image:
+            image.draft("RGB", (max_size, max_size))
+            reduced = image.convert("RGB")
+            reduced.thumbnail((max_size, max_size))
+            buffer = BytesIO()
+            reduced.save(buffer, "JPEG", quality=85)
+    except Exception as error:
+        raise HTTPException(status_code=409, detail="That photo could not be read.") from error
+    return Response(
+        buffer.getvalue(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 @app.get("/scans/{scan_id}/artifacts", response_model=list[ScanArtifact])
 def list_scan_artifacts(scan_id: str) -> list[ScanArtifact]:
     record = get_scan_status(scan_id)
@@ -497,13 +622,133 @@ def process_scan(
     export_style: Literal["standard", "retro"] = "standard",
     retro_triangles: int = 500,
 ) -> None:
+    prepared: PreparedUpload | None = None
+    if object_preset is not None or OBJECT_UPLOAD_POLICY == "one_box":
+        # Unpacking and checking a package is light work. Doing it before
+        # admission lets a new upload wait for its box while another job runs.
+        prepared = _prepare_upload(scan_id, incoming_zip)
+        if prepared is None:
+            return
+        if object_preset is None and prepared.package.validation.scan_mode == "object_scan":
+            object_preset = "preview"
+        if object_preset is not None:
+            _stage_object_job(
+                scan_id, prepared, ObjectBoxOptions(object_preset, export_style, retro_triangles)
+            )
+            return
     try:
         with heavy_work(f"API reconstruction {scan_id}"):
             _process_scan(scan_id, incoming_zip, run_dense, run_openmvs,
-                          scope_mode, use_masks, review_scope, mask_profile, object_preset,
-                          export_style=export_style, retro_triangles=retro_triangles)
+                          scope_mode, use_masks, review_scope, mask_profile, prepared=prepared)
     except HeavyWorkBusy as error:
-        record_processing_failure(scan_id, None, error)
+        record_processing_failure(
+            scan_id, prepared.processing_dir if prepared is not None else None, error
+        )
+
+
+@dataclass(frozen=True)
+class PreparedUpload:
+    processing_dir: Path
+    scan_root: Path
+    package: PreparedScanPackage
+
+
+def _prepare_upload(scan_id: str, incoming_zip: Path) -> PreparedUpload | None:
+    """Unpack and validate an upload; a failure is recorded and returns None."""
+    processing_dir: Path | None = None
+    try:
+        jobs.update(
+            scan_id,
+            status="processing",
+            stage="validating",
+            message="Validating scan package.",
+        )
+        processing_dir = prepare_processing_dir(scan_id, incoming_zip)
+        scan_root = find_scan_root(processing_dir)
+        return PreparedUpload(processing_dir, scan_root, validate_and_report_scan(scan_root))
+    except Exception as error:
+        record_processing_failure(scan_id, processing_dir, error)
+        return None
+
+
+def _stage_object_job(scan_id: str, prepared: PreparedUpload, options: ObjectBoxOptions) -> None:
+    """Start at once when the package carries its box; otherwise pause for one."""
+    report = prepared.package.validation
+    try:
+        if report.scan_mode != "object_scan":
+            raise ValueError(
+                "The one-box flow needs an Object scan; this capture was saved in Scene mode."
+            )
+        if needs_object_box(prepared.scan_root):
+            publish_object_box_checkpoint(prepared.scan_root, options)
+            jobs.update(
+                scan_id,
+                status="processing",
+                stage="awaiting_box",
+                message="Draw one box around the object to start.",
+                image_count=report.image_count,
+                frame_count=report.frame_count,
+                outputs={
+                    "package_dir": str(prepared.processing_dir),
+                    "scan_report": str(prepared.package.report_path),
+                },
+            )
+            return
+    except Exception as error:
+        record_processing_failure(scan_id, prepared.processing_dir, error)
+        return
+    run_object_job(scan_id, options)
+
+
+def run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
+    """Wait for the shared admission, then reconstruct. One heavy job runs at a time."""
+    deadline = monotonic() + ADMISSION_WAIT_SECONDS
+    announced = False
+    while True:
+        try:
+            reservation = reserve_heavy_work(f"API object reconstruction {scan_id}")
+            break
+        except HeavyWorkUnavailable as error:
+            record_processing_failure(scan_id, PROCESSING_DIR / scan_id, error)
+            return
+        except HeavyWorkBusy as error:
+            if monotonic() >= deadline:
+                record_processing_failure(scan_id, PROCESSING_DIR / scan_id, error)
+                return
+            if not announced:
+                reason = str(error).replace(" Wait for it to finish, then retry manually.", "")
+                jobs.update(
+                    scan_id,
+                    status="processing",
+                    stage="reconstructing",
+                    message=f"Waiting to start automatically. {reason}",
+                )
+                announced = True
+            sleep(ADMISSION_POLL_SECONDS)
+    reservation.run(_run_object_job, scan_id, options)
+
+
+def _run_object_job(scan_id: str, options: ObjectBoxOptions) -> None:
+    processing_dir = PROCESSING_DIR / scan_id
+    try:
+        scan_root = find_scan_root(processing_dir)
+        package = validate_and_report_scan(scan_root)
+        report = package.validation
+        jobs.update(scan_id, status="processing", stage="reconstructing",
+                    message="Starting automatic object reconstruction.")
+        outputs = reconstruct_object(
+            package, options.preset,
+            retro_style=(
+                RetroStyle(options.retro_triangles) if options.export_style == "retro" else None
+            ),
+            progress=lambda message: jobs.update(
+                scan_id, status="processing", stage="reconstructing", message=message,
+            ),
+        )
+        _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,
+                                 report.image_count, report.frame_count)
+    except Exception as error:
+        record_processing_failure(scan_id, processing_dir, error)
 
 
 def _process_scan(
@@ -515,34 +760,24 @@ def _process_scan(
     use_masks: bool = False,
     review_scope: bool = False,
     mask_profile: MaskProfileName = "scene_geometry",
-    object_preset: ObjectPresetName | None = None,
     *,
-    export_style: Literal["standard", "retro"] = "standard",
-    retro_triangles: int = 500,
+    prepared: PreparedUpload | None = None,
 ) -> None:
-    processing_dir: Path | None = None
+    processing_dir: Path | None = prepared.processing_dir if prepared is not None else None
     try:
-        jobs.update(
-            scan_id,
-            status="processing",
-            stage="validating",
-            message="Validating scan package.",
-        )
-        processing_dir = prepare_processing_dir(scan_id, incoming_zip)
-        scan_root = find_scan_root(processing_dir)
-        package = validate_and_report_scan(scan_root)
+        if prepared is None:
+            jobs.update(
+                scan_id,
+                status="processing",
+                stage="validating",
+                message="Validating scan package.",
+            )
+            processing_dir = prepare_processing_dir(scan_id, incoming_zip)
+            scan_root = find_scan_root(processing_dir)
+            package = validate_and_report_scan(scan_root)
+        else:
+            scan_root, package = prepared.scan_root, prepared.package
         report = package.validation
-        if object_preset is not None:
-            jobs.update(scan_id, status="processing", stage="reconstructing",
-                        message="Starting automatic object reconstruction.")
-            outputs = reconstruct_object(package, object_preset,
-                retro_style=RetroStyle(retro_triangles) if export_style == "retro" else None,
-                progress=lambda message: jobs.update(
-                scan_id, status="processing", stage="reconstructing", message=message,
-            ))
-            _complete_reconstruction(scan_id, processing_dir, scan_root, outputs,
-                                     report.image_count, report.frame_count)
-            return
         profile = mask_stage_profile(mask_profile)
         proposal_outputs: dict[str, str] = {}
         mask_generation = None

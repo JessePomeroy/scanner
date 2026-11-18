@@ -47,6 +47,29 @@ OBJECT_PRESETS: dict[ObjectPresetName, ObjectPreset] = {
 }
 
 
+# Plain-language progress shown to the person waiting. Native phases map onto
+# these steps so the count stays fixed whatever the capture's photo sizes are.
+OBJECT_STEPS = (
+    "Finding the object in every photo",
+    "Finding details in the photos",
+    "Matching photos",
+    "Working out camera positions",
+    "Preparing photos",
+    "Building 3D points",
+    "Building the surface",
+    "Adding color",
+)
+_PHASE_STEPS = {
+    "features": 2, "matching": 3, "mapping": 4, "undistortion": 5, "mask-camera-export": 5,
+    "InterfaceCOLMAP": 5, "DensifyPointCloud": 6, "ReconstructMesh": 7, "RefineMesh": 7,
+    "TextureMesh": 8,
+}
+
+
+def step_message(number: int) -> str:
+    return f"Step {number} of {len(OBJECT_STEPS)}: {OBJECT_STEPS[number - 1]}."
+
+
 @guarded("Automatic single-box object reconstruction")
 def reconstruct_object(
     package: PreparedScanPackage,
@@ -81,7 +104,7 @@ def reconstruct_object(
     started = perf_counter()
     deadline = started + preset.time_limit_seconds
     notify = progress or (lambda message: None)
-    notify("Tracking the selected object through the capture with SAM2.")
+    notify(step_message(1))
     generation = generate_mask_proposals(root, metadata.frames)
     if generation is None:
         raise MaskGenerationError("SAM2 did not generate a mask set")
@@ -110,7 +133,8 @@ def reconstruct_object(
         remaining = deadline-perf_counter()
         if remaining <= 0:
             raise TimeoutError("Object reconstruction exceeded its time limit")
-        notify(f"Object reconstruction: {phase}.")
+        step = _PHASE_STEPS.get("features" if phase.startswith("features-") else Path(phase).name)
+        notify(step_message(step) if step is not None else f"Object reconstruction: {phase}.")
         record: dict[str, object] = {"phase":phase, "argv":command, "state":"running"}
         commands.append(record)
         package.record_processing_step("automatic_object", {"settings":settings, "commands":commands})
@@ -148,7 +172,6 @@ def reconstruct_object(
         execute("mask-camera-export", [colmap.executable,"model_converter","--input_path",str(source),
                 "--output_path",str(destination),"--output_type","TXT"])
 
-    notify("Aligning generated masks to the reconstructed cameras.")
     conversion = convert_capture_mask_set(root, colmap_executable=colmap.executable, model_exporter=export_cameras)
     package.record_processing_step("mask_conversion", conversion.as_dict())
     config = OpenMVSConfig(scope_mode="auto_roi", resolution_level=0,
