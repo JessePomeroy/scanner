@@ -28,14 +28,14 @@ final class ScanCaptureManager: NSObject, ObservableObject {
     @Published private(set) var guidanceMessage = "Choose a mode"
     @Published private(set) var lastZipURL: URL?
     @Published private(set) var lastExportSummary: ScanExportSummary?
-    @Published var scanMode: ScanMode = .scene {
+    @Published var scanMode: ScanMode = .object {
         didSet {
             captureQueue.async {
                 guard !self.isScanning else { return }
                 self.objectCenterWorld = nil
             }
             objectCenterIsSet = false
-            statusMessage = scanMode == .object ? "Tap subject while scanning" : "Ready"
+            statusMessage = "Ready"
         }
     }
     @Published var objectRadiusPreset: ObjectRadiusPreset = .medium
@@ -152,8 +152,8 @@ final class ScanCaptureManager: NSObject, ObservableObject {
 
         updatePublishedState(
             state: .scanning,
-            statusMessage: scanMode == .object ? "Tap subject" : "Scanning",
-            guidanceMessage: scanMode == .object ? "Tap the subject, then move around it slowly" : "Move slowly and cover the scene from several angles",
+            statusMessage: "Scanning",
+            guidanceMessage: scanMode == .object ? "Move around the object slowly and keep it in view" : "Move slowly and cover the scene from several angles",
             acceptedFrameCount: 0,
             rejectedFrameCount: 0,
             lastBlurScore: nil,

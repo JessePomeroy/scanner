@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProcessingHistoryView: View {
     @AppStorage("scanner.backendBaseURL") private var backendURLString = "http://localhost:8000"
+    @AppStorage("scanner.showAdvancedControls") private var showAdvancedControls = false
     @StateObject private var store: ReconstructionJobStore
     private let artifactClient: any ReconstructionArtifactAccessing
     private let scopeClient: any ReconstructionScopeAccessing
@@ -55,6 +56,18 @@ struct ProcessingHistoryView: View {
                         )
                     }
                     .disabled(store.isLoading)
+
+                    if let scannerPageURL {
+                        Link(destination: scannerPageURL) {
+                            Label("Open Scanner Page", systemImage: "safari")
+                        }
+                    }
+
+                    Toggle("Show Advanced Controls", isOn: $showAdvancedControls)
+
+                    Text("Advanced adds the capture outline, radius and mask-draft tools. Object scans do not need them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let errorMessage = store.errorMessage {
@@ -134,6 +147,12 @@ struct ProcessingHistoryView: View {
                 await store.loadIfNeeded(baseURLString: backendURLString)
             }
         }
+    }
+
+    private var scannerPageURL: URL? {
+        let trimmed = backendURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let baseURL = URL(string: trimmed) else { return nil }
+        return ReconstructionBackendEndpoint.pageURL(baseURL: baseURL)
     }
 
     private func refresh() {

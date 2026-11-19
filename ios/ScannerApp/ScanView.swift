@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ScanView: View {
+    @AppStorage("scanner.showAdvancedControls") private var showAdvancedControls = false
     @StateObject private var scanManager = ScanCaptureManager()
     @State private var shareURL: URL?
     @State private var reconstructionPolygon: [NormalizedMaskPoint] = []
@@ -303,7 +304,8 @@ struct ScanView: View {
                     }
                 }
 
-                if summary.objectRadiusMeters != nil || summary.objectCenterWasSet {
+                // The one-box flow ignores the subject tap, so "No subject" would only worry people.
+                if showAdvancedControls && (summary.objectRadiusMeters != nil || summary.objectCenterWasSet) {
                     HStack(spacing: 12) {
                         Label(
                             summary.objectCenterWasSet ? "Subject set" : "No subject",
@@ -356,7 +358,7 @@ struct ScanView: View {
             .pickerStyle(.segmented)
             .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
 
-            if scanManager.scanMode == .object {
+            if scanManager.scanMode == .object && showAdvancedControls {
                 Picker("Radius", selection: $scanManager.objectRadiusPreset) {
                     ForEach(ObjectRadiusPreset.allCases) { preset in
                         Text(preset.title).tag(preset)
@@ -366,25 +368,28 @@ struct ScanView: View {
                 .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
             }
 
-            HStack {
-                Button(action: beginReconstructionAreaEditing) {
-                    Label(
-                        reconstructionPolygon.isEmpty ? "Limit Reconstruction Area" : "Edit Reconstruction Area",
-                        systemImage: reconstructionPolygon.isEmpty ? "square.dashed" : "checkmark.square.fill"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                if !reconstructionPolygon.isEmpty {
-                    Button(action: clearReconstructionArea) {
-                        Image(systemName: "trash")
+            // An outline that is already set stays visible so it can be removed.
+            if showAdvancedControls || !reconstructionPolygon.isEmpty {
+                HStack {
+                    Button(action: beginReconstructionAreaEditing) {
+                        Label(
+                            reconstructionPolygon.isEmpty ? "Limit Reconstruction Area" : "Edit Reconstruction Area",
+                            systemImage: reconstructionPolygon.isEmpty ? "square.dashed" : "checkmark.square.fill"
+                        )
+                        .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Remove reconstruction area")
+
+                    if !reconstructionPolygon.isEmpty {
+                        Button(action: clearReconstructionArea) {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Remove reconstruction area")
+                    }
                 }
+                .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
             }
-            .disabled(scanManager.state == .scanning || scanManager.state == .exporting)
         }
         .padding(10)
         .background(.ultraThinMaterial)

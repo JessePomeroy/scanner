@@ -11,6 +11,8 @@ struct ScanUploadNotice: Identifiable {
     let kind: Kind
     let title: String
     let message: String
+    /// Where to continue in the browser, when the upload needs one more step.
+    var pageURL: URL? = nil
 }
 
 @MainActor
@@ -35,7 +37,7 @@ final class ScanUploadStore: ObservableObject {
     func upload(
         archiveURL: URL,
         baseURLString: String,
-        maskProfile: ReconstructionMaskProfile = .sceneGeometry
+        flow: ScanUploadFlow = .review(.sceneGeometry)
     ) async {
         guard uploadingArchiveURL == nil else { return }
 
@@ -59,9 +61,9 @@ final class ScanUploadStore: ObservableObject {
             let job = try await client.uploadScan(
                 archiveURL: archiveURL,
                 baseURL: baseURL,
-                maskProfile: maskProfile
+                flow: flow
             )
-            notice = Self.notice(for: job, archiveURL: archiveURL)
+            notice = Self.notice(for: job, archiveURL: archiveURL, flow: flow, baseURL: baseURL)
         } catch is CancellationError {
             notice = ScanUploadNotice(
                 kind: .failure,
@@ -81,7 +83,12 @@ final class ScanUploadStore: ObservableObject {
         notice = nil
     }
 
-    private static func notice(for job: ReconstructionJob, archiveURL: URL) -> ScanUploadNotice {
+    private static func notice(
+        for job: ReconstructionJob,
+        archiveURL: URL,
+        flow: ScanUploadFlow,
+        baseURL: URL
+    ) -> ScanUploadNotice {
         let scanName = archiveURL.deletingPathExtension().lastPathComponent
         let detail = job.message.flatMap { $0.isEmpty ? nil : $0 } ?? job.status.title
 
@@ -90,6 +97,14 @@ final class ScanUploadStore: ObservableObject {
                 kind: .failure,
                 title: "Backend Rejected Scan",
                 message: "\(scanName): \(detail)"
+            )
+        }
+        if flow == .objectBox {
+            return ScanUploadNotice(
+                kind: .success,
+                title: "Scan Uploaded",
+                message: "\(scanName): draw one box around the object to start the model.",
+                pageURL: ReconstructionBackendEndpoint.pageURL(baseURL: baseURL, scanID: job.scanID)
             )
         }
         return ScanUploadNotice(

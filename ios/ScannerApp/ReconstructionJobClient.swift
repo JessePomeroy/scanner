@@ -195,6 +195,22 @@ enum ReconstructionBackendEndpoint {
         return baseURL.appendingPathComponent("scans", isDirectory: false)
     }
 
+    /// The workstation's web page, optionally opened on one scan: draw the box,
+    /// watch progress and download the model there.
+    static func pageURL(baseURL: URL, scanID: String? = nil) -> URL? {
+        guard (try? scansURL(baseURL: baseURL)) != nil,
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        if !components.path.hasSuffix("/") {
+            components.path += "/"
+        }
+        if let scanID {
+            components.fragment = "/scan/\(scanID)"
+        }
+        return components.url
+    }
+
     private static func isLocalHost(_ rawHost: String) -> Bool {
         let host = rawHost
             .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
