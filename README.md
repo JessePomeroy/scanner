@@ -86,6 +86,26 @@ a half times the triangles) and **Also make a retro low-poly version** (a separa
 5. On the phone, open the **Jobs** tab and enter that address as the backend
    URL. This is needed once.
 
+## Getting the app onto the phone
+
+With a Mac: open `ios/ScannerApp.xcodeproj` in Xcode and run it on the phone.
+
+Without a Mac: GitHub builds it. Every pull request that touches `ios/` is
+compiled and checked on a hosted Mac (`.github/workflows/ios-build.yml`).
+Changes to `ios/` on `main` are also signed and uploaded to TestFlight
+(`ios-testflight.yml`), and you install them from the TestFlight app. To send
+any branch to TestFlight by hand:
+
+```bash
+gh workflow run ios-testflight.yml --ref <branch>
+```
+
+TestFlight needs a one-time setup: an app record in App Store Connect for the
+bundle ID in the project, yourself in an internal testing group, and three
+repository secrets from an App Store Connect API team key: `ASC_KEY_ID`,
+`ASC_ISSUER_ID` and `ASC_KEY_P8` (the text of the `.p8` file). A build takes
+roughly 15 to 30 minutes to reach the phone, and there is no live debugger.
+
 ## Settings
 
 The service unit in `deploy/systemd/` sets the first three. To change any of
@@ -148,5 +168,6 @@ SCANNER_TEST_NATIVE_MODEL=1 SCANNER_TEST_NATIVE_RETRO=1 \
   backend/.venv/bin/python -m unittest discover -s tests
 ```
 
-The iPhone code has portable Swift checks listed in
-[scripts/README.md](scripts/README.md); they need a Mac.
+The iPhone code has portable Swift checks. `scripts/run_swift_verifiers.sh`
+runs them all on a Mac, and GitHub runs them on each pull request that touches
+`ios/`.

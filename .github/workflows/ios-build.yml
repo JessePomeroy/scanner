@@ -1,0 +1,56 @@
+name: iOS build
+
+# Compiles the iPhone app and runs its portable Swift checks on a hosted Mac.
+# No signing and no secrets, so it is safe to run on any pull request.
+
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - "scripts/verify_*.swift"
+      - "scripts/run_swift_verifiers.sh"
+      - ".github/workflows/ios-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "scripts/verify_*.swift"
+      - "scripts/run_swift_verifiers.sh"
+      - ".github/workflows/ios-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build for the simulator
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Build without signing
+        run: |
+          xcodebuild build \
+            -project ios/ScannerApp.xcodeproj \
+            -scheme ScannerApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
+
+  verifiers:
+    name: Swift checks
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the portable Swift checks
+        run: scripts/run_swift_verifiers.sh

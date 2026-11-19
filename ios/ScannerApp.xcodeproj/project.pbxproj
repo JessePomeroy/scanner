@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C1A000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000001 /* Assets.xcassets */; };
+		C1A000000000000000000012 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C1A000000000000000000002 /* PrivacyInfo.xcprivacy */; };
 		077FBE33408F4E2A89634FCB /* FrameSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37FD6D212AB244C3A5C26293 /* FrameSelector.swift */; };
 		0F2B300A6EFB40BEBCAA7743 /* ScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0316065E51C34321A6AC46CC /* ScanView.swift */; };
 		A14C00000000000000000011 /* ReconstructionJobClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14C00000000000000000001 /* ReconstructionJobClient.swift */; };
@@ -56,6 +58,8 @@
 		A21C00000000000000000002 /* PointCloudPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PointCloudPreviewView.swift; sourceTree = "<group>"; };
 		1741AE6950DA4309BB7732D3 /* ScanGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanGalleryView.swift; sourceTree = "<group>"; };
 		2665A66CFE8047BC82B37593 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C1A000000000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C1A000000000000000000002 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2F38B5BED7974BB2BD11A900 /* ScanPackageWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanPackageWriter.swift; sourceTree = "<group>"; };
 		37FD6D212AB244C3A5C26293 /* FrameSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSelector.swift; sourceTree = "<group>"; };
 		44F1633D6EC94E84AAB0EA30 /* ARTrackingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARTrackingManager.swift; sourceTree = "<group>"; };
@@ -147,6 +151,8 @@
 				C26CDDFEA3AA4A03BC3D2BF5 /* ScanMetadataModels.swift */,
 				FDD18124A7BC45C9B9869EAA /* ShareSheet.swift */,
 				2665A66CFE8047BC82B37593 /* Info.plist */,
+				C1A000000000000000000001 /* Assets.xcassets */,
+				C1A000000000000000000002 /* PrivacyInfo.xcprivacy */,
 			);
 			path = ScannerApp;
 			sourceTree = "<group>";
@@ -160,6 +166,7 @@
 			buildPhases = (
 				F13CB6CF21CF4EAFAF3FBB9D /* Sources */,
 				8AED7910722E4258B051EB5D /* Frameworks */,
+				C1A000000000000000000021 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -202,6 +209,18 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C1A000000000000000000021 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1A000000000000000000011 /* Assets.xcassets in Resources */,
+				C1A000000000000000000012 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		F13CB6CF21CF4EAFAF3FBB9D /* Sources */ = {
@@ -251,6 +270,7 @@
 		066C6BEB6895468CBE16846A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -327,6 +347,7 @@
 		B2597A271054446096791CDD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
